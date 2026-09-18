@@ -470,13 +470,12 @@ function preceptorCalendarAwareScoreCandidate_(u,slot,model,state,elig) {
         // Strongly prioritize the normal target of five.
         score += 300000;
       } else if (have < maxAllowed) {
-        // Shifts #6 and #7 are fallback-only. If another eligible pharmacist
-        // can cover this E1/E2 slot, strongly prefer that pharmacist instead.
+        // This branch is normally unreachable because target and hard maximum
+        // are both 5. Keep it defensive if a future configuration differs.
         if (preceptorCalendarOtherEligibleEveningCovererExists_(u,slot,model,state)) {
           score -= 1000000;
         } else {
-          // Nobody else can cover: allow this preceptor to be the fallback.
-          score += 5000;
+          score -= 1000000;
         }
       } else {
         // The eligibility wrapper below enforces the hard ceiling. Keep this
@@ -584,10 +583,8 @@ function preceptorCalendarPreassignOnPreferredUnits_(
       fully non-precepting Sunday-Saturday week:
         target = 5 E1/E2 shifts for that calendar month.
 
-   3. A preceptor may work up to 7 E1/E2 shifts in that month, but shifts
-      above the target of 5 are fallback coverage only. The scheduler should
-      use shift #6 or #7 only when no other eligible pharmacist can cover
-      that E1/E2 shift.
+   3. A preceptor may work a maximum of 5 E1/E2 shifts in that month.
+      Shift #6 and higher are not allowed, even as fallback coverage.
 
    4. A pharmacist cannot work ANY evening shift during a Sunday-Saturday
       week in which they are actively precepting. E1/E2 rotation shifts can
@@ -604,7 +601,7 @@ function preceptorCalendarPreassignOnPreferredUnits_(
 */
 
 var PRECEPTOR_MONTHLY_EVENING_TARGET_ = 5;
-var PRECEPTOR_MONTHLY_EVENING_MAX_ = 7;
+var PRECEPTOR_MONTHLY_EVENING_MAX_ = 5;
 var PRECEPTOR_ROTATION_COVERAGE_REASON_ = 'PRECEPTOR EVENING ROTATION';
 
 function preceptorCalendarMonthHasOffWeekday_(u, monthDate) {
@@ -632,7 +629,7 @@ function preceptorCalendarMonthlyEveningMaximum_(u, monthDate, model) {
   if (!u || !model || !yes_(u.Preceptor) || isSevenOn_(u)) return 0;
   if (!preceptorCalendarMonthHasOffWeekday_(u,monthDate)) return 0;
 
-  // Seven is the absolute preceptor E1/E2 ceiling. A lower pharmacist-specific
+  // Five is the absolute preceptor E1/E2 ceiling. A lower pharmacist-specific
   // Maximum Evening Shifts Per Month remains a stricter hard limit.
   var employeeMax = Math.floor(employeeEveningMax_(u,model));
   if (employeeMax <= 0) return 0;
@@ -1149,10 +1146,10 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
                 ', above the allowed maximum of '+maxAllowed+'.'
               );
             } else if (count > target) {
-              report.warnings.push(
+              report.errors.push(
                 clean_(u['Pharmacist Name'])+' has '+count+
                 ' E1/E2 shifts during '+mk+
-                '. Target is '+target+'; shifts above target are allowed only as fallback coverage when no other eligible pharmacist can cover E1/E2.'
+                '. The hard monthly maximum is '+maxAllowed+'.'
               );
             }
           }
@@ -1222,7 +1219,7 @@ function preceptorCalendarAwareReasonToWarning_(reason) {
   }
 
   if (reason === 'PRECEPTOR_MONTHLY_EVENING_MAX') {
-    return 'Preceptor monthly E1/E2 maximum reached: target is 5 and the hard maximum is 7.';
+    return 'Preceptor monthly E1/E2 maximum reached: target and hard maximum are both 5.';
   }
 
   if (reason === 'PRECEPTOR_PRECEPTING_WEEK_NO_EVENING') {
@@ -1305,9 +1302,9 @@ function verifyPreceptorCalendarIntegration(token) {
     ok:true,
     connected:connected,
     sheetExists:!!getDb_().getSheetByName(PRECEPTOR_CALENDAR_SHEET_),
-    behavior:'ON = Skills Preferred/Home Unit. No evening shifts are allowed anywhere in a Sunday-Saturday week that contains active precepting. Months with OFF weekdays target 5 E1/E2 shifts during eligible non-precepting OFF weeks; maximum is 7, with shifts 6-7 fallback-only.',
+    behavior:'ON = Skills Preferred/Home Unit. No evening shifts are allowed anywhere in a Sunday-Saturday week that contains active precepting. Months with eligible OFF weekdays target 5 E1/E2 shifts during non-precepting weeks; the hard monthly maximum is also 5.',
     message:connected
-      ? 'Code11 is connected. ON weeks stay in the preferred unit. Months with OFF weekdays target 5 E1/E2 shifts, with a fallback maximum of 7 only when no other eligible pharmacist can cover the E1/E2 shift, with normal-skill home-unit coverage on those dates.'
+      ? 'Code11 is connected. ON weeks stay in the preferred unit and cannot contain evening shifts. Eligible non-precepting OFF weeks target 5 E1/E2 shifts per month, and 5 is the hard maximum.'
       : 'Code11 loaded, but one or more scheduling hooks are not connected. Replace the old Code11.gs with this version and redeploy.'
   };
 }
