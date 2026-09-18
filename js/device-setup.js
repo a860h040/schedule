@@ -19,9 +19,9 @@ $('form').addEventListener('submit',async e=>{
 
     await testGithubConnection(cfg);
 
-    const existing=await readJsonFile(cfg.dbPath,cfg,true);
+    const existing=await readJsonFile('data/workbook.json',cfg,true);
     if(!existing.sha){
-      throw new Error('The existing NeoChrono database was not found at data/database.json.');
+      throw new Error('The existing NeoChrono database was not found at data/workbook.json.');
     }
 
     $('msg').style.color='#147a4c';
