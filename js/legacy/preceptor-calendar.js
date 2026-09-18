@@ -226,8 +226,8 @@ function syncPreceptorCalendar(token, year) {
  *                     exact Preferred Shift Type / preferred unit.
  *
  *   Calendar OFF = pharmacist is NOT precepting
- *                  -> weekday work may be E1, E2, OR the pharmacist's
- *                     Skills → Preferred / Home Unit.
+ *                  -> weekday work may be ANY active Evening-type shift
+ *                     OR the pharmacist's Skills → Preferred / Home Unit.
  *
  * Saturday/Sunday keep the existing weekend rotation logic.
  *
@@ -364,9 +364,10 @@ function preceptorCalendarIsEveningSlot_(slot,model) {
 }
 
 /**
- * Existing preceptor evening restriction:
- * ON  -> evening remains blocked unless the legacy settings permit it.
- * OFF -> E1/E2 must be allowed so the pharmacist can move to evening staffing.
+ * Preceptor evening restriction:
+ * ON/precepting week -> every Evening-type shift is blocked.
+ * OFF/non-precepting week -> Evening-type shifts may be used, subject to
+ * the hard monthly maximum of 5 total Evening shifts.
  */
 function preceptorCalendarAwarePreceptorEveningBlocked_(u,slot,model) {
   if (!u || !slot || !yes_(u.Preceptor)) return false;
@@ -617,7 +618,7 @@ function preceptorCalendarMonthHasOffWeekday_(u, monthDate) {
     if (isWeekendDate_(d)) continue;
 
     // Only an OFF weekday in a fully non-precepting Sunday-Saturday week can
-    // support the monthly E1/E2 rotation target.
+    // support the monthly Evening-shift rotation target.
     if (
       !preceptorCalendarIsActiveOnDate_(u,d) &&
       !preceptorCalendarIsPreceptingWeek_(u,d)
@@ -632,7 +633,7 @@ function preceptorCalendarMonthlyEveningMaximum_(u, monthDate, model) {
   if (!u || !model || !yes_(u.Preceptor) || isSevenOn_(u)) return 0;
   if (!preceptorCalendarMonthHasOffWeekday_(u,monthDate)) return 0;
 
-  // Five is the absolute preceptor E1/E2 ceiling. A lower pharmacist-specific
+  // Five is the absolute preceptor Evening-shift ceiling. A lower pharmacist-specific
   // Maximum Evening Shifts Per Month remains a stricter hard limit.
   var employeeMax = Math.floor(employeeEveningMax_(u,model));
   if (employeeMax <= 0) return 0;
@@ -833,7 +834,7 @@ function preceptorCalendarRemoveNewCoverage_(coverage, results, model, state, re
 
 
 /**
- * Assign non-precepting pharmacists to E1/E2 before the general allocator.
+ * Assign non-precepting pharmacists to Evening-type shifts before the general allocator.
  * Mandatory resident E2 is handled first by the original scheduler.
  */
 function preceptorCalendarPreassignOffEvenings_(
@@ -937,7 +938,7 @@ function preceptorCalendarPreassignOffEvenings_(
         for (var ei=0; ei<eveningSlots.length; ei++) {
           var eveningSlot = eveningSlots[ei];
 
-          // Confirm the preceptor can take this E1/E2 under all hard rules.
+          // Confirm the preceptor can take this Evening-type shift under all hard rules.
           var e = eligibility_(u,eveningSlot,model,state,false);
           if (!e.ok) continue;
 
@@ -1012,7 +1013,7 @@ function preceptorCalendarAwareResidentE2Pass_(
 /**
  * Full-period validation:
  * ON  -> preferred unit
- * OFF -> E1/E2
+ * OFF -> Evening-type shift or Preferred/Home Unit
  */
 function preceptorCalendarAwareValidateGeneratedAssignments_(
   assignments, model, start, end, validationOptions
@@ -1063,14 +1064,24 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
         var offPreferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
         var offCode = clean_(a.shiftCode).toUpperCase();
 
+        var offIsEvening = preceptorCalendarIsEveningSlot_(
+          {
+            shiftCode:a.shiftCode,
+            shift:model && model.shiftMap
+              ? model.shiftMap[offCode]
+              : null
+          },
+          model
+        );
+
         if (
-          !preceptorCalendarEveningCode_(offCode) &&
+          !offIsEvening &&
           offPreferredCodes.indexOf(offCode) < 0
         ) {
           report.errors.push(
             a.dateKey+' '+a.shiftCode+': '+
             clean_(u['Pharmacist Name'])+
-            ' has Preceptor Calendar OFF and may work only E1, E2, or preferred unit '+
+            ' has Preceptor Calendar OFF and may work only an Evening-type shift or preferred unit '+
             (offPreferredCodes.length ? offPreferredCodes.join('/') : '(not configured)')+
             ' on this weekday.'
           );
@@ -1104,7 +1115,7 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
       }
     });
 
-  // Monthly E1/E2 target validation.
+  // Monthly total-Evening target validation.
   // Build a combined month view from the assignments being validated plus
   // saved schedule rows outside the current validation range.
   var combined = [];
@@ -1170,7 +1181,7 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
             var msg =
               clean_(u['Pharmacist Name'])+
               ' has Preceptor Calendar OFF during '+mk+
-              ' and needs '+target+' Evening shift(s); currently '+count+'.';
+              ' and needs '+target+' total Evening shift(s); currently '+count+'.';
 
             var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthCursor,model);
 
@@ -1180,13 +1191,13 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
             } else if (count > maxAllowed) {
               report.errors.push(
                 clean_(u['Pharmacist Name'])+' has '+count+
-                ' Evening shifts during '+mk+
+                ' total Evening shifts during '+mk+
                 ', above the allowed maximum of '+maxAllowed+'.'
               );
             } else if (count > target) {
               report.errors.push(
                 clean_(u['Pharmacist Name'])+' has '+count+
-                ' Evening shifts during '+mk+
+                ' total Evening shifts during '+mk+
                 '. The hard monthly maximum is '+maxAllowed+'.'
               );
             }
