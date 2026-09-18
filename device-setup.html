@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NeoChrono Device Setup</title>
+  <link rel="stylesheet" href="css/app.css?v=20260918-setup2">
+</head>
+<body>
+<section class="login-view">
+  <div class="login-card" style="width:min(700px,100%)">
+    <div class="wordmark"><span class="wordmark-mark">N</span><span>NeoChrono Device Setup</span></div>
+    <h1>Connect this browser</h1>
+    <p>This page only connects this browser to the existing private NeoChrono database.</p>
+    <div class="alert alert-warn">
+      <b>No sign-up is available.</b><br>
+      This page does not create usernames or passwords. NeoChrono accounts are managed only by an administrator after login.
+    </div>
+    <form id="form">
+      <div class="form-grid">
+        <div class="field">
+          <label>GitHub owner</label>
+          <input id="owner" class="control" value="a860h040" readonly>
+        </div>
+        <div class="field">
+          <label>Data repository</label>
+          <input id="repo" class="control" value="neochrono-data" readonly>
+        </div>
+        <div class="field">
+          <label>Branch</label>
+          <input id="branch" class="control" value="main">
+        </div>
+        <div class="field">
+          <label>Fine-grained GitHub token</label>
+          <input id="token" type="password" class="control" required autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Database path</label>
+          <input id="dbPath" class="control" value="data/database.json">
+        </div>
+        <div class="field">
+          <label>Published schedule path</label>
+          <input id="publishedPath" class="control" value="data/published-schedule.json">
+        </div>
+      </div>
+      <div id="msg" class="login-error"></div>
+      <button id="saveBtn" class="btn btn-primary btn-block" type="submit">Connect This Browser</button>
+    </form>
+    <p class="small muted mt12">After this succeeds, return to NeoChrono and sign in with an existing username and password.</p>
+    <a href="index.html">Back to NeoChrono login</a>
+  </div>
+</section>
+<script type="module" src="js/device-setup.js?v=20260918-setup2"></script>
+</body>
+</html>
