@@ -19,18 +19,140 @@ function githubEnsureSkillPreferredColumn_() {
   var headers = (values[0] || []).map(clean_);
   var changed = false;
 
-  if (headers.indexOf('Preferred') < 0) {
-    headers.push('Preferred');
-    values[0] = headers;
-    for (var r=1;r<values.length;r++) values[r].push('');
-    sh.getRange(1,1,values.length,headers.length).setValues(values);
-    changed = true;
-  }
+  ['Preferred','Priority'].forEach(function(column){
+    if (headers.indexOf(column) < 0) {
+      headers.push(column);
+      values[0] = headers;
+      for (var r=1;r<values.length;r++) values[r].push('');
+      changed = true;
+    }
+    if (APP.HEADERS && APP.HEADERS.SKILLS && APP.HEADERS.SKILLS.indexOf(column) < 0) {
+      APP.HEADERS.SKILLS.push(column);
+    }
+  });
 
-  if (APP.HEADERS && APP.HEADERS.SKILLS && APP.HEADERS.SKILLS.indexOf('Preferred') < 0) {
-    APP.HEADERS.SKILLS.push('Preferred');
+  if (changed) {
+    sh.getRange(1,1,values.length,headers.length).setValues(values);
   }
   return changed;
+}
+
+function githubNormalizeSkillPriorities_(values, headers) {
+  var h={};
+  headers.forEach(function(name,i){h[clean_(name)]=i;});
+  if (h.Priority===undefined || h.Skill===undefined) return false;
+
+  var groups={};
+  for (var r=1;r<values.length;r++) {
+    if (!yesDefault_(values[r][h.Active],true)) {
+      if (clean_(values[r][h.Priority])) {
+        values[r][h.Priority]='';
+        return true;
+      }
+      continue;
+    }
+    var skill=clean_(values[r][h.Skill]).toUpperCase();
+    if (!skill) continue;
+    var userKey=clean_(values[r][h['Employee ID']]) || clean_(values[r][h.Username]) || clean_(values[r][h['Pharmacist Name']]);
+    if (!userKey) continue;
+    if (!groups[userKey]) groups[userKey]=[];
+    groups[userKey].push({
+      row:r,
+      skill:skill,
+      preferred:h.Preferred!==undefined && yes_(values[r][h.Preferred]),
+      rawPriority:Number(values[r][h.Priority])
+    });
+  }
+
+  var changed=false;
+  Object.keys(groups).forEach(function(key){
+    var items=groups[key];
+
+    // Existing valid priorities are respected. Missing/duplicate priorities are
+    // repaired deterministically. On first migration, Preferred/Home Unit is
+    // placed first, then the existing sheet order is preserved.
+    var hasAny=items.some(function(x){return Number.isFinite(x.rawPriority)&&x.rawPriority>0;});
+    items.sort(function(a,b){
+      if (hasAny) {
+        var ap=Number.isFinite(a.rawPriority)&&a.rawPriority>0?a.rawPriority:9999;
+        var bp=Number.isFinite(b.rawPriority)&&b.rawPriority>0?b.rawPriority:9999;
+        return ap-bp || (a.preferred?0:1)-(b.preferred?0:1) || a.row-b.row;
+      }
+      return (a.preferred?0:1)-(b.preferred?0:1) || a.row-b.row;
+    });
+
+    items.forEach(function(item,idx){
+      var wanted=idx+1;
+      if (Number(values[item.row][h.Priority])!==wanted) {
+        values[item.row][h.Priority]=wanted;
+        changed=true;
+      }
+    });
+  });
+
+  return changed;
+}
+
+function githubSkillPriorityCodeForSlot_(slot) {
+  return clean_(
+    (slot && slot.requiredSkill) ||
+    (slot && slot.shift && slot.shift.Skill) ||
+    (slot && slot.shiftCode) ||
+    (slot && slot.shift && slot.shift.Shift)
+  ).toUpperCase();
+}
+
+function skillPriorityForUserSlot_(u,slot,model) {
+  if (!u || !slot || !model) return 9999;
+  var username=clean_(u.Username);
+  var code=githubSkillPriorityCodeForSlot_(slot);
+  if (!username || !code) return 9999;
+  var map=model.skillPriorityByUser && model.skillPriorityByUser[username];
+  var p=map ? Number(map[code]) : NaN;
+  return Number.isFinite(p)&&p>0 ? p : 9999;
+}
+
+function githubHomeOwnerEligibleForSlot_(slot,model,state) {
+  var owners=typeof primaryHomeOwnersForSlot_==='function'
+    ? primaryHomeOwnersForSlot_(slot,model)
+    : [];
+  if (!owners.length) return false;
+
+  return owners.some(function(owner){
+    var e=eligibility_(owner,slot,model,state,false);
+    return !!(e&&e.ok);
+  });
+}
+
+/**
+ * Sort rank used by the normal allocator.
+ *
+ * 0..999 = a Preferred/Home Unit owner is available, so keep the normal owner
+ *          in place before using that pharmacist elsewhere.
+ * 1000+  = the home owner is unavailable and backup pharmacists are ordered
+ *          by the manager's Employee Skills Priority (1 first, then 2, 3...).
+ * 9000+  = no configured home owner; still respect skill priority if possible.
+ */
+function skillPrioritySlotRank_(slot,model,state) {
+  if (!slot || !model || !state) return 99999;
+
+  var owners=typeof primaryHomeOwnersForSlot_==='function'
+    ? primaryHomeOwnersForSlot_(slot,model)
+    : [];
+  var ownerEligible=owners.length && githubHomeOwnerEligibleForSlot_(slot,model,state);
+
+  if (ownerEligible) return 0;
+
+  var best=9999;
+  (model.users||[]).forEach(function(u){
+    if (!yes_(u.Active)) return;
+    var e=eligibility_(u,slot,model,state,false);
+    if (!e || !e.ok) return;
+    best=Math.min(best,skillPriorityForUserSlot_(u,slot,model));
+  });
+
+  if (owners.length) return 1000+best;
+  return 9000+best;
 }
 
 function ensureSkillPreferenceSystem(token) {
@@ -84,17 +206,20 @@ function ensureSkillPreferenceSystem(token) {
     }
   });
 
+  if (githubNormalizeSkillPriorities_(values,headers)) changed=true;
+
   if (changed) {
     sh.getRange(1,1,values.length,headers.length).setValues(values);
     SpreadsheetApp.flush();
     if (typeof _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ !== 'undefined') _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ = null;
-    audit_('SKILL_PREFERENCE_SYSTEM','','','','','','','No','','Ensured Employee Skills Preferred/Home Unit support',ctx.username);
+    audit_('SKILL_PREFERENCE_SYSTEM','','','','','','','No','',
+      'Ensured Employee Skills Preferred/Home Unit and manager Priority ordering support',ctx.username);
   }
 
   return {ok:true,changed:changed};
 }
 
-function saveSkillProfile(token, employeeId, preferredCode, skillCodes) {
+function saveSkillProfile(token, employeeId, preferredCode, skillCodes, skillPriorities) {
   var ctx = requireAdmin_(token);
   githubEnsureSkillPreferredColumn_();
 
@@ -104,10 +229,21 @@ function saveSkillProfile(token, employeeId, preferredCode, skillCodes) {
 
   var desired = Array.from(new Set((Array.isArray(skillCodes)?skillCodes:[])
     .map(function(x){return clean_(x).toUpperCase();})
-    .filter(Boolean))).sort();
+    .filter(Boolean)));
 
   var preferred = clean_(preferredCode).toUpperCase();
   if (preferred && desired.indexOf(preferred) < 0) desired.push(preferred);
+
+  var supplied=skillPriorities && typeof skillPriorities==='object' ? skillPriorities : {};
+  desired.sort(function(a,b){
+    var ap=Number(supplied[a]),bp=Number(supplied[b]);
+    ap=Number.isFinite(ap)&&ap>0?ap:9999;
+    bp=Number.isFinite(bp)&&bp>0?bp:9999;
+    return ap-bp || a.localeCompare(b);
+  });
+
+  var priorityMap={};
+  desired.forEach(function(code,idx){priorityMap[code]=idx+1;});
 
   var sh = getDb_().getSheetByName(APP.SHEETS.SKILLS);
   var values = sh.getDataRange().getValues();
@@ -131,6 +267,7 @@ function saveSkillProfile(token, employeeId, preferredCode, skillCodes) {
     values[r][h.Username] = clean_(user.Username);
     values[r][h.Active] = active ? 'Yes' : 'No';
     values[r][h.Preferred] = active && preferred===code ? 'Yes' : 'No';
+    values[r][h.Priority] = active ? priorityMap[code] : '';
     values[r][h['Updated At']] = new Date();
     values[r][h['Updated By']] = ctx.username;
   }
@@ -144,6 +281,7 @@ function saveSkillProfile(token, employeeId, preferredCode, skillCodes) {
     row[h.Skill] = code;
     row[h.Active] = 'Yes';
     row[h.Preferred] = preferred===code ? 'Yes' : 'No';
+    row[h.Priority] = priorityMap[code];
     row[h['Updated At']] = new Date();
     row[h['Updated By']] = ctx.username;
     values.push(row);
@@ -159,9 +297,107 @@ function saveSkillProfile(token, employeeId, preferredCode, skillCodes) {
 
   if (typeof _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ !== 'undefined') _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ = null;
   audit_('EMPLOYEE_SKILL_PROFILE_CHANGED','',clean_(user['Pharmacist Name']),'','','',preferred,'No','',
-    'Skills: '+desired.join(', ')+'; Preferred/Home Unit: '+(preferred||'None'),ctx.username);
+    'Skills by priority: '+desired.map(function(code){return priorityMap[code]+'='+code;}).join(', ')+
+    '; Preferred/Home Unit: '+(preferred||'None'),ctx.username);
 
-  return {ok:true,employeeId:eid,skills:desired,preferred:preferred};
+  return {
+    ok:true,
+    employeeId:eid,
+    skills:desired,
+    preferred:preferred,
+    priorities:priorityMap
+  };
+}
+
+// Quick-add compatibility: a newly-added normal skill receives the next
+// priority number for that pharmacist automatically.
+var _SKILL_PRIORITY_BASE_SAVE_SKILL_ = typeof saveSkill==='function' ? saveSkill : null;
+if (_SKILL_PRIORITY_BASE_SAVE_SKILL_) {
+  saveSkill = function(token,data) {
+    githubEnsureSkillPreferredColumn_();
+    var out=_SKILL_PRIORITY_BASE_SAVE_SKILL_(token,data);
+
+    var u=findUser_(data && data.Username,data && data['Pharmacist Name']);
+    if (u) {
+      var sh=getDb_().getSheetByName(APP.SHEETS.SKILLS);
+      var values=sh.getDataRange().getValues();
+      var headers=values[0].map(clean_);
+      var h={}; headers.forEach(function(name,i){h[name]=i;});
+      var eid=clean_(u['Employee ID']),username=clean_(u.Username);
+      var rows=[];
+      for(var r=1;r<values.length;r++){
+        var same=(eid&&clean_(values[r][h['Employee ID']])===eid)||(username&&clean_(values[r][h.Username])===username);
+        if(same&&yesDefault_(values[r][h.Active],true)&&clean_(values[r][h.Skill]))rows.push(r);
+      }
+      rows.sort(function(a,b){
+        var ap=Number(values[a][h.Priority]),bp=Number(values[b][h.Priority]);
+        ap=Number.isFinite(ap)&&ap>0?ap:9999;
+        bp=Number.isFinite(bp)&&bp>0?bp:9999;
+        return ap-bp||a-b;
+      });
+      rows.forEach(function(row,idx){values[row][h.Priority]=idx+1;});
+      sh.getRange(1,1,values.length,headers.length).setValues(values);
+    }
+    return out;
+  };
+}
+
+// Add priority metadata to every scheduling model without changing the
+// underlying eligibility/skill rules.
+var _SKILL_PRIORITY_BASE_LOAD_MODEL_ = typeof loadSchedulingModel_==='function'
+  ? loadSchedulingModel_
+  : null;
+
+if (_SKILL_PRIORITY_BASE_LOAD_MODEL_) {
+  loadSchedulingModel_ = function() {
+    var model=_SKILL_PRIORITY_BASE_LOAD_MODEL_();
+    model.skillPriorityByUser={};
+
+    (model.skills||[])
+      .filter(function(r){return yesDefault_(r.Active,true);})
+      .forEach(function(r){
+        var username=clean_(r.Username) ||
+          clean_((model.usersByName && model.usersByName[clean_(r['Pharmacist Name'])] || {}).Username);
+        var code=clean_(r.Skill).toUpperCase();
+        if(!username||!code)return;
+        if(!model.skillPriorityByUser[username])model.skillPriorityByUser[username]={};
+        var p=Number(r.Priority);
+        if(!Number.isFinite(p)||p<1)p=9999;
+        model.skillPriorityByUser[username][code]=p;
+      });
+
+    return model;
+  };
+}
+
+// Priority affects backup assignment only after all hard eligibility rules.
+// A normal Preferred/Home Unit owner remains preferred when that owner can work.
+var _SKILL_PRIORITY_BASE_SCORE_CANDIDATE_ = typeof scoreCandidate_==='function'
+  ? scoreCandidate_
+  : null;
+
+if (_SKILL_PRIORITY_BASE_SCORE_CANDIDATE_) {
+  scoreCandidate_ = function(u,slot,model,state,elig) {
+    var score=_SKILL_PRIORITY_BASE_SCORE_CANDIDATE_(u,slot,model,state,elig);
+
+    var owners=typeof primaryHomeOwnersForSlot_==='function'
+      ? primaryHomeOwnersForSlot_(slot,model)
+      : [];
+    var isOwner=owners.some(function(owner){
+      return clean_(owner.Username)===clean_(u.Username);
+    });
+
+    // Do not let a backup with Priority 1 steal a normal home-unit assignment
+    // from its configured Preferred/Home Unit owner.
+    if (!isOwner && owners.length && !githubHomeOwnerEligibleForSlot_(slot,model,state)) {
+      var rank=skillPriorityForUserSlot_(u,slot,model);
+      if (rank<9999) {
+        score += Math.max(1000,36000-(rank-1)*6000);
+      }
+    }
+
+    return score;
+  };
 }
 
 async function githubVerifyAdminPassword_(admin,password) {
