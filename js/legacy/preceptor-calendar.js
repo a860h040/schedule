@@ -412,10 +412,30 @@ function preceptorCalendarAwareScoreCandidate_(u,slot,model,state,elig) {
     var offCode = clean_(slot && slot.shiftCode).toUpperCase();
     var offPreferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
 
-    if (
-      preceptorCalendarEveningCode_(offCode) ||
-      offPreferredCodes.indexOf(offCode) >= 0
-    ) {
+    if (preceptorCalendarEveningCode_(offCode)) {
+      var monthDate = firstOfMonth_(slot.date);
+      var target = preceptorCalendarMonthlyEveningTarget_(u,monthDate,model);
+      var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthDate,model);
+      var have = preceptorCalendarCountE1E2InMonth_(clean_(u.Username),monthDate,state);
+
+      if (have < target) {
+        // Strongly prioritize the normal target of five.
+        score += 300000;
+      } else if (have < maxAllowed) {
+        // Shifts #6 and #7 are fallback-only. If another eligible pharmacist
+        // can cover this E1/E2 slot, strongly prefer that pharmacist instead.
+        if (preceptorCalendarOtherEligibleEveningCovererExists_(u,slot,model,state)) {
+          score -= 1000000;
+        } else {
+          // Nobody else can cover: allow this preceptor to be the fallback.
+          score += 5000;
+        }
+      } else {
+        // The eligibility wrapper below enforces the hard ceiling. Keep this
+        // score penalty as an additional safety measure.
+        score -= 1000000;
+      }
+    } else if (offPreferredCodes.indexOf(offCode) >= 0) {
       score += 300000;
     }
   }
@@ -513,20 +533,26 @@ function preceptorCalendarPreassignOnPreferredUnits_(
         evening rotation target = 0.
 
    2. If one or more weekdays in the calendar month are OFF:
-        target = 7 E1/E2 shifts for that calendar month.
+        target = 5 E1/E2 shifts for that calendar month.
 
-   3. E1/E2 rotation shifts can be placed ONLY on calendar-OFF weekdays.
+   3. A preceptor may work up to 7 E1/E2 shifts in that month, but shifts
+      above the target of 5 are fallback coverage only. The scheduler should
+      use shift #6 or #7 only when no other eligible pharmacist can cover
+      that E1/E2 shift.
 
-   4. On each E1/E2 rotation date, another pharmacist with the NORMAL
+   4. E1/E2 rotation shifts can be placed ONLY on calendar-OFF weekdays.
+
+   5. On each planned E1/E2 rotation date, another pharmacist with the NORMAL
       Employee Skill for the preceptor's Preferred/Home Unit is assigned to
       cover that home-unit shift when the unit is required that day.
 
-   5. Existing hard rules still apply:
+   6. Existing hard rules still apply:
       PTO, weekly availability, one shift/day, five-day week, hours,
       evening-to-morning transition, resident rules, weekend rules, etc.
 */
 
-var PRECEPTOR_MONTHLY_EVENING_TARGET_ = 7;
+var PRECEPTOR_MONTHLY_EVENING_TARGET_ = 5;
+var PRECEPTOR_MONTHLY_EVENING_MAX_ = 7;
 var PRECEPTOR_ROTATION_COVERAGE_REASON_ = 'PRECEPTOR EVENING ROTATION';
 
 function preceptorCalendarMonthHasOffWeekday_(u, monthDate) {
@@ -542,18 +568,23 @@ function preceptorCalendarMonthHasOffWeekday_(u, monthDate) {
   return false;
 }
 
-function preceptorCalendarMonthlyEveningTarget_(u, monthDate, model) {
+function preceptorCalendarMonthlyEveningMaximum_(u, monthDate, model) {
   if (!u || !model || !yes_(u.Preceptor) || isSevenOn_(u)) return 0;
-
-  // Whole month precepting -> no evening-rotation requirement.
   if (!preceptorCalendarMonthHasOffWeekday_(u,monthDate)) return 0;
 
-  // User requested exactly 7 per month when there is OFF time.
-  // Still respect a pharmacist-specific hard maximum if it is lower than 7.
-  var hardMax = employeeEveningMax_(u,model);
-  if (hardMax <= 0) return 0;
+  // Seven is the absolute preceptor E1/E2 ceiling. A lower pharmacist-specific
+  // Maximum Evening Shifts Per Month remains a stricter hard limit.
+  var employeeMax = Math.floor(employeeEveningMax_(u,model));
+  if (employeeMax <= 0) return 0;
+  return Math.min(PRECEPTOR_MONTHLY_EVENING_MAX_, employeeMax);
+}
 
-  return Math.min(PRECEPTOR_MONTHLY_EVENING_TARGET_, Math.floor(hardMax));
+function preceptorCalendarMonthlyEveningTarget_(u, monthDate, model) {
+  var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthDate,model);
+  if (maxAllowed <= 0) return 0;
+
+  // Normal monthly goal is five, not seven.
+  return Math.min(PRECEPTOR_MONTHLY_EVENING_TARGET_, maxAllowed);
 }
 
 function preceptorCalendarCountE1E2InMonth_(username, monthDate, state) {
@@ -565,6 +596,18 @@ function preceptorCalendarCountE1E2InMonth_(username, monthDate, state) {
       monthKey_(a.date) === mk &&
       preceptorCalendarEveningCode_(a.shiftCode);
   }).length;
+}
+
+function preceptorCalendarOtherEligibleEveningCovererExists_(owner, slot, model, state) {
+  if (!owner || !slot || !model || !state) return false;
+
+  return (model.users || []).some(function(other) {
+    if (!other || !yes_(other.Active)) return false;
+    if (clean_(other.Username) === clean_(owner.Username)) return false;
+
+    var e = eligibility_(other,slot,model,state,false);
+    return !!(e && e.ok);
+  });
 }
 
 function preceptorCalendarPreferredUnitSlotsForDate_(u, dateKey, slots, model) {
@@ -876,7 +919,7 @@ function preceptorCalendarAwareResidentE2Pass_(
   );
 
   // If the pharmacist has any OFF weekday in the month, fill the monthly
-  // seven-evening rotation target on OFF weekdays and simultaneously cover
+  // five-evening rotation target on OFF weekdays and simultaneously cover
   // the pharmacist's preferred/home unit with another normally-skilled pharmacist.
   preceptorCalendarPreassignOffEvenings_(
     slots, results, model, state, actor, reserved, start, end
@@ -1015,9 +1058,23 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
               ' has Preceptor Calendar OFF during '+mk+
               ' and needs '+target+' E1/E2 rotation shift(s); currently '+count+'.';
 
+            var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthCursor,model);
+
             if (count < target) {
               if (fullMonthInValidation) report.errors.push(msg);
               else report.warnings.push(msg+' The validation range does not contain the full month.');
+            } else if (count > maxAllowed) {
+              report.errors.push(
+                clean_(u['Pharmacist Name'])+' has '+count+
+                ' E1/E2 shifts during '+mk+
+                ', above the allowed maximum of '+maxAllowed+'.'
+              );
+            } else if (count > target) {
+              report.warnings.push(
+                clean_(u['Pharmacist Name'])+' has '+count+
+                ' E1/E2 shifts during '+mk+
+                '. Target is '+target+'; shifts above target are allowed only as fallback coverage when no other eligible pharmacist can cover E1/E2.'
+              );
             }
           }
 
@@ -1034,6 +1091,36 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
   return report;
 }
 
+function preceptorCalendarAwareEligibility_(u,slot,model,state,manualMode) {
+  var e = _PC11_BASE_ELIGIBILITY_
+    ? _PC11_BASE_ELIGIBILITY_(u,slot,model,state,manualMode)
+    : {ok:true,reasons:[],warnings:[]};
+
+  if (!e) e = {ok:true,reasons:[],warnings:[]};
+  e.reasons = Array.isArray(e.reasons) ? e.reasons.slice() : [];
+  e.warnings = Array.isArray(e.warnings) ? e.warnings.slice() : [];
+
+  if (
+    e.ok &&
+    u &&
+    slot &&
+    preceptorCalendarIsManagedWeekday_(u,slot.date) &&
+    preceptorCalendarModeForDate_(u,slot.date) === 'OFF' &&
+    preceptorCalendarEveningCode_(slot.shiftCode)
+  ) {
+    var monthDate = firstOfMonth_(slot.date);
+    var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthDate,model);
+    var have = preceptorCalendarCountE1E2InMonth_(clean_(u.Username),monthDate,state);
+
+    if (maxAllowed <= 0 || have + 1 > maxAllowed) {
+      e.reasons.push('PRECEPTOR_MONTHLY_EVENING_MAX');
+      e.ok = false;
+    }
+  }
+
+  return e;
+}
+
 function preceptorCalendarAwareReasonToWarning_(reason) {
   if (reason === 'PRECEPTOR_OFF_E1_E2_OR_PREFERRED_ONLY') {
     return 'Preceptor Calendar OFF: pharmacist may work only E1, E2, or the Skills → Preferred / Home Unit on this weekday.';
@@ -1043,12 +1130,21 @@ function preceptorCalendarAwareReasonToWarning_(reason) {
     return 'Preceptor Calendar ON: pharmacist must remain in the Skills → Preferred / Home Unit.';
   }
 
+  if (reason === 'PRECEPTOR_MONTHLY_EVENING_MAX') {
+    return 'Preceptor monthly E1/E2 maximum reached: target is 5 and the hard maximum is 7.';
+  }
+
   return _PC11_BASE_REASON_TO_WARNING_
     ? _PC11_BASE_REASON_TO_WARNING_(reason)
     : reason;
 }
 
 /* Capture the current Code.gs functions, then install Code11 wrappers. */
+var _PC11_BASE_ELIGIBILITY_ =
+  typeof eligibility_ === 'function'
+    ? eligibility_
+    : null;
+
 var _PC11_BASE_RESIDENT_ELIGIBILITY_REASON_ =
   typeof residentEligibilityReason_ === 'function'
     ? residentEligibilityReason_
@@ -1075,6 +1171,10 @@ var _PC11_BASE_REASON_TO_WARNING_ =
     : null;
 
 preceptorEveningBlocked_ = preceptorCalendarAwarePreceptorEveningBlocked_;
+
+if (_PC11_BASE_ELIGIBILITY_) {
+  eligibility_ = preceptorCalendarAwareEligibility_;
+}
 
 if (_PC11_BASE_RESIDENT_ELIGIBILITY_REASON_) {
   residentEligibilityReason_ = preceptorCalendarAwareEligibilityReason_;
@@ -1112,7 +1212,7 @@ function verifyPreceptorCalendarIntegration(token) {
     sheetExists:!!getDb_().getSheetByName(PRECEPTOR_CALENDAR_SHEET_),
     behavior:'ON = Skills Preferred/Home Unit. Any month with OFF weekdays targets 7 E1/E2 shifts; normally-skilled pharmacists cover the home unit on those rotation dates.',
     message:connected
-      ? 'Code11 is connected. ON weeks stay in the preferred unit. Months with OFF weekdays target 7 E1/E2 shifts, with normal-skill home-unit coverage on those dates.'
+      ? 'Code11 is connected. ON weeks stay in the preferred unit. Months with OFF weekdays target 5 E1/E2 shifts, with a fallback maximum of 7 only when no other eligible pharmacist can cover the E1/E2 shift, with normal-skill home-unit coverage on those dates.'
       : 'Code11 loaded, but one or more scheduling hooks are not connected. Replace the old Code11.gs with this version and redeploy.'
   };
 }
