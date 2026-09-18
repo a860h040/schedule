@@ -27,7 +27,7 @@
   function apiUrl(c,path){return 'https://api.github.com/repos/'+encodeURIComponent(c.owner)+'/'+encodeURIComponent(c.repo)+'/contents/'+path.split('/').map(encodeURIComponent).join('/');}
   function headers(c){return {'Accept':'application/vnd.github+json','Authorization':'Bearer '+c.token,'X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};}
   async function gh(url,opt,c){
-    const res=await fetch(url,{...(opt||{}),headers:{...headers(c),...((opt||{}).headers||{})}});
+    const res=await fetch(url,{...(opt||{}),cache:'no-store',headers:{...headers(c),'Cache-Control':'no-cache','Pragma':'no-cache',...((opt||{}).headers||{})}});
     const txt=await res.text();let body=null;try{body=txt?JSON.parse(txt):null}catch{body=txt}
     if(!res.ok){
       let msg=body&&body.message?body.message:'GitHub request failed ('+res.status+')';
@@ -238,8 +238,10 @@
     markDirty:()=>{if(window.__neoVBook)window.__neoVBook.dirty=true;},
     invoke(fn,args){
       const work=async()=>{
-        for(let attempt=0;attempt<2;attempt++){
-          const loaded=await loadWorkbook(attempt>0);
+        for(let attempt=0;attempt<4;attempt++){
+          // Always start each server-style call from the newest GitHub file.
+          // This prevents stale SHA values after workbook imports or another open tab.
+          const loaded=await loadWorkbook(true);
           const data=clone(loaded.data);
           const book=new VBook(data);window.__neoVBook=book;
           try{ if(typeof _DB_CACHE!=='undefined') _DB_CACHE=null; }catch(_e){}
@@ -251,15 +253,27 @@
             let result=callable.apply(window,args||[]);
             if(result&&typeof result.then==='function')result=await result;
             if(book.dirty){
-              try{await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);}
-              catch(e){if((e.status===409||e.status===422)&&attempt===0)continue;throw e}
+              try{
+                await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);
+              }catch(e){
+                const conflict =
+                  e.status===409 ||
+                  e.status===422 ||
+                  /does not match|sha mismatch|conflict/i.test(String(e&&e.message||''));
+                if(conflict && attempt<3){
+                  cache={data:null,sha:null,loadedAt:0};
+                  await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));
+                  continue;
+                }
+                throw e;
+              }
             }else{
               cache={data:book.data,sha:loaded.sha,loadedAt:Date.now()};
             }
             return result;
           }finally{window.__neoVBook=null;}
         }
-        throw new Error('NeoChrono could not save because another browser changed the database. Refresh and try again.');
+        throw new Error('NeoChrono detected another update to the GitHub database while saving. It retried automatically but the file kept changing. Close other NeoChrono tabs and try again.');
       };
       const p=invokeQueue.then(work,work);
       invokeQueue=p.catch(()=>{});
