@@ -371,7 +371,23 @@ function saveSkillProfile(token, employeeId, preferredCode, skillCodes, skillPri
     'Updated By':ctx.username
   });
 
-  var savedFixedOffDates=githubSaveFixedOffDates_(user,fixedOffDates,ctx.username);
+  var savedFixedOffDates;
+  if (fixedOffDates !== undefined) {
+    savedFixedOffDates=githubSaveFixedOffDates_(user,fixedOffDates,ctx.username);
+  } else {
+    savedFixedOffDates=readTable_(APP.SHEETS.WEEKLY_AVAILABILITY)
+      .filter(function(r){
+        var same=
+          (eid && clean_(r['Employee ID'])===eid) ||
+          (clean_(user.Username) && clean_(r.Username)===clean_(user.Username));
+        return same &&
+          yesDefault_(r.Active,true) &&
+          clean_(r.Notes).indexOf('[FIXED OFF FROM SKILLS]')===0;
+      })
+      .map(function(r){return githubFixedOffDateKey_(r['Effective Start']);})
+      .filter(Boolean)
+      .sort();
+  }
 
   if (typeof _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ !== 'undefined') _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ = null;
   audit_('EMPLOYEE_SKILL_PROFILE_CHANGED','',clean_(user['Pharmacist Name']),'','','',preferred,'No','',
