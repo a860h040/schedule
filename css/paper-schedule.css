@@ -1,10 +1,8 @@
-
-/* Paper Schedule / Excel-style theme */
+/* Paper Schedule / Excel-style full-screen theme */
 :root{
   --paper-navy:#1f4e78;
   --paper-line:#3b3b3b;
   --paper-weekend:#f4b183;
-  --paper-weekend-soft:#fff2cc;
   --paper-holiday:#fff200;
   --paper-off:#ffffff;
   --paper-pto:#e2f0d9;
@@ -15,112 +13,236 @@
   --paper-manual:#d9eaf7;
 }
 
-.paper-page-shell{max-width:none}
-.paper-page-head{margin-bottom:12px}
+/* Use substantially more of the browser only while Paper Schedule is open. */
+body:has(.paper-page-shell) .shell{
+  grid-template-columns:190px minmax(0,1fr);
+}
+body:has(.paper-page-shell) .sidebar{
+  padding:12px 9px;
+}
+body:has(.paper-page-shell) .topbar{
+  height:54px;
+  padding:0 14px;
+}
+body:has(.paper-page-shell) .content{
+  width:100%;
+  max-width:none;
+  margin:0;
+  padding:7px 9px 10px;
+}
 
+.paper-page-shell{
+  width:100%;
+  max-width:none;
+  min-width:0;
+}
+
+.paper-page-head{
+  margin:0 0 5px;
+  align-items:center;
+}
+.paper-page-head .calendar-title{
+  font-size:20px;
+  line-height:1.05;
+}
+.paper-page-head .muted{
+  margin-top:2px;
+  font-size:10px;
+}
+.paper-page-head .toolbar{
+  gap:4px;
+}
+.paper-page-head .btn{
+  padding:5px 8px;
+  min-height:29px;
+  font-size:10px;
+}
+
+/* Compact, single-line filters */
 .paper-filter-card{
   border:1px solid #a6a6a6;
   background:#f8f8f8;
   border-radius:0;
-  padding:12px;
-  margin-bottom:12px;
+  padding:5px 7px;
+  margin:0 0 5px;
+  box-shadow:none;
+}
+.paper-filter-row{
+  display:flex;
+  align-items:flex-end;
+  gap:6px;
+  flex-wrap:nowrap;
+}
+.paper-filter-row .field{
+  flex:0 0 132px;
+  min-width:0;
+  margin:0;
+}
+.paper-filter-row .field label{
+  display:block;
+  margin:0 0 2px;
+  font-size:9px;
+  line-height:1;
+  font-weight:800;
+  color:#374151;
+}
+.paper-filter-row .control{
+  width:100%;
+  min-height:29px;
+  height:29px;
+  padding:3px 6px;
+  border:1px solid #8c8c8c;
+  border-radius:0;
+  box-shadow:none;
+  background:#fff;
+  font-size:10px;
+}
+.paper-clear-btn{
+  height:29px;
+  min-height:29px;
+  padding:3px 8px!important;
+  border-radius:0!important;
+  font-size:10px!important;
+  white-space:nowrap;
 }
 
-.paper-shell{
-  border:2px solid var(--paper-line);
+/* Small legend so the grid gets most of the screen. */
+.paper-legend{
+  display:flex;
+  gap:4px;
+  flex-wrap:wrap;
+  align-items:center;
+  margin:4px 0 5px;
+  font-size:9px;
+  color:#374151;
+}
+.paper-legend .key{
+  display:inline-flex;
+  align-items:center;
+  gap:3px;
+  border:1px solid #aaa;
   background:#fff;
-  overflow:auto;
-  max-height:calc(100vh - 300px);
-  box-shadow:0 2px 8px rgba(0,0,0,.08);
+  padding:2px 4px;
+}
+.paper-legend .swatch{
+  width:12px;
+  height:11px;
+  border:1px solid #555;
+  display:inline-block;
+}
+
+/*
+ * Full-month fit:
+ * no horizontal scrollbar. The pharmacist column has a fixed compact width;
+ * every date equally shares all remaining browser width.
+ */
+.paper-shell{
+  width:100%;
+  height:calc(100vh - 175px);
+  min-height:420px;
+  border:1px solid var(--paper-line);
+  background:#fff;
+  overflow-x:hidden;
+  overflow-y:auto;
+  box-shadow:none;
 }
 
 .paper-table{
   border-collapse:collapse;
   table-layout:fixed;
-  width:max-content;
-  min-width:100%;
-  font-size:12px;
+  width:100%;
+  min-width:0;
+  max-width:100%;
+  font-size:clamp(7.5px,.58vw,10px);
   background:#fff;
   color:#111;
+}
+
+.paper-table col.paper-name-column{
+  width:145px;
+}
+.paper-table col.paper-date-column{
+  width:auto;
 }
 
 .paper-table th,
 .paper-table td{
   border:1px solid var(--paper-line);
-  height:28px;
-  padding:2px 4px;
+  height:24px;
+  padding:1px 1px;
   text-align:center;
   vertical-align:middle;
   white-space:nowrap;
   overflow:hidden;
-  text-overflow:ellipsis;
+  text-overflow:clip;
   color:#111;
+  line-height:1.05;
 }
 
 .paper-table .paper-title-row th{
   background:var(--paper-navy);
   color:#fff;
   text-align:left;
-  font-size:14px;
+  font-size:11px;
   font-weight:800;
-  height:30px;
-  letter-spacing:.02em;
+  height:26px;
+  letter-spacing:.01em;
 }
-
 .paper-table .paper-group-row th{
   background:#fff;
-  font-size:12px;
-  height:22px;
+  font-size:9px;
+  height:19px;
   font-weight:800;
 }
-
 .paper-table .paper-group-row th.weekend-head{
   background:#fde9d9;
 }
-
 .paper-table .paper-date-row th{
   background:#fff;
   font-weight:800;
-  height:26px;
-  font-size:11px;
+  height:21px;
+  font-size:clamp(7px,.53vw,9px);
 }
-
 .paper-table .paper-day-row th{
   background:#f2f2f2;
   font-weight:800;
-  height:24px;
-  font-size:11px;
+  height:20px;
+  font-size:clamp(6.5px,.5vw,8.5px);
 }
+
+/* Keep the top four rows visible while scrolling vertically. */
+.paper-table thead tr:nth-child(1) th{position:sticky;top:0;z-index:10}
+.paper-table thead tr:nth-child(2) th{position:sticky;top:26px;z-index:10}
+.paper-table thead tr:nth-child(3) th{position:sticky;top:45px;z-index:10}
+.paper-table thead tr:nth-child(4) th{position:sticky;top:66px;z-index:10}
 
 .paper-table .name-col{
   position:sticky;
   left:0;
-  z-index:5;
-  width:190px;
-  min-width:190px;
-  max-width:190px;
+  z-index:6;
+  width:145px;
+  min-width:145px;
+  max-width:145px;
   text-align:left!important;
   background:#fff;
   font-weight:800;
-  font-size:12px;
+  font-size:clamp(8px,.62vw,10px);
   border-right:2px solid #000!important;
-  padding-left:7px!important;
+  padding-left:4px!important;
+  text-overflow:ellipsis;
 }
-
 .paper-table thead .name-col{
-  z-index:8;
+  z-index:14;
 }
-
 .paper-table .date-col{
-  width:60px;
-  min-width:60px;
-  max-width:60px;
+  width:auto;
+  min-width:0;
+  max-width:none;
 }
 
 .paper-table tbody tr:nth-child(even) .name-col{
   background:#f8f8f8;
 }
-
 .paper-table tbody tr:hover td,
 .paper-table tbody tr:hover .name-col{
   background:#eaf2f8;
@@ -128,66 +250,55 @@
 
 .paper-table td.paper-cell{
   cursor:default;
-  font-weight:700;
+  font-weight:750;
   color:#111;
   position:relative;
+  font-size:clamp(7px,.55vw,9.5px);
 }
-
 .paper-table td.paper-cell.has-assignment{
   cursor:pointer;
 }
-
 .paper-table td.paper-cell.has-assignment:hover{
   outline:2px solid #1f4e78;
   outline-offset:-2px;
 }
-
 .paper-table td.weekend{
   background:#fff7ef;
 }
-
 .paper-table td.paper-off{
   background:var(--paper-off);
   font-weight:500;
   color:#333;
 }
-
 .paper-table td.paper-pto{
   background:var(--paper-pto);
   font-weight:900;
   color:#385723;
 }
-
 .paper-table td.paper-evening{
   background:var(--paper-evening);
 }
-
 .paper-table td.paper-night{
   background:var(--paper-night);
 }
-
 .paper-table td.paper-coverage{
   background:var(--paper-coverage);
   color:#003f5c;
 }
-
 .paper-table td.paper-manual{
   background:var(--paper-manual);
   outline:1px dashed #1f4e78;
-  outline-offset:-3px;
+  outline-offset:-2px;
 }
-
 .paper-table td.paper-unfilled{
   background:#ffe6e6;
   color:#9c0006;
   font-weight:900;
 }
-
 .paper-table td.holiday-col,
 .paper-table th.holiday-col{
   background:var(--paper-holiday)!important;
 }
-
 .paper-table tr.unfilled-row .name-col{
   background:#ffd9d9;
   color:#9c0006;
@@ -198,61 +309,41 @@
   background:var(--paper-unfilled);
   color:#fff;
   border:1px solid #b30000;
-  margin:1px;
-  padding:1px 2px;
+  margin:0;
+  padding:1px;
   cursor:pointer;
   font-weight:900;
+  font-size:clamp(6.5px,.5vw,8px);
+  overflow:hidden;
 }
-
 .paper-unfilled-chip:hover{
   background:#c00000;
 }
-
-.paper-legend{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  align-items:center;
-  margin:10px 0 12px;
-  font-size:12px;
-  color:#374151;
-}
-
-.paper-legend .key{
-  display:inline-flex;
-  align-items:center;
-  gap:5px;
-  border:1px solid #aaa;
-  background:#fff;
-  padding:4px 7px;
-}
-
-.paper-legend .swatch{
-  width:18px;
-  height:16px;
-  border:1px solid #555;
-  display:inline-block;
-}
-
 .paper-note{
-  font-size:12px;
+  font-size:9px;
   color:#4b5563;
-  margin-top:7px;
+  margin-top:3px;
 }
 
-@media(max-width:900px){
-  .paper-shell{max-height:none}
-  .paper-table .name-col{width:155px;min-width:155px;max-width:155px}
-  .paper-table .date-col{width:52px;min-width:52px;max-width:52px}
+/* On narrower desktop screens, sacrifice a little more name-column width. */
+@media(max-width:1250px){
+  body:has(.paper-page-shell) .shell{grid-template-columns:170px minmax(0,1fr)}
+  .paper-table col.paper-name-column,
+  .paper-table .name-col{width:125px;min-width:125px;max-width:125px}
+  .paper-filter-row .field{flex-basis:112px}
+}
+@media(max-width:950px){
+  body:has(.paper-page-shell) .shell{grid-template-columns:150px minmax(0,1fr)}
+  .paper-table col.paper-name-column,
+  .paper-table .name-col{width:105px;min-width:105px;max-width:105px}
+  .paper-table{font-size:6.5px}
+  .paper-filter-row .field{flex-basis:95px}
 }
 
+/* Printing keeps the same full-month fit. */
 @media print{
-  @page{size:landscape;margin:.22in}
-
-  body.printing-paper-schedule{
-    background:#fff!important;
-  }
-
+  @page{size:landscape;margin:.18in}
+  body.printing-paper-schedule{background:#fff!important}
   body.printing-paper-schedule .sidebar,
   body.printing-paper-schedule .topbar,
   body.printing-paper-schedule .paper-page-head,
@@ -261,63 +352,18 @@
   body.printing-paper-schedule .paper-note,
   body.printing-paper-schedule .toast-wrap,
   body.printing-paper-schedule .modal-backdrop,
-  body.printing-paper-schedule #loading{
-    display:none!important;
-  }
-
+  body.printing-paper-schedule #loading{display:none!important}
   body.printing-paper-schedule .shell,
-  body.printing-paper-schedule .main{
-    display:block!important;
-    background:#fff!important;
-  }
-
-  body.printing-paper-schedule .content{
-    max-width:none!important;
-    padding:0!important;
-    margin:0!important;
-    overflow:visible!important;
-  }
-
-  body.printing-paper-schedule .paper-page-shell{
-    display:block!important;
-  }
-
-  body.printing-paper-schedule .paper-shell{
-    max-height:none!important;
-    overflow:visible!important;
-    border:0!important;
-    box-shadow:none!important;
-  }
-
-  body.printing-paper-schedule .paper-table{
-    width:100%!important;
-    min-width:0!important;
-    table-layout:fixed!important;
-    font-size:6.5pt!important;
-  }
-
-  body.printing-paper-schedule .paper-table .name-col{
-    position:static!important;
-    width:1.45in!important;
-    min-width:1.45in!important;
-    max-width:1.45in!important;
-  }
-
-  body.printing-paper-schedule .paper-table .date-col{
-    width:auto!important;
-    min-width:0!important;
-    max-width:none!important;
-  }
-
+  body.printing-paper-schedule .main{display:block!important;background:#fff!important}
+  body.printing-paper-schedule .content{max-width:none!important;padding:0!important;margin:0!important;overflow:visible!important}
+  body.printing-paper-schedule .paper-page-shell{display:block!important}
+  body.printing-paper-schedule .paper-shell{height:auto!important;min-height:0!important;overflow:visible!important;border:0!important;box-shadow:none!important}
+  body.printing-paper-schedule .paper-table{width:100%!important;min-width:0!important;table-layout:fixed!important;font-size:6.2pt!important}
+  body.printing-paper-schedule .paper-table col.paper-name-column,
+  body.printing-paper-schedule .paper-table .name-col{position:static!important;width:1.25in!important;min-width:1.25in!important;max-width:1.25in!important}
+  body.printing-paper-schedule .paper-table .date-col{width:auto!important;min-width:0!important;max-width:none!important}
+  body.printing-paper-schedule .paper-table thead th{position:static!important}
   body.printing-paper-schedule .paper-table th,
-  body.printing-paper-schedule .paper-table td{
-    height:20px!important;
-    padding:1px 2px!important;
-    overflow:hidden!important;
-  }
-
-  body.printing-paper-schedule *{
-    -webkit-print-color-adjust:exact!important;
-    print-color-adjust:exact!important;
-  }
+  body.printing-paper-schedule .paper-table td{height:18px!important;padding:1px!important;overflow:hidden!important}
+  body.printing-paper-schedule *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
 }
