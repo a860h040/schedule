@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pharmacy Workforce — Scheduling</title>
-  <link rel="stylesheet" href="css/paper-schedule.css?v=20260918-preceptorweek1">
+  <link rel="stylesheet" href="css/paper-schedule.css?v=20260918-fixedoff4">
   <style>
     :root{
       --bg:#f3f6fa;--panel:#fff;--ink:#172033;--muted:#64748b;--line:#dbe3ee;--brand:#0f5c7a;--brand2:#0a7c86;
@@ -604,7 +604,7 @@
 <script src="js/legacy/schedule-publish.js?v=20260918-paperschedule1"></script>
 <script src="js/legacy/delete-schedule.js?v=20260918-paperschedule1"></script>
 <script src="js/legacy/patches.js?v=20260918-paperschedule1"></script>
-<script src="js/paper-schedule.js?v=20260918-preceptorweek1"></script>
+<script src="js/paper-schedule.js?v=20260918-fixedoff4"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -1500,7 +1500,7 @@ function renderSkillProfileManagerModal_(){
   ${renderSkillFixedOffSection_(d)}`;
 
   openModal(
-    'Manage Skills & Priority — '+d.pharmacistName,
+    'Manage Skills, Priority & OFF Days — '+d.pharmacistName,
     body,
     [
       {label:'Cancel',cls:'btn-secondary',action:'closeModal()'},
@@ -1571,15 +1571,37 @@ function removeDraftSkill_(code){
   renderSkillProfileManagerModal_();
 }
 
+function addDraftFixedOffDate_(){
+  const d=State.skillProfileDraft;
+  if(!d)return;
+  const el=$('skillFixedOffDate');
+  const value=String(el?.value||'').trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(value)){
+    toast('Choose a valid OFF date.','error');
+    return;
+  }
+  d.fixedOffDates=d.fixedOffDates||[];
+  if(!d.fixedOffDates.includes(value))d.fixedOffDates.push(value);
+  d.fixedOffDates.sort();
+  renderSkillProfileManagerModal_();
+}
+
+function removeDraftFixedOffDate_(date){
+  const d=State.skillProfileDraft;
+  if(!d)return;
+  d.fixedOffDates=(d.fixedOffDates||[]).filter(function(x){return String(x)!==String(date);});
+  renderSkillProfileManagerModal_();
+}
+
 async function saveSkillProfileUI_(){
   const d=State.skillProfileDraft;
   if(!d)return;
   normalizeDraftSkillPriorities_();
   try{
-    await server('saveSkillProfile',State.token,d.employeeId,d.preferred,d.skills,d.priorities);
+    await server('saveSkillProfile',State.token,d.employeeId,d.preferred,d.skills,d.priorities,d.fixedOffDates||[]);
     State.skillProfileDraft=null;
     closeModal();
-    toast('Skills, priorities, and preferred unit saved','success');
+    toast('Skills, priorities, preferred unit, and fixed OFF days saved','success');
     await refreshData(false);
     renderSkills();
   }catch(e){toast(e.message,'error')}
@@ -1647,7 +1669,7 @@ function renderSkills(){
       ${cover.length?`<div class="small muted" style="margin:10px 0 6px;font-weight:800">OFF-DAY COVERAGE ONLY</div><div class="skills-chips">${cover.map(code=>`<span class="skill-chip cover">${esc(code)}</span>`).join('')}</div>`:''}
 
       <div style="margin-top:12px">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openSkillProfileManager_('${attr(u['Employee ID'])}')">Edit skills, priority & preferred unit</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openSkillProfileManager_('${attr(u['Employee ID'])}')">Edit skills, priority & OFF days</button>
       </div>
     </div>`;
   }).join('');
