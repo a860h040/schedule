@@ -596,13 +596,13 @@
 
 <div id="modalRoot"></div>
 
-<script src="js/github-legacy-runtime.js?v=20260918-legacy9"></script>
-<script src="js/legacy/main-backend.js?v=20260918-legacy9"></script>
-<script src="js/legacy/preceptor-calendar.js?v=20260918-legacy9"></script>
-<script src="js/legacy/csv-export.js?v=20260918-legacy9"></script>
-<script src="js/legacy/schedule-publish.js?v=20260918-legacy9"></script>
-<script src="js/legacy/delete-schedule.js?v=20260918-legacy9"></script>
-<script src="js/legacy/patches.js?v=20260918-legacy9"></script>
+<script src="js/github-legacy-runtime.js?v=20260918-legacy10"></script>
+<script src="js/legacy/main-backend.js?v=20260918-legacy10"></script>
+<script src="js/legacy/preceptor-calendar.js?v=20260918-legacy10"></script>
+<script src="js/legacy/csv-export.js?v=20260918-legacy10"></script>
+<script src="js/legacy/schedule-publish.js?v=20260918-legacy10"></script>
+<script src="js/legacy/delete-schedule.js?v=20260918-legacy10"></script>
+<script src="js/legacy/patches.js?v=20260918-legacy10"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -1011,7 +1011,7 @@ function renderPreceptorCalendar(){
   const pc=preceptorCalendarState_();
   const y=Number(pc.year||new Date().getFullYear());
   $('content').innerHTML=`<div class="preceptor-shell">
-    <section class="preceptor-hero"><div class="preceptor-kicker">PRECEPTOR OPERATIONS</div><h2>Date-aware Preceptor Calendar</h2><p>Users → Preceptor = Yes means the pharmacist can precept. Calendar ON keeps the pharmacist in the Preferred / Home Unit selected in Skills. If a month contains any OFF weekdays, the scheduler targets 7 E1/E2 rotation shifts during OFF weekdays; on those evening dates, another pharmacist with the normal home-unit skill covers the preceptor's unit. A month that is ON for all weekdays has no 7-evening requirement.</p></section>
+    <section class="preceptor-hero"><div class="preceptor-kicker">PRECEPTOR OPERATIONS</div><h2>Date-aware Preceptor Calendar</h2><p>Users → Preceptor = Yes means the pharmacist can precept. Calendar ON keeps the pharmacist in the Preferred / Home Unit selected in Skills. If a month contains any OFF weekdays, the normal target is 5 E1/E2 rotation shifts during OFF weekdays. A pharmacist may work up to 7 E1/E2 shifts only as fallback when no other eligible pharmacist can cover the E1/E2 shift. On planned rotation dates, another pharmacist with the normal home-unit skill covers the preceptor's unit when that unit is required. A month that is ON for all weekdays has no evening-rotation target.</p></section>
     <section class="preceptor-controls">
       <div class="field year-field"><label>Year</label><select id="pcYear" class="control" onchange="changePreceptorCalendarYear(this.value)">${[y-2,y-1,y,y+1,y+2].map(v=>`<option value="${v}" ${v===y?'selected':''}>${v}</option>`).join('')}</select></div>
       <div class="field" style="min-width:300px"><label>Preceptor Pharmacist</label><select id="pcEmployee" class="control" onchange="changePreceptorCalendarEmployee(this.value)"><option value="">Loading preceptors…</option></select></div>
@@ -1019,7 +1019,7 @@ function renderPreceptorCalendar(){
       <button class="btn btn-secondary" onclick="syncPreceptorCalendarUI()">Sync Preceptors</button>
       <button class="btn btn-ghost" onclick="reloadPreceptorCalendarUI()">Refresh</button>
     </section>
-    <div class="alert alert-ok mb12"><b>Monthly rotation rule:</b> All weekdays ON for a month = no evening quota. Any OFF weekday in the month = target 7 E1/E2 shifts on OFF weekdays. On each rotation date, another pharmacist with the normal Preferred/Home Unit skill covers that unit.</div>
+    <div class="alert alert-ok mb12"><b>Monthly rotation rule:</b> All weekdays ON for a month = no evening quota. Any OFF weekday in the month = target 5 E1/E2 shifts on OFF weekdays. Maximum = 7 only as fallback when no other eligible pharmacist can cover the E1/E2 shift. On planned rotation dates, another pharmacist with the normal Preferred/Home Unit skill covers that unit when required.</div>
     <div id="pcBody"><div class="card"><div class="small muted">Loading Preceptor Calendar…</div></div></div>
   </div>`;
   loadPreceptorCalendarUI(false);
