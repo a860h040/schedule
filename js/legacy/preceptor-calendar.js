@@ -320,20 +320,64 @@ function preceptorCalendarModeForDate_(u,date) {
 }
 
 /**
+ * Returns true when this pharmacist is actively precepting during the
+ * Sunday-Saturday week containing date. We look at the weekdays in that week
+ * because precepting is a weekday activity, but the resulting evening block
+ * applies to the entire week, including Saturday/Sunday.
+ */
+function preceptorCalendarIsPreceptingWeek_(u,date) {
+  if (!u || !yes_(u.Preceptor) || isSevenOn_(u)) return false;
+
+  var d = startOfDay_(asDate_(date));
+  if (!d) return false;
+
+  var sunday = addDays_(d,-d.getDay());
+
+  for (var i=1;i<=5;i++) {
+    var weekday = addDays_(sunday,i);
+    if (preceptorCalendarIsActiveOnDate_(u,weekday)) return true;
+  }
+
+  return false;
+}
+
+function preceptorCalendarIsEveningSlot_(slot,model) {
+  if (!slot) return false;
+
+  var code = clean_(
+    slot.shiftCode ||
+    slot.Shift ||
+    (slot.shift && slot.shift.Shift)
+  ).toUpperCase();
+
+  if (preceptorCalendarEveningCode_(code)) return true;
+
+  var shift =
+    slot.shift ||
+    (model && model.shiftMap && model.shiftMap[code]) ||
+    null;
+
+  return !!(
+    shift &&
+    clean_(shift.Type).toLowerCase() === 'evening'
+  );
+}
+
+/**
  * Existing preceptor evening restriction:
  * ON  -> evening remains blocked unless the legacy settings permit it.
  * OFF -> E1/E2 must be allowed so the pharmacist can move to evening staffing.
  */
 function preceptorCalendarAwarePreceptorEveningBlocked_(u,slot,model) {
-  if (!u || !slot || !slot.shift || !yes_(u.Preceptor)) return false;
+  if (!u || !slot || !yes_(u.Preceptor)) return false;
+  if (!preceptorCalendarIsEveningSlot_(slot,model)) return false;
 
-  if (!preceptorCalendarIsActiveOnDate_(u,slot.date)) {
-    return false;
-  }
+  // Hard rule: no evening shift anywhere in a Sunday-Saturday week when the
+  // pharmacist is actively precepting during that week.
+  if (preceptorCalendarIsPreceptingWeek_(u,slot.date)) return true;
 
-  if (clean_(slot.shift.Type).toLowerCase() !== 'evening') return false;
-  if (isResidentMandatoryE2_(u,slot,model)) return false;
-
+  // During non-precepting weeks, preserve the legacy weekend/weekday settings
+  // for any evening work that is otherwise eligible.
   if (isWeekendDate_(slot.date)) {
     return !model.settings.preceptorWeekendEveningAllowed;
   }
@@ -540,7 +584,10 @@ function preceptorCalendarPreassignOnPreferredUnits_(
       use shift #6 or #7 only when no other eligible pharmacist can cover
       that E1/E2 shift.
 
-   4. E1/E2 rotation shifts can be placed ONLY on calendar-OFF weekdays.
+   4. A pharmacist cannot work ANY evening shift during a Sunday-Saturday
+      week in which they are actively precepting. E1/E2 rotation shifts can
+      be placed only during non-precepting weeks and only on calendar-OFF
+      weekdays.
 
    5. On each planned E1/E2 rotation date, another pharmacist with the NORMAL
       Employee Skill for the preceptor's Preferred/Home Unit is assigned to
@@ -812,6 +859,7 @@ function preceptorCalendarPreassignOffEvenings_(
         if (monthKey_(d) !== monthKey) continue;
         if (isWeekendDate_(d)) continue;
         if (preceptorCalendarModeForDate_(u,d) !== 'OFF') continue;
+        if (preceptorCalendarIsPreceptingWeek_(u,d)) continue;
         eligibleDays.push(new Date(d));
       }
 
@@ -954,7 +1002,25 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
         ? model.usersByUsername[clean_(a.username)]
         : null;
 
-      if (!u || !preceptorCalendarIsManagedWeekday_(u,a.date)) return;
+      if (!u) return;
+
+      if (
+        yes_(u.Preceptor) &&
+        preceptorCalendarIsEveningSlot_(
+          {shiftCode:a.shiftCode,shift:model && model.shiftMap ? model.shiftMap[clean_(a.shiftCode).toUpperCase()] : null},
+          model
+        ) &&
+        preceptorCalendarIsPreceptingWeek_(u,a.date)
+      ) {
+        report.errors.push(
+          a.dateKey+' '+a.shiftCode+': '+
+          clean_(u['Pharmacist Name'])+
+          ' is actively precepting during this Sunday-Saturday week and cannot be scheduled for an evening shift.'
+        );
+        return;
+      }
+
+      if (!preceptorCalendarIsManagedWeekday_(u,a.date)) return;
 
       var mode = preceptorCalendarModeForDate_(u,a.date);
 
@@ -1104,6 +1170,18 @@ function preceptorCalendarAwareEligibility_(u,slot,model,state,manualMode) {
     e.ok &&
     u &&
     slot &&
+    yes_(u.Preceptor) &&
+    preceptorCalendarIsEveningSlot_(slot,model) &&
+    preceptorCalendarIsPreceptingWeek_(u,slot.date)
+  ) {
+    e.reasons.push('PRECEPTOR_PRECEPTING_WEEK_NO_EVENING');
+    e.ok = false;
+  }
+
+  if (
+    e.ok &&
+    u &&
+    slot &&
     preceptorCalendarIsManagedWeekday_(u,slot.date) &&
     preceptorCalendarModeForDate_(u,slot.date) === 'OFF' &&
     preceptorCalendarEveningCode_(slot.shiftCode)
@@ -1132,6 +1210,10 @@ function preceptorCalendarAwareReasonToWarning_(reason) {
 
   if (reason === 'PRECEPTOR_MONTHLY_EVENING_MAX') {
     return 'Preceptor monthly E1/E2 maximum reached: target is 5 and the hard maximum is 7.';
+  }
+
+  if (reason === 'PRECEPTOR_PRECEPTING_WEEK_NO_EVENING') {
+    return 'Preceptor Calendar ON week: pharmacist cannot work an evening shift anywhere in that Sunday-Saturday week.';
   }
 
   return _PC11_BASE_REASON_TO_WARNING_
@@ -1210,7 +1292,7 @@ function verifyPreceptorCalendarIntegration(token) {
     ok:true,
     connected:connected,
     sheetExists:!!getDb_().getSheetByName(PRECEPTOR_CALENDAR_SHEET_),
-    behavior:'ON = Skills Preferred/Home Unit. Any month with OFF weekdays targets 5 E1/E2 shifts. Maximum is 7, and shifts 6-7 are fallback-only when no other eligible pharmacist can cover E1/E2. Normally-skilled pharmacists cover the home unit on planned rotation dates.',
+    behavior:'ON = Skills Preferred/Home Unit. No evening shifts are allowed anywhere in a Sunday-Saturday week that contains active precepting. Months with OFF weekdays target 5 E1/E2 shifts during eligible non-precepting OFF weeks; maximum is 7, with shifts 6-7 fallback-only.',
     message:connected
       ? 'Code11 is connected. ON weeks stay in the preferred unit. Months with OFF weekdays target 5 E1/E2 shifts, with a fallback maximum of 7 only when no other eligible pharmacist can cover the E1/E2 shift, with normal-skill home-unit coverage on those dates.'
       : 'Code11 loaded, but one or more scheduling hooks are not connected. Replace the old Code11.gs with this version and redeploy.'
@@ -1264,11 +1346,13 @@ function getPreceptorStatusForDate(token, employeeId, date) {
     mode:mode,
     preferredUnits:model ? preceptorCalendarPreferredUnitCodes_(u,model) : [],
     expectedAssignment:
-      mode === 'ON'
-        ? 'Skills → Preferred / Home Unit'
-        : mode === 'OFF'
-          ? 'Skills → Preferred / Home Unit, E1, or E2'
-          : 'Existing scheduler rules',
+      preceptorCalendarIsPreceptingWeek_(u,d)
+        ? 'No evening shifts this Sunday-Saturday week; ON weekdays stay in Skills → Preferred / Home Unit'
+        : mode === 'ON'
+          ? 'Skills → Preferred / Home Unit'
+          : mode === 'OFF'
+            ? 'Skills → Preferred / Home Unit, E1, or E2'
+            : 'Existing scheduler rules',
     weekNumber:preceptorCalendarWeekNumber_(d)
   };
 }
