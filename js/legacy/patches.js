@@ -47,7 +47,7 @@ function githubNormalizeSkillPriorities_(values, headers) {
     if (!yesDefault_(values[r][h.Active],true)) {
       if (clean_(values[r][h.Priority])) {
         values[r][h.Priority]='';
-        return true;
+        changed=true;
       }
       continue;
     }
