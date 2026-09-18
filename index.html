@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pharmacy Workforce — Scheduling</title>
-  <link rel="stylesheet" href="css/paper-schedule.css?v=20260918-paperschedule4">
+  <link rel="stylesheet" href="css/paper-schedule.css?v=20260918-preceptorweek1">
   <style>
     :root{
       --bg:#f3f6fa;--panel:#fff;--ink:#172033;--muted:#64748b;--line:#dbe3ee;--brand:#0f5c7a;--brand2:#0a7c86;
@@ -604,7 +604,7 @@
 <script src="js/legacy/schedule-publish.js?v=20260918-paperschedule1"></script>
 <script src="js/legacy/delete-schedule.js?v=20260918-paperschedule1"></script>
 <script src="js/legacy/patches.js?v=20260918-paperschedule1"></script>
-<script src="js/paper-schedule.js?v=20260918-paperschedule4"></script>
+<script src="js/paper-schedule.js?v=20260918-preceptorweek1"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -1013,7 +1013,7 @@ function renderPreceptorCalendar(){
   const pc=preceptorCalendarState_();
   const y=Number(pc.year||new Date().getFullYear());
   $('content').innerHTML=`<div class="preceptor-shell">
-    <section class="preceptor-hero"><div class="preceptor-kicker">PRECEPTOR OPERATIONS</div><h2>Date-aware Preceptor Calendar</h2><p>Users → Preceptor = Yes means the pharmacist can precept. Calendar ON keeps the pharmacist in the Preferred / Home Unit selected in Skills. If a month contains any OFF weekdays, the normal target is 5 E1/E2 rotation shifts during OFF weekdays. A pharmacist may work up to 7 E1/E2 shifts only as fallback when no other eligible pharmacist can cover the E1/E2 shift. On planned rotation dates, another pharmacist with the normal home-unit skill covers the preceptor's unit when that unit is required. A month that is ON for all weekdays has no evening-rotation target.</p></section>
+    <section class="preceptor-hero"><div class="preceptor-kicker">PRECEPTOR OPERATIONS</div><h2>Date-aware Preceptor Calendar</h2><p>Users → Preceptor = Yes means the pharmacist can precept. Calendar ON keeps the pharmacist in the Preferred / Home Unit selected in Skills. If a pharmacist is precepting during a Sunday–Saturday week, NeoChrono will not schedule that pharmacist for any evening shift anywhere in that week. Evening rotation is used only in fully non-precepting weeks. If a month has eligible OFF weekdays in non-precepting weeks, the normal target is 5 E1/E2 shifts; the maximum is 7 only as fallback when no other eligible pharmacist can cover E1/E2.</p></section>
     <section class="preceptor-controls">
       <div class="field year-field"><label>Year</label><select id="pcYear" class="control" onchange="changePreceptorCalendarYear(this.value)">${[y-2,y-1,y,y+1,y+2].map(v=>`<option value="${v}" ${v===y?'selected':''}>${v}</option>`).join('')}</select></div>
       <div class="field" style="min-width:300px"><label>Preceptor Pharmacist</label><select id="pcEmployee" class="control" onchange="changePreceptorCalendarEmployee(this.value)"><option value="">Loading preceptors…</option></select></div>
@@ -1021,7 +1021,7 @@ function renderPreceptorCalendar(){
       <button class="btn btn-secondary" onclick="syncPreceptorCalendarUI()">Sync Preceptors</button>
       <button class="btn btn-ghost" onclick="reloadPreceptorCalendarUI()">Refresh</button>
     </section>
-    <div class="alert alert-ok mb12"><b>Monthly rotation rule:</b> All weekdays ON for a month = no evening quota. Any OFF weekday in the month = target 5 E1/E2 shifts on OFF weekdays. Maximum = 7 only as fallback when no other eligible pharmacist can cover the E1/E2 shift. On planned rotation dates, another pharmacist with the normal Preferred/Home Unit skill covers that unit when required.</div>
+    <div class="alert alert-ok mb12"><b>Preceptor evening rule:</b> Any Sunday–Saturday week containing active precepting has <b>no evening shifts</b> for that pharmacist. E1/E2 rotation can occur only in fully non-precepting weeks and on OFF weekdays. Monthly target = 5 when eligible OFF time exists; maximum = 7 only as fallback when no other eligible pharmacist can cover E1/E2.</div>
     <div id="pcBody"><div class="card"><div class="small muted">Loading Preceptor Calendar…</div></div></div>
   </div>`;
   loadPreceptorCalendarUI(false);
