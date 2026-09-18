@@ -27,7 +27,7 @@
   function apiUrl(c,path){return 'https://api.github.com/repos/'+encodeURIComponent(c.owner)+'/'+encodeURIComponent(c.repo)+'/contents/'+path.split('/').map(encodeURIComponent).join('/');}
   function headers(c){return {'Accept':'application/vnd.github+json','Authorization':'Bearer '+c.token,'X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};}
   async function gh(url,opt,c){
-    const res=await fetch(url,{...(opt||{}),cache:'no-store',headers:{...headers(c),'Cache-Control':'no-cache','Pragma':'no-cache',...((opt||{}).headers||{})}});
+    let res;\n    try{\n      res=await fetch(url,{...(opt||{}),cache:'no-store',headers:{...headers(c),...((opt||{}).headers||{})}});\n    }catch(fetchErr){\n      throw new Error('Could not connect to GitHub. Check your internet connection and the saved GitHub token, then try Setup This Device again.');\n    }
     const txt=await res.text();let body=null;try{body=txt?JSON.parse(txt):null}catch{body=txt}
     if(!res.ok){
       let msg=body&&body.message?body.message:'GitHub request failed ('+res.status+')';
