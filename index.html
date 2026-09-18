@@ -1404,12 +1404,28 @@ function openSkillProfileManager_(employeeId){
   const priorities={};
   codes.forEach((code,i)=>priorities[code]=i+1);
 
+  const fixedOffDates=(State.data.weeklyAvailability||[])
+    .filter(r=>{
+      if(!yes(r.Active))return false;
+      const reid=String(r['Employee ID']||''), run=String(r.Username||'');
+      const same=(eid&&reid===eid)||(un&&run===un);
+      return same && String(r.Notes||'').startsWith('[FIXED OFF FROM SKILLS]');
+    })
+    .map(r=>{
+      const raw=String(r['Effective Start']||'').slice(0,10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(raw)?raw:'';
+    })
+    .filter(Boolean)
+    .filter((v,i,a)=>a.indexOf(v)===i)
+    .sort();
+
   State.skillProfileDraft={
     employeeId:eid,
     pharmacistName:u['Pharmacist Name']||'',
     skills:codes.slice(),
     preferred:preferred,
-    priorities:priorities
+    priorities:priorities,
+    fixedOffDates:fixedOffDates
   };
 
   renderSkillProfileManagerModal_();
