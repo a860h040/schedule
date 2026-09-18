@@ -11,7 +11,7 @@
   const WORKBOOK_PATH='data/workbook.json';
   const PUBLISHED_PATH='data/published-schedule.json';
   const SESSION_SHEET_KEY='neochronoLegacySessionsV1';
-  let cache={data:null,sha:null,loadedAt:0};
+  let cache={data:null,sha:null,loadedAt:0};\n  let invokeQueue=Promise.resolve();
 
   const enc=s=>new TextEncoder().encode(String(s));
   function b64encodeUtf8(s){let b='';for(const x of enc(s))b+=String.fromCharCode(x);return btoa(b);}
@@ -235,26 +235,34 @@
     cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,
     currentBook:()=>currentBook(),
     markDirty:()=>{if(window.__neoVBook)window.__neoVBook.dirty=true;},
-    async invoke(fn,args){
-      for(let attempt=0;attempt<2;attempt++){
-        const loaded=await loadWorkbook(attempt>0);
-        const data=clone(loaded.data);
-        const book=new VBook(data);window.__neoVBook=book;
-        const callable=window[fn];
-        if(typeof callable!=='function')throw new Error('Backend function not found: '+fn);
-        try{
-          let result=callable.apply(window,args||[]);
-          if(result&&typeof result.then==='function')result=await result;
-          if(book.dirty){
-            try{await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);}
-            catch(e){if((e.status===409||e.status===422)&&attempt===0)continue;throw e}
-          }else{
-            cache={data:book.data,sha:loaded.sha,loadedAt:Date.now()};
-          }
-          return result;
-        }finally{window.__neoVBook=null;}
-      }
-      throw new Error('NeoChrono could not save because another browser changed the database. Refresh and try again.');
+    invoke(fn,args){
+      const work=async()=>{
+        for(let attempt=0;attempt<2;attempt++){
+          const loaded=await loadWorkbook(attempt>0);
+          const data=clone(loaded.data);
+          const book=new VBook(data);window.__neoVBook=book;
+          try{ if(typeof _DB_CACHE!=='undefined') _DB_CACHE=null; }catch(_e){}
+          try{ if(typeof _TZ_CACHE!=='undefined') _TZ_CACHE=null; }catch(_e){}
+          try{ if(typeof PRECEPTOR_CALENDAR_RUNTIME_CACHE_!=='undefined') PRECEPTOR_CALENDAR_RUNTIME_CACHE_=null; }catch(_e){}
+          const callable=window[fn];
+          if(typeof callable!=='function')throw new Error('Backend function not found: '+fn);
+          try{
+            let result=callable.apply(window,args||[]);
+            if(result&&typeof result.then==='function')result=await result;
+            if(book.dirty){
+              try{await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);}
+              catch(e){if((e.status===409||e.status===422)&&attempt===0)continue;throw e}
+            }else{
+              cache={data:book.data,sha:loaded.sha,loadedAt:Date.now()};
+            }
+            return result;
+          }finally{window.__neoVBook=null;}
+        }
+        throw new Error('NeoChrono could not save because another browser changed the database. Refresh and try again.');
+      };
+      const p=invokeQueue.then(work,work);
+      invokeQueue=p.catch(()=>{});
+      return p;
     }
   };
 
