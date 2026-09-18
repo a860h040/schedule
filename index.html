@@ -1430,6 +1430,30 @@ function openSkillProfileManager_(employeeId){
 
   renderSkillProfileManagerModal_();
 }
+function renderSkillFixedOffSection_(d){
+  const dates=(d.fixedOffDates||[]).slice().sort();
+  const chips=dates.length
+    ? dates.map(function(date){
+        return '<span class="badge" style="display:inline-flex;align-items:center;gap:6px;padding:6px 8px">'+
+          esc(date)+
+          '<button type="button" onclick="removeDraftFixedOffDate_(\''+attr(date)+'\')" title="Remove fixed OFF date" style="border:0;background:transparent;cursor:pointer;font-weight:900;padding:0;line-height:1">×</button>'+
+        '</span>';
+      }).join('')
+    : '<span class="small muted">No fixed OFF dates.</span>';
+
+  return '<div style="height:1px;background:#e5e7eb;margin:16px 0"></div>'+
+    '<div class="field">'+
+      '<label>Fixed OFF Days</label>'+
+      '<div class="small muted" style="margin-bottom:8px">These are hard OFF dates. NeoChrono will not assign this pharmacist to any shift on these dates. They are separate from PTO and algorithm-generated OFF days.</div>'+
+      '<div id="skillFixedOffList" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px">'+chips+'</div>'+
+      '<div class="skill-profile-add">'+
+        '<input id="skillFixedOffDate" class="control" type="date">'+
+        '<button type="button" class="btn btn-secondary" onclick="addDraftFixedOffDate_()">+ Add Fixed OFF Day</button>'+
+      '</div>'+
+      '<div class="small muted" style="margin-top:7px">If a fixed OFF date conflicts with the five-workday rule, weekend coverage, or another hard rule, schedule validation will show the conflict.</div>'+
+    '</div>';
+}
+
 function renderSkillProfileManagerModal_(){
   const d=State.skillProfileDraft;
   if(!d)return;
@@ -1472,7 +1496,8 @@ function renderSkillProfileManagerModal_(){
   <div class="skill-profile-add">
     <input id="skillProfileNewCode" class="control" placeholder="Add skill code, e.g. IM" onkeydown="if(event.key==='Enter'){event.preventDefault();addDraftSkill_()}">
     <button type="button" class="btn btn-secondary" onclick="addDraftSkill_()">+ Add Skill</button>
-  </div>`;
+  </div>
+  ${renderSkillFixedOffSection_(d)}`;
 
   openModal(
     'Manage Skills & Priority — '+d.pharmacistName,
