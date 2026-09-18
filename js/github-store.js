@@ -37,7 +37,7 @@ function headers(cfg){return {'Accept':'application/vnd.github+json','Authorizat
 async function ghFetch(url,opts={}){
   const res=await fetch(url,opts);
   const txt=await res.text(); let body=null; try{body=txt?JSON.parse(txt):null;}catch{body=txt;}
-  if(!res.ok){const msg=body&&body.message?body.message:`GitHub request failed (${res.status})`; const err=new Error(msg); err.status=res.status; err.body=body; throw err;}
+  if(!res.ok){let msg=body&&body.message?body.message:`GitHub request failed (${res.status})`; if(res.status===401)msg='This device is not connected to the private NeoChrono database. The saved GitHub token is missing, expired, or invalid. Open Setup this device and enter a valid fine-grained token.'; const err=new Error(msg); err.status=res.status; err.body=body; throw err;}
   return body;
 }
 
