@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NeoChrono — Import Workbook</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font-family:Inter,"Segoe UI",system-ui,sans-serif;background:#f4f6f8;color:#18222f}
+    .wrap{max-width:1100px;margin:0 auto;padding:32px 22px}.head{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-bottom:20px}
+    h1{margin:0;font-size:27px}.muted{color:#697887}.card{background:#fff;border:1px solid #dde3e8;border-radius:16px;padding:20px;margin:14px 0;box-shadow:0 4px 18px rgba(24,34,47,.05)}
+    .grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}.field label{display:block;font-size:11px;font-weight:750;color:#576777;margin-bottom:6px}
+    .control{width:100%;border:1px solid #ccd6dd;border-radius:9px;background:#fff;min-height:42px;padding:9px 11px;font:inherit}
+    .btn{border:0;border-radius:9px;padding:10px 15px;font-weight:750;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+    .primary{background:#16324a;color:#fff}.secondary{background:#eef2f5;color:#304253}.success{background:#0d8b84;color:#fff}.btn:disabled{opacity:.45;cursor:not-allowed}
+    .actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:15px}.alert{border:1px solid #c8e6df;background:#edf8f5;color:#246c64;border-radius:10px;padding:11px 13px;font-size:12px}
+    .warn{background:#fff8e9;border-color:#edd9aa;color:#775915}.danger{background:#fff0ee;border-color:#efc7c3;color:#8d3e38}
+    table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:9px 10px;border-bottom:1px solid #edf1f3;text-align:left}th{background:#f7f9fa;color:#6f7e8a;font-size:10px;text-transform:uppercase}
+    .hidden{display:none!important}.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.kpi{background:#f8fafb;border:1px solid #e5eaed;border-radius:12px;padding:14px}.kpi b{display:block;font-size:24px}
+    @media(max-width:700px){.grid,.kpis{grid-template-columns:1fr}.head{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><div><h1>NeoChrono Workbook Import</h1><p class="muted">Upload the complete Excel export of your scheduler Google Sheet.</p></div><a class="btn secondary" href="index.html">Back to NeoChrono</a></div>
+  <div id="guard" class="alert warn">Checking administrator session…</div>
+  <div id="main" class="hidden">
+    <div class="alert"><b>Administrator login is protected.</b> The importer preserves the current GitHub Admin Accounts and browser sessions. It replaces the scheduler data from the workbook.</div>
+    <div class="card">
+      <div class="grid">
+        <div class="field"><label>Google Sheet export (.xlsx)</label><input id="file" class="control" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div>
+        <div class="field"><label>Import behavior</label><select id="mode" class="control"><option value="replace">Replace scheduler data with workbook</option><option value="merge">Merge recognized sheets</option></select></div>
+      </div>
+      <div class="actions"><button id="preview" class="btn primary">Read & Preview</button><button id="apply" class="btn success" disabled>Import All Data</button></div>
+    </div>
+    <div id="result"></div>
+  </div>
+</div>
+<script src="js/github-legacy-runtime.js?v=20260918-legacy3"></script>
+<script src="js/legacy/main-backend.js?v=20260918-legacy3"></script>
+<script src="js/legacy/preceptor-calendar.js?v=20260918-legacy3"></script>
+<script src="js/legacy/patches.js?v=20260918-legacy3"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/legacy-workbook-import.js?v=20260918-legacy3"></script>
+</body>
+</html>
