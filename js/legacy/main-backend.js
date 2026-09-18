@@ -897,7 +897,10 @@ function generateSchedule(token, options) {
 
     // Exact five-day weeks are defined Sunday through Saturday. Requiring a
     // complete-week generation period prevents partial boundary weeks from
-    // silently producing fewer than five workdays.    const hasRegularEmployees=model.users.some(u=>yes_(u.Active)&&regularFiveDayRuleApplies_(u));
+    // silently producing fewer than five workdays.
+    const hasRegularEmployees = model.users.some(
+      u => yes_(u.Active) && regularFiveDayRuleApplies_(u)
+    );
     if (hasRegularEmployees && (dayIndex_(start)!==0 || dayIndex_(end)!==6)) {
       return {
         ok:false,
