@@ -597,13 +597,14 @@
 
 <div id="modalRoot"></div>
 
-<script src="js/github-legacy-runtime.js?v=20260918-paperschedule1"></script>
-<script src="js/legacy/main-backend.js?v=20260918-paperschedule1"></script>
-<script src="js/legacy/preceptor-calendar.js?v=20260918-paperschedule1"></script>
-<script src="js/legacy/csv-export.js?v=20260918-paperschedule1"></script>
-<script src="js/legacy/schedule-publish.js?v=20260918-paperschedule1"></script>
-<script src="js/legacy/delete-schedule.js?v=20260918-paperschedule1"></script>
-<script src="js/legacy/patches.js?v=20260918-paperschedule1"></script>
+<script src="js/google-pto-source.js?v=20260918-googlepto1"></script>
+<script src="js/github-legacy-runtime.js?v=20260918-googlepto1"></script>
+<script src="js/legacy/main-backend.js?v=20260918-googlepto1"></script>
+<script src="js/legacy/preceptor-calendar.js?v=20260918-googlepto1"></script>
+<script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
+<script src="js/legacy/schedule-publish.js?v=20260918-googlepto1"></script>
+<script src="js/legacy/delete-schedule.js?v=20260918-googlepto1"></script>
+<script src="js/legacy/patches.js?v=20260918-googlepto1"></script>
 <script src="js/paper-schedule.js?v=20260918-allevening5"></script>
 
 <script>
@@ -1695,7 +1696,21 @@ async function saveShiftUI(){const keys=['Shift','Meaning','Start','End','Hours'
 function renderStaffing(){if(!State.data.isAdmin)return;const req=State.data.requirements;const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];$('content').innerHTML=`<div class="section-title"><div><h3>Required daily staffing</h3><p>Change any count and save the row. The generator reads these values dynamically.</p></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Shift</th>${days.map(d=>`<th>${d.slice(0,3)}</th>`).join('')}<th>Active</th><th></th></tr></thead><tbody>${req.map(r=>`<tr><td><b>${esc(r.Shift)}</b></td>${days.map(d=>`<td><input id="req_${attr(r.Shift)}_${d}" type="number" min="0" value="${attr(r[d]||0)}"></td>`).join('')}<td><select id="req_${attr(r.Shift)}_Active"><option ${yes(r.Active)?'selected':''}>Yes</option><option ${!yes(r.Active)?'selected':''}>No</option></select></td><td><button class="btn btn-primary btn-sm" onclick="saveReqUI('${attr(r.Shift)}')">Save</button></td></tr>`).join('')}</tbody></table></div>`}
 async function saveReqUI(code){const p={Shift:code,Active:$('req_'+code+'_Active').value};['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].forEach(d=>p[d]=$('req_'+code+'_'+d).value);try{await server('saveStaffingRequirement',State.token,p);toast(code+' staffing saved','success');await refreshData(false)}catch(e){toast(e.message,'error')}}
 
-function renderRequests(){const rows=(State.data.requests||[]).slice().sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));$('content').innerHTML=`<div class="section-title"><div><h3>PTO / Date Availability</h3><p>PTO is first-come, first-served PER REQUESTED OFF DATE. Each calendar day has its own independent queue: request #1 and #2 for that day are automatically approved; request #3 and above for that same day remain Pending for administrator review.</p></div><button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add PTO / Availability</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Type / ID</th><th>Pharmacist</th><th>Date(s)</th><th>Available</th><th>Status</th><th>Comment</th><th>Updated</th><th>Review</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td><td>${esc(r.Pharmacist)}</td><td>${requestDates(r)}</td><td>${esc(r.Available)}</td><td>${statusBadge(r.Status)}${String(r['Reviewed By']||'').toUpperCase()==='SYSTEM AUTO-APPROVAL'?'<div class="small muted">Auto-approved</div>':''}</td><td>${esc(r.Comment)}</td><td>${esc(r['Updated At']||r['Submitted At'])}</td><td>${String(r.Status||'').toLowerCase()==='pending'?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button><button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button></div>`:'—'}</td></tr>`).join('')}</tbody></table></div>`}
+function googlePtoSourceBadge_(){
+  const api=window.__neoGooglePtoSource;
+  if(!api||typeof api.status!=='function')return '';
+  const s=api.status();
+
+  if(s.active&&s.source==='google'){
+    return '<span class="badge badge-ok" title="PTO is loaded directly from Google Sheets">PTO Source: Google Sheet</span>';
+  }
+  if(s.active&&s.source==='google-cache'){
+    return '<span class="badge badge-warn" title="'+attr(s.lastError||'Google source temporarily unavailable')+'">PTO Source: Google cache</span>';
+  }
+  return '<span class="badge badge-warn" title="'+attr(s.lastError||'Waiting for the Google PTO API deployment')+'">PTO Source: GitHub until Google API is deployed</span>';
+}
+
+function renderRequests(){const rows=(State.data.requests||[]).slice().sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));$('content').innerHTML=`<div class="section-title"><div><h3>PTO / Date Availability</h3><p>PTO is first-come, first-served PER REQUESTED OFF DATE. Each calendar day has its own independent queue: request #1 and #2 for that day are automatically approved; request #3 and above for that same day remain Pending for administrator review.</p><div style="margin-top:6px">${googlePtoSourceBadge_()}</div></div><button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add PTO / Availability</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Type / ID</th><th>Pharmacist</th><th>Date(s)</th><th>Available</th><th>Status</th><th>Comment</th><th>Updated</th><th>Review</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td><td>${esc(r.Pharmacist)}</td><td>${requestDates(r)}</td><td>${esc(r.Available)}</td><td>${statusBadge(r.Status)}${String(r['Reviewed By']||'').toUpperCase()==='SYSTEM AUTO-APPROVAL'?'<div class="small muted">Auto-approved</div>':''}</td><td>${esc(r.Comment)}</td><td>${esc(r['Updated At']||r['Submitted At'])}</td><td>${String(r.Status||'').toLowerCase()==='pending'?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button><button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button></div>`:'—'}</td></tr>`).join('')}</tbody></table></div>`}
 
 function openEmployeeRequestModal(){const body=`<div class="form-grid"><div class="field"><label>Pharmacist</label><select id="arUser" class="control">${userOptions().map(o=>`<option value="${attr(o.value)}">${esc(o.label)}</option>`).join('')}</select></div><div class="field"><label>Record Type</label><select id="arType" class="control" onchange="updateRequestStatusUI()"><option>PTO</option><option>UNAVAILABLE</option><option>AVAILABILITY</option><option>PREFERRED</option></select></div><div class="field"><label>Single Date (optional)</label><input id="arDate" type="date" class="control"></div><div class="field"><label>Start Date</label><input id="arStart" type="date" class="control"></div><div class="field"><label>End Date</label><input id="arEnd" type="date" class="control"></div><div class="field"><label>Available</label><select id="arAvail" class="control"><option value=""></option><option>Yes</option><option>No</option></select></div><div class="field" id="arStatusWrap"><label>Status</label><select id="arStatus" class="control"><option>Approved</option><option>Pending</option><option>Rejected</option></select></div><div class="field span-2" id="arPtoRule"><div class="small muted" style="padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#f8fafc"><b>PTO approval is automatic.</b> First 2 requests for each covered date are approved. The 3rd request and above are saved as Pending for administrator review.</div></div><div class="field span-2"><label>Comment</label><textarea id="arComment" class="control"></textarea></div></div>`;openModal('Add Pharmacist PTO / Availability',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save',cls:'btn-primary',action:'saveEmployeeRequestUI()'}]);setTimeout(updateRequestStatusUI,0)}
 
