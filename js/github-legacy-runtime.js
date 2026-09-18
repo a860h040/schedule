@@ -27,13 +27,37 @@
   function apiUrl(c,path){return 'https://api.github.com/repos/'+encodeURIComponent(c.owner)+'/'+encodeURIComponent(c.repo)+'/contents/'+path.split('/').map(encodeURIComponent).join('/');}
   function headers(c){return {'Accept':'application/vnd.github+json','Authorization':'Bearer '+c.token,'X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};}
   async function gh(url,opt,c){
-    let res;\n    try{\n      res=await fetch(url,{...(opt||{}),cache:'no-store',headers:{...headers(c),...((opt||{}).headers||{})}});\n    }catch(fetchErr){\n      throw new Error('Could not connect to GitHub. Check your internet connection and the saved GitHub token, then try Setup This Device again.');\n    }
-    const txt=await res.text();let body=null;try{body=txt?JSON.parse(txt):null}catch{body=txt}
+    let res;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),20000);
+    try{
+      res=await fetch(url,{
+        ...(opt||{}),
+        cache:'no-store',
+        signal:controller.signal,
+        headers:{...headers(c),...((opt||{}).headers||{})}
+      });
+    }catch(fetchErr){
+      if(fetchErr&&fetchErr.name==='AbortError'){
+        throw new Error('GitHub took too long to respond. Please try again.');
+      }
+      throw new Error('Could not connect to GitHub. Check your internet connection and the saved GitHub token, then try Setup This Device again.');
+    }finally{
+      clearTimeout(timer);
+    }
+
+    const txt=await res.text();
+    let body=null;
+    try{ body=txt?JSON.parse(txt):null; }catch{ body=txt; }
+
     if(!res.ok){
       let msg=body&&body.message?body.message:'GitHub request failed ('+res.status+')';
       if(res.status===401)msg='GitHub connection failed. The saved token is missing, expired, or invalid. Open Setup This Device and reconnect.';
       if(res.status===403)msg='GitHub denied access. Confirm the fine-grained token can read and write the neochrono-data repository.';
-      const e=new Error(msg);e.status=res.status;e.body=body;throw e;
+      const e=new Error(msg);
+      e.status=res.status;
+      e.body=body;
+      throw e;
     }
     return body;
   }
@@ -120,9 +144,16 @@
     rawHeaders(){return (this.matrix()[0]||[]).map(x=>String(x??'').trim());}
     valueAt(r,c){const m=this.matrix();return m[r]?.[c]??'';}
     setValueAt(r,c,v){
-      const m=this.matrix();while(m.length<=r)m.push([]);while(m[r].length<=c)m[r].push('');
+      const m=this.matrix();
+      while(m.length<=r)m.push([]);
+      while(m[r].length<=c)m[r].push('');
+      const old=m[r][c];
+      const oldCmp=old instanceof Date?old.toISOString():JSON.stringify(old??'');
+      const newCmp=v instanceof Date?v.toISOString():JSON.stringify(v??'');
+      if(oldCmp===newCmp)return;
       m[r][c]=v;
-      if(this.local)this.persistLocal(m);else this.book.dirty=true;
+      if(this.local)this.persistLocal(m);
+      else this.book.dirty=true;
     }
     getLastRow(){
       const m=this.matrix();for(let i=m.length-1;i>=0;i--)if((m[i]||[]).some(v=>!isBlank(v)))return i+1;return 0;
