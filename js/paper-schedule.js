@@ -131,6 +131,74 @@
     }).join('');
   }
 
+
+  function paperShiftCoverageSummary_(month){
+    var start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+    var end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+
+    var rows=(State.data.schedule||[]).filter(function(r){
+      var dk=String(r.Date||'').slice(0,10);
+      var status=String(r.Status||'').toUpperCase();
+      return dk>=start && dk<=end && status!=='CANCELLED' && String(r.Shift||'').trim();
+    });
+
+    var byShift={};
+    rows.forEach(function(r){
+      var code=String(r.Shift||'').trim().toUpperCase();
+      if(!byShift[code])byShift[code]={shift:code,total:0,filled:0,left:0};
+      byShift[code].total++;
+
+      var assigned=String(r['Assigned Pharmacist']||r.Username||'').trim();
+      var status=String(r.Status||'').toUpperCase();
+      var isFilled=status!=='UNFILLED' && assigned && assigned.toUpperCase()!=='UNFILLED';
+      if(isFilled)byShift[code].filled++;
+    });
+
+    Object.keys(byShift).forEach(function(code){
+      byShift[code].left=Math.max(0,byShift[code].total-byShift[code].filled);
+    });
+
+    var shiftMeta={};
+    (State.data.shifts||[]).forEach(function(s,i){
+      var code=String(s.Shift||'').trim().toUpperCase();
+      if(!code)return;
+      shiftMeta[code]={
+        priority:num(s.Priority,50),
+        start:String(s.Start||''),
+        index:i
+      };
+    });
+
+    return Object.values(byShift).sort(function(a,b){
+      var A=shiftMeta[a.shift]||{priority:50,start:'',index:9999};
+      var B=shiftMeta[b.shift]||{priority:50,start:'',index:9999};
+      return A.priority-B.priority ||
+        A.start.localeCompare(B.start) ||
+        A.index-B.index ||
+        a.shift.localeCompare(b.shift);
+    });
+  }
+
+  function paperShiftCoverageBoxes_(month){
+    var summary=paperShiftCoverageSummary_(month);
+    if(!summary.length){
+      return '<div class="paper-coverage-empty">No generated shift positions for this month.</div>';
+    }
+
+    return summary.map(function(x){
+      var pct=x.total?Math.round((x.filled/x.total)*100):0;
+      var complete=x.left===0;
+      return '<div class="paper-coverage-box '+(complete?'complete':'needs-coverage')+'">'+
+        '<div class="paper-coverage-shift">'+esc(x.shift)+'</div>'+
+        '<div class="paper-coverage-count"><b>'+x.filled+'</b> of <b>'+x.total+'</b> filled</div>'+
+        '<div class="paper-coverage-left">'+
+          (complete?'Fully covered':('<b>'+x.left+'</b> left'))+
+        '</div>'+
+        '<div class="paper-coverage-bar"><span style="width:'+pct+'%"></span></div>'+
+      '</div>';
+    }).join('');
+  }
+
   window.renderPaperSchedule=function(){
     var m=State.month;
     var d=State.data;
@@ -152,6 +220,12 @@
           '<button class="btn btn-primary btn-sm" onclick="printPaperSchedule_()">Print / Save PDF</button>'+
           (d.isAdmin?'<button class="btn btn-primary btn-sm" onclick="openAssignmentModal(null)">+ Manual assignment</button>':'')+
         '</div>'+
+      '</div>';
+
+    html+=
+      '<div class="paper-coverage-section">'+
+        '<div class="paper-coverage-section-title">Shift Coverage</div>'+
+        '<div class="paper-coverage-grid">'+paperShiftCoverageBoxes_(m)+'</div>'+
       '</div>';
 
     html+=
