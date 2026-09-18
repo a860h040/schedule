@@ -21,7 +21,7 @@ async function boot(){
   $('loginForm').addEventListener('submit',handleLogin);$('logoutBtn').onclick=()=>{logout();location.reload()};$('refreshBtn').onclick=()=>reload().catch(e=>toast(e.message,'error'));$('changePasswordBtn').onclick=openChangePassword;
   document.querySelectorAll('#nav button[data-page]').forEach(b=>b.onclick=()=>renderPage(b.dataset.page));
   const s=currentSession();if(s&&hasGithubConfig()){State.session=s;try{await loadApp();}catch(e){$('loginError').textContent=e.message;}}
-  else if(!hasGithubConfig())$('loginError').textContent='This device has not been provisioned for the NeoChrono data repository. Ask an administrator to provision it.';
+  else if(!hasGithubConfig())$('loginError').innerHTML='This device is connected to <b>a860h040/neochrono-data</b>, but this browser still needs its one-time secure token. <a href="provision.html">Setup this device</a>.';
 }
 async function handleLogin(e){e.preventDefault();$('loginError').textContent='';$('loginButton').disabled=true;try{State.session=await login($('loginUsername').value,$('loginPassword').value);await loadApp();if(State.session.mustChangePassword)openChangePassword();}catch(err){$('loginError').textContent=err.message;}finally{$('loginButton').disabled=false;}}
 async function loadApp(){const {db}=await readDatabase();State.db=db;$('loginView').classList.add('hidden');$('app').classList.remove('hidden');$('sessionName').textContent=State.session.name;$('sessionRole').textContent=State.session.isAdmin?'Administrator':'Pharmacist';document.querySelectorAll('.admin-only').forEach(x=>x.classList.toggle('hidden',!State.session.isAdmin));renderPage('dashboard');}
