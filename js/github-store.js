@@ -1,6 +1,8 @@
 import { normalizeDatabase } from './schema.js';
 
 const CONFIG_KEY='neochronoGithubConfigV1';
+const DEFAULT_OWNER='a860h040';
+const DEFAULT_REPO='neochrono-data';
 const DEFAULT_DB_PATH='data/database.json';
 const DEFAULT_PUBLISHED_PATH='data/published-schedule.json';
 
@@ -16,8 +18,8 @@ export function getGithubConfig(){
 }
 export function saveGithubConfig(cfg){
   const clean={
-    owner:String(cfg.owner||'').trim(),
-    repo:String(cfg.repo||'').trim(),
+    owner:String(cfg.owner||DEFAULT_OWNER).trim()||DEFAULT_OWNER,
+    repo:String(cfg.repo||DEFAULT_REPO).trim()||DEFAULT_REPO,
     branch:String(cfg.branch||'main').trim()||'main',
     token:String(cfg.token||'').trim(),
     dbPath:String(cfg.dbPath||DEFAULT_DB_PATH).trim()||DEFAULT_DB_PATH,
