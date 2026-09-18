@@ -596,13 +596,13 @@
 
 <div id="modalRoot"></div>
 
-<script src="js/github-legacy-runtime.js?v=20260918-legacy10"></script>
-<script src="js/legacy/main-backend.js?v=20260918-legacy10"></script>
-<script src="js/legacy/preceptor-calendar.js?v=20260918-legacy10"></script>
-<script src="js/legacy/csv-export.js?v=20260918-legacy10"></script>
-<script src="js/legacy/schedule-publish.js?v=20260918-legacy10"></script>
-<script src="js/legacy/delete-schedule.js?v=20260918-legacy10"></script>
-<script src="js/legacy/patches.js?v=20260918-legacy10"></script>
+<script src="js/github-legacy-runtime.js?v=20260918-skillpriority1"></script>
+<script src="js/legacy/main-backend.js?v=20260918-skillpriority1"></script>
+<script src="js/legacy/preceptor-calendar.js?v=20260918-skillpriority1"></script>
+<script src="js/legacy/csv-export.js?v=20260918-skillpriority1"></script>
+<script src="js/legacy/schedule-publish.js?v=20260918-skillpriority1"></script>
+<script src="js/legacy/delete-schedule.js?v=20260918-skillpriority1"></script>
+<script src="js/legacy/patches.js?v=20260918-skillpriority1"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -1349,6 +1349,17 @@ function skillPreferredCodeForUser_(u){
   return rows.length?String(rows[0].Skill||'').trim().toUpperCase():'';
 }
 
+function skillPriorityForUserCodeUI_(u,code){
+  const eid=String(u?.['Employee ID']||''), un=String(u?.Username||''), target=String(code||'').trim().toUpperCase();
+  const row=(State.data.skills||[]).find(r=>{
+    if(!yes(r.Active)||String(r.Skill||'').trim().toUpperCase()!==target)return false;
+    const reid=String(r['Employee ID']||''), run=String(r.Username||'');
+    return (eid&&reid===eid)||(un&&run===un);
+  });
+  const p=Number(row?.Priority);
+  return Number.isFinite(p)&&p>0?p:9999;
+}
+
 async function ensureSkillPreferenceSystemUI_(){
   if(State.skillPreferenceSystemChecked)return;
   State.skillPreferenceSystemChecked=true;
@@ -1375,39 +1386,61 @@ function openSkillProfileManager_(employeeId){
     return (eid&&reid===eid)||(un&&run===un);
   });
 
-  const codes=[...new Set(rows.map(r=>String(r.Skill||'').trim().toUpperCase()).filter(Boolean))].sort();
   const preferred=skillPreferredCodeForUser_(u);
+  const codes=[...new Set(rows.map(r=>String(r.Skill||'').trim().toUpperCase()).filter(Boolean))];
+  const storedPriority={};
+  rows.forEach(r=>{
+    const code=String(r.Skill||'').trim().toUpperCase(),p=Number(r.Priority);
+    if(code&&Number.isFinite(p)&&p>0)storedPriority[code]=p;
+  });
+
+  codes.sort((a,b)=>{
+    const ap=storedPriority[a]||9999,bp=storedPriority[b]||9999;
+    return ap-bp||a.localeCompare(b);
+  });
+
+  const priorities={};
+  codes.forEach((code,i)=>priorities[code]=i+1);
 
   State.skillProfileDraft={
     employeeId:eid,
     pharmacistName:u['Pharmacist Name']||'',
     skills:codes.slice(),
-    preferred:preferred
+    preferred:preferred,
+    priorities:priorities
   };
 
   renderSkillProfileManagerModal_();
 }
-
 function renderSkillProfileManagerModal_(){
   const d=State.skillProfileDraft;
   if(!d)return;
 
-  const rows=d.skills.map(code=>{
+  d.priorities=d.priorities||{};
+  d.skills.sort((a,b)=>(Number(d.priorities[a])||9999)-(Number(d.priorities[b])||9999)||String(a).localeCompare(String(b)));
+  d.skills.forEach((code,i)=>d.priorities[code]=i+1);
+
+  const rows=d.skills.map((code,idx)=>{
     const pref=String(d.preferred||'')===String(code);
+    const priority=idx+1;
     return `<div class="skill-profile-row ${pref?'preferred':''}">
       <input type="radio" name="skillPreferredRadio" ${pref?'checked':''} onchange="setDraftPreferredSkill_('${attr(code)}')">
-      <div>
-        <div class="skill-profile-code">${esc(code)} ${pref?'<span class="badge badge-ok">Preferred / Home Unit</span>':''}</div>
-        <div class="skill-profile-sub">${pref?'Used by Preceptor Calendar when mode is ON':'Normal scheduling skill'}</div>
+      <div style="min-width:0;flex:1">
+        <div class="skill-profile-code">${esc(code)} ${pref?'<span class="badge badge-ok">Preferred / Home Unit</span>':''} <span class="badge">Priority ${priority}</span></div>
+        <div class="skill-profile-sub">${pref?'Home unit when Preceptor Calendar is ON. ':''}Backup coverage priority: ${priority===1?'first choice':priority===2?'second choice':priority===3?'third choice':'choice #'+priority} when another unit needs coverage.</div>
       </div>
-      <button type="button" class="btn btn-danger btn-sm" onclick="removeDraftSkill_('${attr(code)}')">Remove</button>
+      <div style="display:flex;gap:5px;align-items:center">
+        <button type="button" class="btn btn-secondary btn-sm" ${idx===0?'disabled':''} onclick="moveDraftSkillPriority_('${attr(code)}',-1)" title="Move to higher priority">↑</button>
+        <button type="button" class="btn btn-secondary btn-sm" ${idx===d.skills.length-1?'disabled':''} onclick="moveDraftSkillPriority_('${attr(code)}',1)" title="Move to lower priority">↓</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="removeDraftSkill_('${attr(code)}')">Remove</button>
+      </div>
     </div>`;
   }).join('');
 
   const body=`<div class="alert alert-ok mb12">
     <b>${esc(d.pharmacistName)}</b><br>
-    Manage this pharmacist's normal scheduling skills and choose exactly one Preferred / Home Unit.
-    When Preceptor Calendar is ON, Code11 keeps the pharmacist in this preferred unit.
+    Manage normal scheduling skills, Preferred / Home Unit, and backup coverage priority.
+    <b>Priority 1 is the highest.</b> If multiple units need coverage on the same day, the algorithm tries this pharmacist's Priority 1 skill before Priority 2, then Priority 3, while still enforcing every hard scheduling rule.
   </div>
   <div class="field">
     <label>Preferred / Home Unit</label>
@@ -1416,7 +1449,7 @@ function renderSkillProfileManagerModal_(){
       ${d.skills.map(code=>`<option value="${attr(code)}" ${String(d.preferred)===String(code)?'selected':''}>${esc(code)}</option>`).join('')}
     </select>
   </div>
-  <div class="small muted">Preferred / Home Unit must also be one of the pharmacist's active normal skills.</div>
+  <div class="small muted" style="margin-bottom:10px">Preferred / Home Unit and Skill Priority are separate. Preferred identifies the pharmacist's usual unit. Priority controls which qualified unit they should cover first when another pharmacist is unavailable or receives an algorithm-generated OFF day.</div>
   <div class="skill-profile-list">${rows||'<div class="alert alert-warn">No normal skills assigned yet.</div>'}</div>
   <div class="skill-profile-add">
     <input id="skillProfileNewCode" class="control" placeholder="Add skill code, e.g. IM" onkeydown="if(event.key==='Enter'){event.preventDefault();addDraftSkill_()}">
@@ -1424,7 +1457,7 @@ function renderSkillProfileManagerModal_(){
   </div>`;
 
   openModal(
-    'Manage Skills — '+d.pharmacistName,
+    'Manage Skills & Priority — '+d.pharmacistName,
     body,
     [
       {label:'Cancel',cls:'btn-secondary',action:'closeModal()'},
@@ -1432,41 +1465,78 @@ function renderSkillProfileManagerModal_(){
     ]
   );
 }
+function normalizeDraftSkillPriorities_(){
+  const d=State.skillProfileDraft;
+  if(!d)return;
+  d.priorities=d.priorities||{};
+  d.skills.sort((a,b)=>(Number(d.priorities[a])||9999)-(Number(d.priorities[b])||9999)||String(a).localeCompare(String(b)));
+  d.skills.forEach((code,i)=>d.priorities[code]=i+1);
+}
 
 function setDraftPreferredSkill_(code){
   if(!State.skillProfileDraft)return;
+  const d=State.skillProfileDraft;
   const c=String(code||'').trim().toUpperCase();
-  State.skillProfileDraft.preferred=c;
-  if(c&&!State.skillProfileDraft.skills.includes(c))State.skillProfileDraft.skills.push(c);
+  d.preferred=c;
+  d.priorities=d.priorities||{};
+  if(c&&!d.skills.includes(c)){
+    d.skills.push(c);
+    d.priorities[c]=d.skills.length;
+  }
+  normalizeDraftSkillPriorities_();
+  renderSkillProfileManagerModal_();
+}
+
+function moveDraftSkillPriority_(code,direction){
+  const d=State.skillProfileDraft;
+  if(!d)return;
+  normalizeDraftSkillPriorities_();
+  const c=String(code||'').trim().toUpperCase();
+  const idx=d.skills.indexOf(c);
+  const next=idx+Number(direction||0);
+  if(idx<0||next<0||next>=d.skills.length)return;
+  const temp=d.skills[idx];
+  d.skills[idx]=d.skills[next];
+  d.skills[next]=temp;
+  d.skills.forEach((skill,i)=>d.priorities[skill]=i+1);
   renderSkillProfileManagerModal_();
 }
 
 function addDraftSkill_(){
-  if(!State.skillProfileDraft)return;
+  const d=State.skillProfileDraft;
+  if(!d)return;
   const el=$('skillProfileNewCode');
   const code=String(el?.value||'').trim().toUpperCase();
   if(!code)return;
-  if(!State.skillProfileDraft.skills.includes(code))State.skillProfileDraft.skills.push(code);
-  State.skillProfileDraft.skills.sort();
+  d.priorities=d.priorities||{};
+  if(!d.skills.includes(code)){
+    d.skills.push(code);
+    d.priorities[code]=d.skills.length;
+  }
+  normalizeDraftSkillPriorities_();
   renderSkillProfileManagerModal_();
 }
 
 function removeDraftSkill_(code){
-  if(!State.skillProfileDraft)return;
+  const d=State.skillProfileDraft;
+  if(!d)return;
   const c=String(code||'').trim().toUpperCase();
-  State.skillProfileDraft.skills=State.skillProfileDraft.skills.filter(x=>String(x)!==c);
-  if(String(State.skillProfileDraft.preferred||'')===c)State.skillProfileDraft.preferred='';
+  d.skills=d.skills.filter(x=>String(x)!==c);
+  if(d.priorities)delete d.priorities[c];
+  if(String(d.preferred||'')===c)d.preferred='';
+  normalizeDraftSkillPriorities_();
   renderSkillProfileManagerModal_();
 }
 
 async function saveSkillProfileUI_(){
   const d=State.skillProfileDraft;
   if(!d)return;
+  normalizeDraftSkillPriorities_();
   try{
-    await server('saveSkillProfile',State.token,d.employeeId,d.preferred,d.skills);
+    await server('saveSkillProfile',State.token,d.employeeId,d.preferred,d.skills,d.priorities);
     State.skillProfileDraft=null;
     closeModal();
-    toast('Skills and preferred unit saved','success');
+    toast('Skills, priorities, and preferred unit saved','success');
     await refreshData(false);
     renderSkills();
   }catch(e){toast(e.message,'error')}
@@ -1498,11 +1568,15 @@ function renderSkills(){
   const matrixHead=skillCodes.map(code=>`<th title="${attr(code)}">${esc(code)}</th>`).join('');
   const matrixRows=pharmacists.map(u=>{
     const uk=String(u.Username==null?'':u.Username), normal=new Set(byUser[uk]||[]), cover=new Set(String(u['Off-Day Coverage Skills']||'').split(/[,;|/\n]+/).map(x=>x.trim().toUpperCase()).filter(Boolean));
-    return `<tr><td><div class="skill-matrix-name">${esc(u['Pharmacist Name'])}</div><div class="skill-matrix-sub">${esc(u['Schedule Type']||'Regular')} · ${normal.size} normal skill${normal.size===1?'':'s'}</div></td>${skillCodes.map(code=>`<td><div class="skill-cell ${normal.has(code)?'on':(!normal.has(code)&&cover.has(code)?'coveronly':'')}" title="${attr(normal.has(code)?'Normal scheduling skill':cover.has(code)?'OFF-day coverage only':'Not assigned')}">${normal.has(code)?'✓':cover.has(code)?'○':'·'}</div></td>`).join('')}</tr>`;
+    return `<tr><td><div class="skill-matrix-name">${esc(u['Pharmacist Name'])}</div><div class="skill-matrix-sub">${esc(u['Schedule Type']||'Regular')} · ${normal.size} normal skill${normal.size===1?'':'s'}</div></td>${skillCodes.map(code=>{
+      const p=normal.has(code)?skillPriorityForUserCodeUI_(u,code):9999;
+      const normalLabel=normal.has(code)?`Normal scheduling skill · Priority ${p<9999?p:'not set'}`:cover.has(code)?'OFF-day coverage only':'Not assigned';
+      return `<td><div class="skill-cell ${normal.has(code)?'on':(!normal.has(code)&&cover.has(code)?'coveronly':'')}" title="${attr(normalLabel)}">${normal.has(code)?(p<9999?'P'+p:'✓'):cover.has(code)?'○':'·'}</div></td>`;
+    }).join('')}</tr>`;
   }).join('');
   const peopleCards=pharmacists.map(u=>{
     const uk=String(u.Username==null?'':u.Username),
-      codes=(byUser[uk]||[]).slice().sort(),
+      codes=(byUser[uk]||[]).slice().sort((a,b)=>skillPriorityForUserCodeUI_(u,a)-skillPriorityForUserCodeUI_(u,b)||a.localeCompare(b)),
       cover=String(u['Off-Day Coverage Skills']||'').split(/[,;|/\n]+/).map(x=>x.trim().toUpperCase()).filter(Boolean),
       preferred=skillPreferredCodeForUser_(u);
 
@@ -1524,23 +1598,23 @@ function renderSkills(){
       </div>
 
       <div class="skills-chips">
-        ${codes.length?codes.map(code=>`<span class="skill-chip">${esc(code)}${code===preferred?' ★':''}</span>`).join(''):'<span class="skills-none">No normal scheduling skills assigned</span>'}
+        ${codes.length?codes.map(code=>{const p=skillPriorityForUserCodeUI_(u,code);return `<span class="skill-chip">${p<9999?`P${p} · `:''}${esc(code)}${code===preferred?' ★':''}</span>`}).join(''):'<span class="skills-none">No normal scheduling skills assigned</span>'}
       </div>
 
       ${cover.length?`<div class="small muted" style="margin:10px 0 6px;font-weight:800">OFF-DAY COVERAGE ONLY</div><div class="skills-chips">${cover.map(code=>`<span class="skill-chip cover">${esc(code)}</span>`).join('')}</div>`:''}
 
       <div style="margin-top:12px">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openSkillProfileManager_('${attr(u['Employee ID'])}')">Edit skills & preferred unit</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openSkillProfileManager_('${attr(u['Employee ID'])}')">Edit skills, priority & preferred unit</button>
       </div>
     </div>`;
   }).join('');
   $('content').innerHTML=`<div class="skills-shell">
     <div class="skills-hero"><div class="skills-hero-main"><div class="skills-eyebrow">Clinical capability map</div><h3>Skills Coverage Intelligence</h3><p>See where your pharmacy has strong cross-coverage, where a single pharmacist creates operational risk, and exactly who is qualified for each assignment. Normal scheduling skills and OFF-day-only coverage are intentionally shown as separate capabilities.</p><div class="skills-legend"><span><i class="skills-dot critical"></i> Single coverage</span><span><i class="skills-dot thin"></i> Two-person coverage</span><span><i class="skills-dot healthy"></i> Three+ qualified</span><span>✓ Normal skill</span><span>○ OFF-day coverage only</span></div></div>
-      <div class="skills-add-card"><h4>Quick add normal scheduling skill</h4><p>This skill can be used by the normal scheduler. OFF-day-only coverage stays in the pharmacist profile.</p><div class="skills-add-grid"><div class="field"><label>Pharmacist</label><select id="skillUser" class="control">${userOptions().map(o=>`<option value="${attr(o.value)}">${esc(o.label)}</option>`).join('')}</select></div><div class="field"><label>Skill code</label><input id="skillCode" class="control" placeholder="CC1" onkeydown="if(event.key==='Enter')addSkillUI()"></div><button class="btn btn-primary" onclick="addSkillUI()">+ Add skill</button></div></div></div>
+      <div class="skills-add-card"><h4>Quick add normal scheduling skill</h4><p>This skill can be used by the normal scheduler. New skills are added at the lowest priority; click the pharmacist profile to reorder priorities. OFF-day-only coverage stays in the pharmacist profile.</p><div class="skills-add-grid"><div class="field"><label>Pharmacist</label><select id="skillUser" class="control">${userOptions().map(o=>`<option value="${attr(o.value)}">${esc(o.label)}</option>`).join('')}</select></div><div class="field"><label>Skill code</label><input id="skillCode" class="control" placeholder="CC1" onkeydown="if(event.key==='Enter')addSkillUI()"></div><button class="btn btn-primary" onclick="addSkillUI()">+ Add skill</button></div></div></div>
     <div class="skills-kpis"><div class="skills-kpi"><div class="skills-kpi-icon">Σ</div><div><strong>${active.length}</strong><span>Active assignments</span></div></div><div class="skills-kpi"><div class="skills-kpi-icon blue">◆</div><div><strong>${skillCodes.length}</strong><span>Unique skill codes</span></div></div><div class="skills-kpi"><div class="skills-kpi-icon ${critical?'danger':''}">!</div><div><strong>${critical}</strong><span>Single-owner skills</span></div></div><div class="skills-kpi"><div class="skills-kpi-icon ${thin?'warn':''}">↔</div><div><strong>${withSkills}/${pharmacists.length}</strong><span>Pharmacists mapped</span></div></div></div>
     <section class="skills-section"><div class="skills-section-head"><div><h4>Coverage by skill</h4><p>Prioritize red and amber cards when planning cross-training or backup coverage.</p></div><div class="skills-filter-tabs"><button class="${filter==='ALL'?'active':''}" onclick="setSkillVisualFilter('ALL')">All ${skillCodes.length}</button><button class="${filter==='CRITICAL'?'active':''}" onclick="setSkillVisualFilter('CRITICAL')">Single ${critical}</button><button class="${filter==='THIN'?'active':''}" onclick="setSkillVisualFilter('THIN')">Thin ${thin}</button><button class="${filter==='HEALTHY'?'active':''}" onclick="setSkillVisualFilter('HEALTHY')">Healthy ${skillCodes.filter(k=>bySkill[k].length>=3).length}</button></div></div><div class="skills-coverage-grid">${coverageCards||'<div class="fairness-empty" style="grid-column:1/-1"><b>No skills in this view</b>Change the coverage filter or add a skill.</div>'}</div></section>
-    <section class="skills-section"><div class="skills-section-head"><div><h4>Capability matrix</h4><p>A fast visual map of every active pharmacist against every normal skill code.</p></div><span class="badge badge-ok">${pharmacists.length} active pharmacists</span></div><div class="skills-matrix-wrap"><table class="skills-matrix"><thead><tr><th>Pharmacist</th>${matrixHead}</tr></thead><tbody>${matrixRows}</tbody></table></div><div class="skills-note"><div class="skills-note-icon">i</div><div><b>Normal skills and OFF-day coverage are different.</b><p>A green check means the scheduler may use that pharmacist for the skill on ordinary days. A blue circle means the skill exists only in <b>Users → Off-Day Coverage Skills</b> and may be used only for generated OFF-day coverage.</p></div></div></section>
-    <section class="skills-section"><div class="skills-section-head"><div><h4>Pharmacist skill profiles</h4><p>Click any pharmacist to manage the Preferred / Home Unit, add skills, or remove skills in one place.</p></div></div><div class="skills-people-grid">${peopleCards||'<div class="fairness-empty" style="grid-column:1/-1"><b>No active pharmacists</b>No pharmacist profiles are available.</div>'}</div></section>
+    <section class="skills-section"><div class="skills-section-head"><div><h4>Capability matrix</h4><p>A fast visual map of every active pharmacist against every normal skill code.</p></div><span class="badge badge-ok">${pharmacists.length} active pharmacists</span></div><div class="skills-matrix-wrap"><table class="skills-matrix"><thead><tr><th>Pharmacist</th>${matrixHead}</tr></thead><tbody>${matrixRows}</tbody></table></div><div class="skills-note"><div class="skills-note-icon">i</div><div><b>Normal skills and OFF-day coverage are different.</b><p>A green P1/P2/P3 cell is a normal scheduling skill and shows that pharmacist's manager-set priority for backup coverage. A blue circle means the skill exists only in <b>Users → Off-Day Coverage Skills</b> and may be used only for generated OFF-day coverage.</p></div></div></section>
+    <section class="skills-section"><div class="skills-section-head"><div><h4>Pharmacist skill profiles</h4><p>Click any pharmacist to manage the Preferred / Home Unit, reorder skill priority, add skills, or remove skills in one place.</p></div></div><div class="skills-people-grid">${peopleCards||'<div class="fairness-empty" style="grid-column:1/-1"><b>No active pharmacists</b>No pharmacist profiles are available.</div>'}</div></section>
   </div>`;
   ensureSkillPreferenceSystemUI_();
 }
