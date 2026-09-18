@@ -11,7 +11,8 @@
   const WORKBOOK_PATH='data/workbook.json';
   const PUBLISHED_PATH='data/published-schedule.json';
   const SESSION_SHEET_KEY='neochronoLegacySessionsV1';
-  let cache={data:null,sha:null,loadedAt:0};\n  let invokeQueue=Promise.resolve();
+  let cache={data:null,sha:null,loadedAt:0};
+  let invokeQueue=Promise.resolve();
 
   const enc=s=>new TextEncoder().encode(String(s));
   function b64encodeUtf8(s){let b='';for(const x of enc(s))b+=String.fromCharCode(x);return btoa(b);}
