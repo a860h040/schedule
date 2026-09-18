@@ -962,14 +962,27 @@ function generateSchedule(token, options) {
 
     const remainingSlots=generatedSlots.filter(s=>!reservedSlotKeys.has(s.slotKey));
 
-    // Scarcity-first ordering with deterministic secondary priorities.
+    // Manager skill-priority ordering.
+    // Preferred/Home Unit owners who are available stay first. If a home-unit
+    // owner is unavailable, backup pharmacists are considered according to the
+    // manager's Employee Skills Priority (1 first, then 2, 3...). Scarcity and
+    // the original deterministic shift priorities remain tie-breakers.
     remainingSlots.forEach(s => {
+      s.skillPriorityRank =
+        typeof skillPrioritySlotRank_ === 'function'
+          ? skillPrioritySlotRank_(s,model,state)
+          : 99999;
       s.scarcity = countStaticCandidates_(s, model);
       s.categoryRank = shiftCategoryRank_(s.shift);
     });
     remainingSlots.sort((a,b) =>
-      a.scarcity-b.scarcity || a.categoryRank-b.categoryRank || num_(a.shift.Priority,50)-num_(b.shift.Priority,50) ||
-      a.dateKey.localeCompare(b.dateKey) || a.shiftCode.localeCompare(b.shiftCode) || a.slot-b.slot
+      a.skillPriorityRank-b.skillPriorityRank ||
+      a.scarcity-b.scarcity ||
+      a.categoryRank-b.categoryRank ||
+      num_(a.shift.Priority,50)-num_(b.shift.Priority,50) ||
+      a.dateKey.localeCompare(b.dateKey) ||
+      a.shiftCode.localeCompare(b.shiftCode) ||
+      a.slot-b.slot
     );
 
     for (let i=0;i<remainingSlots.length;i++) {
