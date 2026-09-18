@@ -156,31 +156,14 @@
 
     html+=
       '<div class="paper-filter-card">'+
-        '<div class="section-title" style="margin:0 0 8px">'+
-          '<div><h3 style="margin:0">Schedule Filters</h3>'+
-          '<p>Select up to six pharmacists, or leave all six blank to display the complete printed schedule.</p></div>'+
-          (selectedCalendarEmployeeKeys().length?
-            '<span class="badge badge-ok">'+selectedCalendarEmployeeKeys().length+' selected</span>':'')+
-        '</div>'+
-        '<div class="toolbar">'+employeeCompareFilters(filt.employees)+'</div>'+
-        '<div class="toolbar mt12">'+
-          '<label class="control" style="display:flex;align-items:center;gap:8px;width:auto;min-height:40px;padding:8px 12px;cursor:pointer">'+
-            '<input id="showUnfilledWithSelected" type="checkbox" '+(filt.showUnfilledWithSelected?'checked':'')+
-            ' onchange="togglePaperShowUnfilled_(this.checked)">'+
-            '<span><b>Show unfilled shifts with selected pharmacists</b></span>'+
-          '</label>'+
-          selectFilter('status','Status',[{value:'FILLED',label:'Filled'},{value:'UNFILLED',label:'Unfilled'}],filt.status)+
-          selectFilter('shift','Shift',optionList(d.shifts,'Shift'),filt.shift)+
-          selectFilter('type','Shift Type',['Day','Evening','Night','Training'],filt.type)+
-          selectFilter('skill','Skill',optionList(d.shifts,'Skill'),filt.skill)+
+        '<div class="paper-filter-row">'+
           selectFilter('weekendGroup','Weekend Group',['A','B','C'],filt.weekendGroup)+
           selectFilter('resident','Resident',['Yes','No'],filt.resident)+
           selectFilter('preceptor','Preceptor',['Yes','No'],filt.preceptor)+
-          '<button class="btn btn-ghost btn-sm" onclick="clearPaperScheduleFilters_()">Clear filters</button>'+
+          '<button class="btn btn-ghost btn-sm paper-clear-btn" onclick="clearPaperScheduleFilters_()">Clear filters</button>'+
         '</div>'+
       '</div>';
 
-    html+=employeeComparisonSummary(m);
 
     html+=
       '<div class="paper-legend">'+
@@ -192,7 +175,10 @@
         '<span class="key"><span class="swatch" style="background:#ffe6e6"></span>Unfilled</span>'+
       '</div>';
 
-    html+='<div id="paperPrintArea" class="paper-shell"><table class="paper-table"><thead>';
+    html+='<div id="paperPrintArea" class="paper-shell"><table class="paper-table">'+
+      '<colgroup><col class="paper-name-column">'+
+      dates.map(function(){return '<col class="paper-date-column">';}).join('')+
+      '</colgroup><thead>';
 
     html+=
       '<tr class="paper-title-row">'+
