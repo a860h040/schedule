@@ -263,6 +263,71 @@
     return [...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,'0')).join('');
   }
 
+
+  const GOOGLE_PTO_SHEET='PTO / Availability Requests';
+  const GOOGLE_PTO_AWARE_FUNCTIONS=new Set([
+    'getAppData',
+    'generateSchedule',
+    'preflightScheduleGeneration',
+    'validateSavedSchedule',
+    'validateConfiguration',
+    'repairPtoAutoApprovals',
+    'reviewRequest',
+    'saveEmployeeRequest',
+    'submitRequest'
+  ]);
+
+  function requestMatrixToObjects_(matrix){
+    if(!Array.isArray(matrix)||!matrix.length)return [];
+    const headers=(matrix[0]||[]).map(x=>String(x??'').trim());
+    return matrix.slice(1).map(row=>{
+      const o={};
+      headers.forEach((h,i)=>o[h]=row?.[i]??'');
+      return o;
+    });
+  }
+
+  function mergeExternalPtoMatrix_(localMatrix,externalMatrix){
+    const headers=(window.__neoGooglePtoSource&&window.__neoGooglePtoSource.headers)
+      ? window.__neoGooglePtoSource.headers.slice()
+      : [
+          'Record Type','Record ID','Pharmacist','Username','Date','Start Date','End Date',
+          'Weekend Saturday','Weekend Sunday','Available','Status','Comment','Submitted At',
+          'Reviewed By','Reviewed At','Updated At','Updated By'
+        ];
+
+    const local=requestMatrixToObjects_(localMatrix||[]);
+    const external=requestMatrixToObjects_(externalMatrix||[]);
+
+    // Google is authoritative for PTO only. Keep non-PTO availability rules
+    // in the NeoChrono workbook exactly as before.
+    const rows=[
+      ...external.filter(r=>String(r['Record Type']||'').trim().toUpperCase()==='PTO'),
+      ...local.filter(r=>String(r['Record Type']||'').trim().toUpperCase()!=='PTO')
+    ];
+
+    return [
+      headers,
+      ...rows.map(r=>headers.map(h=>r[h]??''))
+    ];
+  }
+
+  async function overlayGooglePto_(fn,data){
+    if(!GOOGLE_PTO_AWARE_FUNCTIONS.has(String(fn)))return null;
+    if(!window.__neoGooglePtoSource||typeof window.__neoGooglePtoSource.load!=='function')return null;
+
+    const ext=await window.__neoGooglePtoSource.load(false);
+    if(!ext)return null; // migration-safe fallback until Apps Script API is deployed
+
+    data.sheets=data.sheets||{};
+    const original=clone(data.sheets[GOOGLE_PTO_SHEET]||{values:[]});
+    const localMatrix=original&&Array.isArray(original.values)?original.values:[];
+    const merged=mergeExternalPtoMatrix_(localMatrix,ext.matrix);
+
+    data.sheets[GOOGLE_PTO_SHEET]={values:merged};
+    return {original,source:ext.source,recordIds:ext.recordIds};
+  }
+
   window.__neoRuntime={
     cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,
     currentBook:()=>currentBook(),
@@ -274,6 +339,7 @@
           // This prevents stale SHA values after workbook imports or another open tab.
           const loaded=await loadWorkbook(true);
           const data=clone(loaded.data);
+          const ptoOverlay=await overlayGooglePto_(fn,data);
           const book=new VBook(data);window.__neoVBook=book;
           try{ if(typeof _DB_CACHE!=='undefined') _DB_CACHE=null; }catch(_e){}
           try{ if(typeof _TZ_CACHE!=='undefined') _TZ_CACHE=null; }catch(_e){}
@@ -281,9 +347,39 @@
           const callable=window[fn];
           if(typeof callable!=='function')throw new Error('Backend function not found: '+fn);
           try{
+            // Google PTO is read-only inside NeoChrono. Prevent a misleading
+            // "saved" message for PTO edits that would otherwise be transient.
+            if(ptoOverlay&&String(fn)==='saveEmployeeRequest'){
+              const payload=(args||[])[1]||{};
+              if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
+                throw new Error('PTO now comes directly from the Google Sheet. Add or edit PTO in the Google PTO app/sheet.');
+              }
+            }
+            if(ptoOverlay&&String(fn)==='submitRequest'){
+              const payload=(args||[])[1]||{};
+              if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
+                throw new Error('PTO now comes directly from the Google Sheet. Submit PTO through the Google PTO app.');
+              }
+            }
+            if(ptoOverlay&&String(fn)==='reviewRequest'){
+              const recordId=String((args||[])[1]||'');
+              if(window.__neoGooglePtoSource&&window.__neoGooglePtoSource.isExternalPtoRecord(recordId)){
+                throw new Error('This PTO request is stored in Google Sheets. Review it in the Google PTO app/sheet.');
+              }
+            }
+
             let result=callable.apply(window,args||[]);
             if(result&&typeof result.then==='function')result=await result;
-            if(book.dirty){
+
+            // Never persist Google PTO rows into neochrono-data. The GitHub
+            // workbook keeps its old PTO rows only as an unused migration copy.
+            if(ptoOverlay){
+              book.data.sheets=book.data.sheets||{};
+              book.data.sheets[GOOGLE_PTO_SHEET]=clone(ptoOverlay.original);
+            }
+
+            const actualChanged=book.dirty && JSON.stringify(book.data)!==JSON.stringify(loaded.data);
+            if(actualChanged){
               try{
                 await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);
               }catch(e){
