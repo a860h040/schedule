@@ -1,7 +1,7 @@
 import { readDatabase, updateDatabase, hasGithubConfig, publishSchedule } from './github-store.js';
 import { login, logout, currentSession, changePassword, hashPassword, adminResetPassword } from './auth.js';
 import { uid, clean, yes, num, dateKey, addDays, monthKey, escapeHtml, USER_DEFAULTS, SHIFT_DEFAULTS } from './schema.js';
-import { generateSchedule, validateSchedule, validateConfiguration, scheduleHealth, employeeStats, fairnessReport, manualAssignmentWarnings, reconcilePto, swapEligibleCounterShifts } from './scheduler.js';
+import { generateSchedule, validateSchedule, validateConfiguration, scheduleHealth, employeeStats, fairnessReport, manualAssignmentWarnings, reconcilePto, swapEligibleCounterShifts } from './scheduler.js';\nimport { parseWorkbookUpload, applyNeoChronoWorkbookImport } from './workbook-upload.js';
 
 const $=id=>document.getElementById(id);
 const State={db:null,session:null,page:'dashboard',month:new Date(new Date().getFullYear(),new Date().getMonth(),1),filters:{employees:[],shift:'',showUnfilled:true}};
