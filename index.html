@@ -5,6 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pharmacy Workforce — Scheduling</title>
+  <link rel="stylesheet" href="css/paper-schedule.css?v=20260918-paperschedule1">
   <style>
     :root{
       --bg:#f3f6fa;--panel:#fff;--ink:#172033;--muted:#64748b;--line:#dbe3ee;--brand:#0f5c7a;--brand2:#0a7c86;
@@ -596,13 +597,14 @@
 
 <div id="modalRoot"></div>
 
-<script src="js/github-legacy-runtime.js?v=20260918-skillpriority3"></script>
-<script src="js/legacy/main-backend.js?v=20260918-skillpriority3"></script>
-<script src="js/legacy/preceptor-calendar.js?v=20260918-skillpriority3"></script>
-<script src="js/legacy/csv-export.js?v=20260918-skillpriority3"></script>
-<script src="js/legacy/schedule-publish.js?v=20260918-skillpriority3"></script>
-<script src="js/legacy/delete-schedule.js?v=20260918-skillpriority3"></script>
-<script src="js/legacy/patches.js?v=20260918-skillpriority3"></script>
+<script src="js/github-legacy-runtime.js?v=20260918-paperschedule1"></script>
+<script src="js/legacy/main-backend.js?v=20260918-paperschedule1"></script>
+<script src="js/legacy/preceptor-calendar.js?v=20260918-paperschedule1"></script>
+<script src="js/legacy/csv-export.js?v=20260918-paperschedule1"></script>
+<script src="js/legacy/schedule-publish.js?v=20260918-paperschedule1"></script>
+<script src="js/legacy/delete-schedule.js?v=20260918-paperschedule1"></script>
+<script src="js/legacy/patches.js?v=20260918-paperschedule1"></script>
+<script src="js/paper-schedule.js?v=20260918-paperschedule1"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -685,7 +687,7 @@ async function refreshData(keepPage=true){State.data=await server('getAppData',S
 async function logoutApp(){try{await server('logout',State.token)}catch(e){}sessionStorage.removeItem('rxSchedulerToken');State.token='';State.data=null;$('appView').classList.add('hidden');$('loginView').classList.remove('hidden');$('loginPassword').value=''}
 
 function buildNav(){
-  let h='<div class="section">Schedule</div>'+navBtn('dashboard','▦','Dashboard')+navBtn('calendar','▣','Calendar')+navBtn('weeklyavailability','◷','Weekly Availability');
+  let h='<div class="section">Schedule</div>'+navBtn('dashboard','▦','Dashboard')+navBtn('calendar','▣','Calendar')+navBtn('paperschedule','▤','Paper Schedule')+navBtn('weeklyavailability','◷','Weekly Availability');
   h+='<div class="section">Administration</div>'+navBtn('employees','♟','Pharmacists')+navBtn('preceptorcalendar','▤','Preceptor Calendar')+navBtn('admins','♜','Administrators')+navBtn('skills','◆','Skills')+navBtn('shifts','◫','Shifts')+navBtn('staffing','≋','Staffing')+navBtn('requests','✓','PTO / Date Rules')+navBtn('settings','⚙','Settings')+navBtn('audit','↺','Audit Log')+'<button type="button" onclick="location.href=\'workbook-import.html\'"><b>⇧</b> <span>Import Workbook</span></button>';
   h+='<div class="section">Reports</div>'+navBtn('fairness','◎','Fairness');
   $('nav').innerHTML=h;
@@ -715,10 +717,10 @@ function navigateTo_(page){
 }
 function renderPage(page){
   if(!State.data)throw new Error('Scheduler data has not loaded yet.');
-  const renderers={dashboard:renderDashboard,calendar:renderCalendar,weeklyavailability:renderWeeklyAvailability,employees:renderEmployees,preceptorcalendar:renderPreceptorCalendar,admins:renderAdmins,skills:renderSkills,shifts:renderShifts,staffing:renderStaffing,requests:renderRequests,settings:renderSettings,audit:renderAudit,fairness:renderFairness};
+  const renderers={dashboard:renderDashboard,calendar:renderCalendar,paperschedule:renderPaperSchedule,weeklyavailability:renderWeeklyAvailability,employees:renderEmployees,preceptorcalendar:renderPreceptorCalendar,admins:renderAdmins,skills:renderSkills,shifts:renderShifts,staffing:renderStaffing,requests:renderRequests,settings:renderSettings,audit:renderAudit,fairness:renderFairness};
   const renderer=renderers[page];
   if(typeof renderer!=='function')throw new Error('Unknown page: '+page);
-  const titles={dashboard:'Dashboard',calendar:'Schedule Calendar',weeklyavailability:'Weekly Availability',employees:'Pharmacist Management',preceptorcalendar:'Preceptor Calendar',admins:'Administrator Accounts',skills:'Employee Skills',shifts:'Shift Definitions',staffing:'Staffing Requirements',requests:'PTO / Availability',settings:'Settings',audit:'Audit Log',fairness:'Fairness Report'};
+  const titles={dashboard:'Dashboard',calendar:'Schedule Calendar',paperschedule:'Paper Schedule',weeklyavailability:'Weekly Availability',employees:'Pharmacist Management',preceptorcalendar:'Preceptor Calendar',admins:'Administrator Accounts',skills:'Employee Skills',shifts:'Shift Definitions',staffing:'Staffing Requirements',requests:'PTO / Availability',settings:'Settings',audit:'Audit Log',fairness:'Fairness Report'};
   State.page=page;
   document.querySelectorAll('#nav button[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
   if($('pageTitle'))$('pageTitle').textContent=titles[page]||'Pharmacy Scheduler';
