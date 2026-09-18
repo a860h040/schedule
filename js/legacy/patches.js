@@ -219,7 +219,83 @@ function ensureSkillPreferenceSystem(token) {
   return {ok:true,changed:changed};
 }
 
-function saveSkillProfile(token, employeeId, preferredCode, skillCodes, skillPriorities) {
+function githubFixedOffDateKey_(value) {
+  var raw=clean_(value);
+  var m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+    if (
+      d.getFullYear()===Number(m[1]) &&
+      d.getMonth()===Number(m[2])-1 &&
+      d.getDate()===Number(m[3])
+    ) {
+      return formatDateKey_(d);
+    }
+  }
+
+  var parsed=asDate_(value);
+  return parsed ? formatDateKey_(startOfDay_(parsed)) : '';
+}
+
+function githubSaveFixedOffDates_(user, fixedOffDates, actor) {
+  var desired=Array.from(new Set(
+    (Array.isArray(fixedOffDates)?fixedOffDates:[])
+      .map(githubFixedOffDateKey_)
+      .filter(Boolean)
+  )).sort();
+
+  var rows=readTable_(APP.SHEETS.WEEKLY_AVAILABILITY);
+  var eid=clean_(user['Employee ID']);
+  var username=clean_(user.Username);
+  var prefix='[FIXED OFF FROM SKILLS]';
+
+  rows.forEach(function(r){
+    var same=
+      (eid && clean_(r['Employee ID'])===eid) ||
+      (username && clean_(r.Username)===username);
+    if (!same) return;
+    if (!yesDefault_(r.Active,true)) return;
+    if (clean_(r.Notes).indexOf(prefix)!==0) return;
+
+    updateRowByKey_(
+      APP.SHEETS.WEEKLY_AVAILABILITY,
+      'Availability ID',
+      r['Availability ID'],
+      {
+        'Active':'No',
+        'Updated At':new Date(),
+        'Updated By':actor
+      }
+    );
+  });
+
+  desired.forEach(function(dk){
+    var parts=dk.split('-').map(Number);
+    var d=new Date(parts[0],parts[1]-1,parts[2]);
+
+    appendObjectRow_(APP.SHEETS.WEEKLY_AVAILABILITY,{
+      'Availability ID':'WA-'+Utilities.getUuid().slice(0,8).toUpperCase(),
+      'Employee ID':eid,
+      'Pharmacist Name':clean_(user['Pharmacist Name']),
+      'Username':username,
+      'Day':dayName_(d),
+      'Available':'No',
+      'Start Time':'',
+      'End Time':'',
+      'Rule Type':'HARD',
+      'Effective Start':dk,
+      'Effective End':dk,
+      'Notes':prefix+' Manager-set hard OFF date',
+      'Active':'Yes',
+      'Updated At':new Date(),
+      'Updated By':actor
+    });
+  });
+
+  return desired;
+}
+
+function saveSkillProfile(token, employeeId, preferredCode, skillCodes, skillPriorities, fixedOffDates) {
   var ctx = requireAdmin_(token);
   githubEnsureSkillPreferredColumn_();
 
@@ -295,17 +371,21 @@ function saveSkillProfile(token, employeeId, preferredCode, skillCodes, skillPri
     'Updated By':ctx.username
   });
 
+  var savedFixedOffDates=githubSaveFixedOffDates_(user,fixedOffDates,ctx.username);
+
   if (typeof _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ !== 'undefined') _PRECEPTOR_CALENDAR_RUNTIME_CACHE_ = null;
   audit_('EMPLOYEE_SKILL_PROFILE_CHANGED','',clean_(user['Pharmacist Name']),'','','',preferred,'No','',
     'Skills by priority: '+desired.map(function(code){return priorityMap[code]+'='+code;}).join(', ')+
-    '; Preferred/Home Unit: '+(preferred||'None'),ctx.username);
+    '; Preferred/Home Unit: '+(preferred||'None')+
+    '; Fixed OFF dates: '+(savedFixedOffDates.length?savedFixedOffDates.join(', '):'None'),ctx.username);
 
   return {
     ok:true,
     employeeId:eid,
     skills:desired,
     preferred:preferred,
-    priorities:priorityMap
+    priorities:priorityMap,
+    fixedOffDates:savedFixedOffDates
   };
 }
 
