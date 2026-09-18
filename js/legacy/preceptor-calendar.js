@@ -1210,7 +1210,7 @@ function verifyPreceptorCalendarIntegration(token) {
     ok:true,
     connected:connected,
     sheetExists:!!getDb_().getSheetByName(PRECEPTOR_CALENDAR_SHEET_),
-    behavior:'ON = Skills Preferred/Home Unit. Any month with OFF weekdays targets 7 E1/E2 shifts; normally-skilled pharmacists cover the home unit on those rotation dates.',
+    behavior:'ON = Skills Preferred/Home Unit. Any month with OFF weekdays targets 5 E1/E2 shifts. Maximum is 7, and shifts 6-7 are fallback-only when no other eligible pharmacist can cover E1/E2. Normally-skilled pharmacists cover the home unit on planned rotation dates.',
     message:connected
       ? 'Code11 is connected. ON weeks stay in the preferred unit. Months with OFF weekdays target 5 E1/E2 shifts, with a fallback maximum of 7 only when no other eligible pharmacist can cover the E1/E2 shift, with normal-skill home-unit coverage on those dates.'
       : 'Code11 loaded, but one or more scheduling hooks are not connected. Replace the old Code11.gs with this version and redeploy.'
