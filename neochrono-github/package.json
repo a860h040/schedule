@@ -1,0 +1,8 @@
+{
+  "name": "neochrono-github",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/scheduler-test.js && node tests/pto-test.js"
+  }
+}
