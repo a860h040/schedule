@@ -596,13 +596,13 @@
 
 <div id="modalRoot"></div>
 
-<script src="js/github-legacy-runtime.js?v=20260918-legacy6"></script>
-<script src="js/legacy/main-backend.js?v=20260918-legacy6"></script>
-<script src="js/legacy/preceptor-calendar.js?v=20260918-legacy6"></script>
-<script src="js/legacy/csv-export.js?v=20260918-legacy6"></script>
-<script src="js/legacy/schedule-publish.js?v=20260918-legacy6"></script>
-<script src="js/legacy/delete-schedule.js?v=20260918-legacy6"></script>
-<script src="js/legacy/patches.js?v=20260918-legacy6"></script>
+<script src="js/github-legacy-runtime.js?v=20260918-legacy8"></script>
+<script src="js/legacy/main-backend.js?v=20260918-legacy8"></script>
+<script src="js/legacy/preceptor-calendar.js?v=20260918-legacy8"></script>
+<script src="js/legacy/csv-export.js?v=20260918-legacy8"></script>
+<script src="js/legacy/schedule-publish.js?v=20260918-legacy8"></script>
+<script src="js/legacy/delete-schedule.js?v=20260918-legacy8"></script>
+<script src="js/legacy/patches.js?v=20260918-legacy8"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -625,7 +625,19 @@ function fmtDate(s){const d=parseDate(s);return d&&!isNaN(d)?d.toLocaleDateStrin
 function fmtHours(n){return Number(n||0).toFixed(1).replace('.0','')}
 function showLoading(on=true){$('loading').classList.toggle('hidden',!on)}
 function toast(msg,type=''){const el=document.createElement('div');el.className='toast '+type;el.innerHTML=esc(msg);$('toastWrap').appendChild(el);setTimeout(()=>el.remove(),5000)}
-function server(fn,...args){return new Promise((resolve,reject)=>{showLoading(true);google.script.run.withSuccessHandler(r=>{showLoading(false);resolve(r)}).withFailureHandler(e=>{showLoading(false);reject(new Error(e&&e.message?e.message:String(e)))} )[fn](...args)})}
+async function server(fn,...args){
+  showLoading(true);
+  try{
+    if(!window.__neoRuntime||typeof window.__neoRuntime.invoke!=='function'){
+      throw new Error('NeoChrono GitHub runtime did not load. Please hard-refresh the page.');
+    }
+    return await window.__neoRuntime.invoke(fn,args);
+  }catch(e){
+    throw new Error(e&&e.message?e.message:String(e));
+  }finally{
+    showLoading(false);
+  }
+}
 
 $('loginForm').addEventListener('submit',async e=>{
   e.preventDefault();
