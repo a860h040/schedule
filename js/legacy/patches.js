@@ -43,6 +43,7 @@ function githubNormalizeSkillPriorities_(values, headers) {
   if (h.Priority===undefined || h.Skill===undefined) return false;
 
   var groups={};
+  var changed=false;
   for (var r=1;r<values.length;r++) {
     if (!yesDefault_(values[r][h.Active],true)) {
       if (clean_(values[r][h.Priority])) {
@@ -64,7 +65,6 @@ function githubNormalizeSkillPriorities_(values, headers) {
     });
   }
 
-  var changed=false;
   Object.keys(groups).forEach(function(key){
     var items=groups[key];
 
