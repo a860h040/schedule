@@ -457,6 +457,10 @@ function preceptorCalendarAwareScoreCandidate_(u,slot,model,state,elig) {
     var offPreferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
 
     if (preceptorCalendarEveningCode_(offCode)) {
+      if (preceptorCalendarIsPreceptingWeek_(u,slot.date)) {
+        return score - 1000000;
+      }
+
       var monthDate = firstOfMonth_(slot.date);
       var target = preceptorCalendarMonthlyEveningTarget_(u,monthDate,model);
       var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthDate,model);
@@ -576,7 +580,8 @@ function preceptorCalendarPreassignOnPreferredUnits_(
    1. If every weekday in the calendar month is Preceptor Calendar ON:
         evening rotation target = 0.
 
-   2. If one or more weekdays in the calendar month are OFF:
+   2. If one or more weekdays in the calendar month are OFF AND belong to a
+      fully non-precepting Sunday-Saturday week:
         target = 5 E1/E2 shifts for that calendar month.
 
    3. A preceptor may work up to 7 E1/E2 shifts in that month, but shifts
@@ -610,7 +615,15 @@ function preceptorCalendarMonthHasOffWeekday_(u, monthDate) {
 
   for (var d = new Date(first); d.getTime() <= last.getTime(); d = addDays_(d,1)) {
     if (isWeekendDate_(d)) continue;
-    if (!preceptorCalendarIsActiveOnDate_(u,d)) return true;
+
+    // Only an OFF weekday in a fully non-precepting Sunday-Saturday week can
+    // support the monthly E1/E2 rotation target.
+    if (
+      !preceptorCalendarIsActiveOnDate_(u,d) &&
+      !preceptorCalendarIsPreceptingWeek_(u,d)
+    ) {
+      return true;
+    }
   }
   return false;
 }
