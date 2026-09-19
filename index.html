@@ -375,6 +375,7 @@
   .pharm-v34-photo-q .pharm-v32-avatar{width:200px;height:200px;flex-basis:200px}
 }
 
+.preceptor-person-card{display:grid!important;grid-template-columns:82px minmax(0,1fr);gap:12px;align-items:center}.preceptor-person-photo{display:grid;place-items:center}.preceptor-calendar-avatar{width:82px;height:82px;border-radius:20px;overflow:hidden;display:grid;place-items:center;background:linear-gradient(145deg,#a9631e,#d7953e);color:#fff;font-size:22px;font-weight:950;border:3px solid #fff;box-shadow:0 8px 18px rgba(60,72,78,.15)}.preceptor-calendar-avatar.has-photo{background:#eef2f4!important}.preceptor-person-copy{min-width:0}.preceptor-person-copy span{display:block}.preceptor-person-copy strong{display:block;margin-top:5px;line-height:1.15}@media(max-width:700px){.preceptor-person-card{grid-template-columns:64px minmax(0,1fr)}.preceptor-calendar-avatar{width:64px;height:64px;border-radius:16px}}
 /* v33 navigation reliability */
 .sidebar{position:sticky;top:0;z-index:120!important}
 .nav{position:relative;z-index:121;pointer-events:auto!important}
@@ -1167,6 +1168,10 @@ function renderPreceptorCalendarBody_(){
   const rows=selectedPreceptorCalendarRows_();
   let total=0,on=0;rows.forEach(m=>(m.weeks||[]).forEach(w=>{total++;if(pc.draft[m.monthNumber+'|'+w.weekNumber]!==false)on++}));
   const person=preceptors.find(p=>String(p.employeeId)===String(pc.employeeId))||{};
+  const personUser=(State.data.users||[]).find(u=>String(u['Employee ID']||'')===String(pc.employeeId))||{
+    'Employee ID':person.employeeId||pc.employeeId,
+    'Pharmacist Name':person.pharmacistName||'Preceptor'
+  };
   const integration=pc.integration||{};
   const algBadge=integration.connected?'<span class="preceptor-algorithm-ok">✓ Algorithm connected</span>':'<span class="preceptor-algorithm-ok preceptor-algorithm-bad">! Check Code11 integration</span>';
   const monthCards=rows.map(m=>{
@@ -1176,10 +1181,11 @@ function renderPreceptorCalendarBody_(){
   }).join('');
   $('pcBody').innerHTML=`<div class="preceptor-shell">
     <div class="preceptor-explainer"><div class="icon">i</div><div><b>How the switch works</b><p>When a week is ON, ${esc(person.pharmacistName||'this pharmacist')} is actively precepting and weekday assignments are kept in the pharmacist's Preferred Shift Type / home unit. When it is OFF, weekday assignments may be the pharmacist's Preferred Shift Type / home unit, E1, or E2. Weekend rotation, skills, PTO, availability, 5-day rules, hours, and the rest of the scheduler rules still apply.</p></div></div>
-    <div class="preceptor-summary"><div class="preceptor-summary-card"><span>Preceptor</span><strong>${esc(person.pharmacistName||'')}</strong></div><div class="preceptor-summary-card"><span>Year</span><strong>${esc(pc.year)}</strong></div><div class="preceptor-summary-card"><span>ON week blocks</span><strong>${on}/${total}</strong></div><div class="preceptor-summary-card"><span>Algorithm</span><strong style="font-size:14px;margin-top:9px">${algBadge}</strong></div></div>
+    <div class="preceptor-summary"><div class="preceptor-summary-card preceptor-person-card"><div class="preceptor-person-photo">${employeePhotoAvatar_(personUser,'preceptor-calendar-avatar')}</div><div class="preceptor-person-copy"><span>Preceptor</span><strong>${esc(person.pharmacistName||'')}</strong></div></div><div class="preceptor-summary-card"><span>Year</span><strong>${esc(pc.year)}</strong></div><div class="preceptor-summary-card"><span>ON week blocks</span><strong>${on}/${total}</strong></div><div class="preceptor-summary-card"><span>Algorithm</span><strong style="font-size:14px;margin-top:9px">${algBadge}</strong></div></div>
     <div class="preceptor-month-grid">${monthCards}</div>
     <div class="preceptor-savebar"><div id="pcSaveStatus" class="status ${pc.dirty?'dirty':''}">${pc.dirty?'Unsaved changes — scheduling will use the saved calendar until you save.':'All changes saved.'}</div><div style="display:flex;gap:8px"><button class="btn btn-ghost" onclick="buildPreceptorDraft_();renderPreceptorCalendarBody_()">Discard changes</button><button id="pcSaveBtn" class="btn btn-primary" onclick="savePreceptorCalendarUI()">Save ${esc(person.pharmacistName||'Preceptor')} Calendar</button></div></div>
-  </div>`
+  </div>`;
+  hydrateEmployeePhotos_($('pcBody'));
 }
 function togglePreceptorWeek_(month,week){const pc=preceptorCalendarState_(),key=month+'|'+week;pc.draft[key]=!(pc.draft[key]!==false);pc.dirty=true;renderPreceptorCalendarBody_()}
 function setPreceptorMonthState_(month,on){const pc=preceptorCalendarState_();selectedPreceptorCalendarRows_().filter(m=>Number(m.monthNumber)===Number(month)).forEach(m=>(m.weeks||[]).forEach(w=>pc.draft[m.monthNumber+'|'+w.weekNumber]=!!on));pc.dirty=true;renderPreceptorCalendarBody_()}
