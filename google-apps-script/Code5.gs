@@ -1154,9 +1154,11 @@ function neoChronoBridgeResponse_(result) {
     '<!doctype html>' +
     '<html><head><meta charset="utf-8"></head><body>' +
     '<script>' +
-    'try{window.parent.postMessage(' +
-    json +
-    ', "*");}catch(e){}' +
+    'try{' +
+    'var m=' + json + ';' +
+    'if(window.top){window.top.postMessage(m, "*");}' +
+    'if(window.parent&&window.parent!==window.top){window.parent.postMessage(m, "*");}' +
+    '}catch(e){}' +
     '</script>' +
     '<div style="font-family:Arial,sans-serif;padding:16px">' +
     neoChronoHtmlEscape_(message) +
