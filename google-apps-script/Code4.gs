@@ -1,340 +1,254 @@
 /**
- * Code4.gs — NeoChrono pharmacist schedule receiver
+ * NeoChrono Pharmacists Schedule Receiver
+ * File name: Code4.gs
  *
- * Add this file to the Google Apps Script project deployed at:
- * https://script.google.com/macros/s/AKfycbyKpDf3Fe6TyvX0vxrQ6_5O18f1DT2ZiEciQbMEC_VObA2WE_COLzXXzwRRMjR17clK/exec
+ * Receives the finalized schedule from the GitHub NeoChrono app and replaces
+ * the contents of the Google Sheet tab named exactly "Schedule".
  *
- * This does NOT replace your existing doGet() / pharmacist-facing web app.
- * It only adds doPost(e) so NeoChrono can replace the sheet named "Schedule".
+ * IMPORTANT:
+ * - Add this file to the Apps Script project deployed at:
+ *   https://script.google.com/macros/s/AKfycbyKpDf3Fe6TyvX0vxrQ6_5O18f1DT2ZiEciQbMEC_VObA2WE_COLzXXzwRRMjR17clK/exec
+ * - Then deploy a NEW VERSION of the EXISTING web app deployment.
+ * - If another file already contains function doPost(e), do not keep two
+ *   doPost functions. Route that existing doPost to neoChronoReceiveSchedule_(e).
  */
 
-const NEOCHRONO_RECEIVER = Object.freeze({
+const NEOCHRONO_SCHEDULE_RECEIVER_V4 = Object.freeze({
+  SPREADSHEET_ID: '1flTBzOIM_dbDODjC-S-DHoViAhHASEyNWInZBxab5To',
   SHEET_NAME: 'Schedule',
-  SPREADSHEET_ID_PROPERTY: 'NEOCHRONO_RECEIVER_SPREADSHEET_ID',
-  LAST_PUBLISH_ID_PROPERTY: 'NEOCHRONO_LAST_PUBLISH_ID'
+  ACTION: 'replaceSchedule'
 });
 
-/**
- * Run this ONCE manually from the bound Apps Script editor.
- * It remembers which spreadsheet this receiver belongs to and makes sure the
- * "Schedule" sheet exists.
- */
-function setupNeoChronoScheduleReceiver() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  if (!ss) {
-    throw new Error(
-      'This Apps Script project must be bound to the pharmacists spreadsheet. Open the spreadsheet, then Extensions → Apps Script, and run setupNeoChronoScheduleReceiver() there.'
-    );
-  }
-
-  PropertiesService
-    .getScriptProperties()
-    .setProperty(
-      NEOCHRONO_RECEIVER.SPREADSHEET_ID_PROPERTY,
-      ss.getId()
-    );
-
-  let sh = ss.getSheetByName(NEOCHRONO_RECEIVER.SHEET_NAME);
-
-  if (!sh) {
-    sh = ss.insertSheet(NEOCHRONO_RECEIVER.SHEET_NAME);
-  }
-
-  sh.setFrozenRows(1);
-
-  return {
-    ok: true,
-    spreadsheetId: ss.getId(),
-    spreadsheetName: ss.getName(),
-    sheetName: sh.getName()
-  };
+function doPost(e) {
+  return neoChronoReceiveSchedule_(e);
 }
 
 
-/**
- * Called automatically by NeoChrono's Finalize & Send button.
- */
-function doPost(e) {
-  let publishId = '';
+function neoChronoReceiveSchedule_(e) {
+  var lock = LockService.getScriptLock();
 
   try {
-    const action = String(
-      e && e.parameter && e.parameter.action
-        ? e.parameter.action
-        : ''
-    ).trim();
+    lock.waitLock(30000);
 
-    publishId = String(
-      e && e.parameter && e.parameter.publishId
-        ? e.parameter.publishId
-        : ''
-    ).trim();
-
-    if (action !== 'replaceSchedule') {
-      throw new Error('Unsupported receiver action.');
+    if (!e || !e.parameter) {
+      throw new Error('No POST data was received.');
     }
 
-    const raw = String(
-      e && e.parameter && e.parameter.payload
-        ? e.parameter.payload
-        : ''
-    );
-
-    if (!raw) {
-      throw new Error('Schedule payload was empty.');
+    var action = String(e.parameter.action || '').trim();
+    if (action !== NEOCHRONO_SCHEDULE_RECEIVER_V4.ACTION) {
+      throw new Error('Unsupported receiver action: ' + action);
     }
 
-    const payload = JSON.parse(raw);
-
-    if (String(payload.sheet || '') !== NEOCHRONO_RECEIVER.SHEET_NAME) {
-      throw new Error(
-        'NeoChrono may publish only to the sheet named "' +
-        NEOCHRONO_RECEIVER.SHEET_NAME +
-        '".'
-      );
-    }
-
-    publishId = String(payload.publishId || publishId || '').trim();
+    var publishId = String(e.parameter.publishId || '').trim();
+    var payloadText = String(e.parameter.payload || '').trim();
 
     if (!publishId) {
       throw new Error('Publish ID is missing.');
     }
 
-    const result = neoChronoReplaceSchedule_(payload);
-
-    return neoChronoReceiverHtmlResponse_({
-      type: 'NEOCHRONO_SCHEDULE_PUBLISH_RESULT',
-      ok: true,
-      publishId: publishId,
-      transferredRows: result.transferredRows,
-      transferredColumns: result.transferredColumns,
-      sheetName: result.sheetName,
-      spreadsheetName: result.spreadsheetName,
-      message:
-        'Schedule was uploaded successfully to the Google Sheet named Schedule.'
-    });
-
-  } catch (err) {
-    return neoChronoReceiverHtmlResponse_({
-      type: 'NEOCHRONO_SCHEDULE_PUBLISH_RESULT',
-      ok: false,
-      publishId: publishId,
-      message:
-        err && err.message
-          ? err.message
-          : String(err)
-    });
-  }
-}
-
-
-function neoChronoReplaceSchedule_(payload) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-
-  try {
-    const ss = neoChronoReceiverSpreadsheet_();
-    let sh = ss.getSheetByName(NEOCHRONO_RECEIVER.SHEET_NAME);
-
-    if (!sh) {
-      sh = ss.insertSheet(NEOCHRONO_RECEIVER.SHEET_NAME);
+    if (!payloadText) {
+      throw new Error('Schedule payload is empty.');
     }
 
-    const values = payload.values;
-
-    if (!Array.isArray(values) || !values.length) {
-      throw new Error('Schedule payload does not contain rows.');
+    var payload;
+    try {
+      payload = JSON.parse(payloadText);
+    } catch (parseError) {
+      throw new Error('The schedule payload is not valid JSON.');
     }
-
-    const headers = values[0].map(function(v) {
-      return String(v == null ? '' : v).trim();
-    });
-
-    if (!headers.length) {
-      throw new Error('Schedule header row is empty.');
-    }
-
-    const requiredHeaders = [
-      'Date',
-      'Shift',
-      'Assigned Pharmacist',
-      'Status'
-    ];
-
-    requiredHeaders.forEach(function(header) {
-      if (headers.indexOf(header) < 0) {
-        throw new Error(
-          'Schedule payload is missing required column: ' + header
-        );
-      }
-    });
-
-    const normalized = values.map(function(row, rowIndex) {
-      return headers.map(function(header, colIndex) {
-        return neoChronoReceiverValue_(
-          header,
-          row && row[colIndex],
-          rowIndex
-        );
-      });
-    });
-
-    // Idempotency: if a browser repeats the same POST because of a redirect or
-    // network retry, do not rewrite the sheet twice.
-    const props = PropertiesService.getScriptProperties();
-    const lastPublishId = props.getProperty(
-      NEOCHRONO_RECEIVER.LAST_PUBLISH_ID_PROPERTY
-    );
 
     if (
-      lastPublishId &&
-      lastPublishId === String(payload.publishId || '')
+      String(payload.sheet || '') !==
+      NEOCHRONO_SCHEDULE_RECEIVER_V4.SHEET_NAME
     ) {
-      return {
-        transferredRows: Math.max(0, normalized.length - 1),
-        transferredColumns: headers.length,
-        sheetName: sh.getName(),
-        spreadsheetName: ss.getName()
-      };
+      throw new Error(
+        'NeoChrono attempted to publish to an unexpected sheet. Expected: ' +
+        NEOCHRONO_SCHEDULE_RECEIVER_V4.SHEET_NAME
+      );
+    }
+
+    var values = payload.values;
+
+    if (!Array.isArray(values) || values.length < 1) {
+      throw new Error('No schedule rows were supplied.');
+    }
+
+    if (!Array.isArray(values[0]) || values[0].length < 1) {
+      throw new Error('The schedule header row is missing.');
+    }
+
+    var columnCount = values[0].length;
+
+    for (var r = 0; r < values.length; r++) {
+      if (!Array.isArray(values[r])) {
+        throw new Error('Schedule row ' + (r + 1) + ' is invalid.');
+      }
+
+      while (values[r].length < columnCount) {
+        values[r].push('');
+      }
+
+      if (values[r].length > columnCount) {
+        values[r] = values[r].slice(0, columnCount);
+      }
+    }
+
+    values = neoChronoNormalizeScheduleValues_(values);
+
+    var ss = SpreadsheetApp.openById(
+      NEOCHRONO_SCHEDULE_RECEIVER_V4.SPREADSHEET_ID
+    );
+
+    var sheet = ss.getSheetByName(
+      NEOCHRONO_SCHEDULE_RECEIVER_V4.SHEET_NAME
+    );
+
+    if (!sheet) {
+      sheet = ss.insertSheet(
+        NEOCHRONO_SCHEDULE_RECEIVER_V4.SHEET_NAME
+      );
     }
 
     neoChronoEnsureSheetSize_(
-      sh,
-      normalized.length,
-      headers.length
+      sheet,
+      values.length,
+      columnCount
     );
 
-    // The receiver sheet must contain only the newly published schedule.
-    sh.clearContents();
+    // Replace the existing Schedule data completely.
+    sheet.clearContents();
 
-    sh
-      .getRange(
-        1,
-        1,
-        normalized.length,
-        headers.length
-      )
-      .setValues(normalized);
+    sheet
+      .getRange(1, 1, values.length, columnCount)
+      .setValues(values);
 
-    sh.setFrozenRows(1);
+    sheet.setFrozenRows(1);
 
-    const dateCol = headers.indexOf('Date') + 1;
-
-    if (dateCol > 0 && normalized.length > 1) {
-      sh
-        .getRange(
-          2,
-          dateCol,
-          normalized.length - 1,
-          1
-        )
-        .setNumberFormat('m/d/yyyy');
-    }
-
-    const finalizedCol = headers.indexOf('Finalized At') + 1;
-
-    if (finalizedCol > 0 && normalized.length > 1) {
-      sh
-        .getRange(
-          2,
-          finalizedCol,
-          normalized.length - 1,
-          1
-        )
-        .setNumberFormat('m/d/yyyy h:mm AM/PM');
-    }
-
-    // Simple header formatting without changing the existing spreadsheet theme.
-    sh
-      .getRange(1,1,1,headers.length)
-      .setFontWeight('bold');
+    try {
+      sheet
+        .getRange(1, 1, 1, columnCount)
+        .setFontWeight('bold');
+    } catch (ignore) {}
 
     SpreadsheetApp.flush();
 
-    props.setProperty(
-      NEOCHRONO_RECEIVER.LAST_PUBLISH_ID_PROPERTY,
-      String(payload.publishId || '')
-    );
+    // Verify the write BEFORE telling NeoChrono it succeeded.
+    var actualRows = sheet.getLastRow();
+    var actualColumns = sheet.getLastColumn();
 
-    props.setProperty(
-      'NEOCHRONO_LAST_PUBLISHED_AT',
+    if (actualRows !== values.length) {
+      throw new Error(
+        'Write verification failed. Expected ' +
+        values.length +
+        ' rows but Google Sheets reports ' +
+        actualRows +
+        '.'
+      );
+    }
+
+    if (actualColumns < columnCount) {
+      throw new Error(
+        'Write verification failed. Expected at least ' +
+        columnCount +
+        ' columns but Google Sheets reports ' +
+        actualColumns +
+        '.'
+      );
+    }
+
+    var properties = PropertiesService.getScriptProperties();
+    properties.setProperty(
+      'NEOCHRONO_LAST_PUBLISH_ID',
+      publishId
+    );
+    properties.setProperty(
+      'NEOCHRONO_LAST_PUBLISH_AT',
       new Date().toISOString()
     );
-
-    props.setProperty(
-      'NEOCHRONO_LAST_PUBLISHED_RANGE',
-      String(payload.startDate || '') +
-      ' through ' +
-      String(payload.endDate || '')
+    properties.setProperty(
+      'NEOCHRONO_LAST_PUBLISH_ROWS',
+      String(Math.max(0, values.length - 1))
     );
 
-    return {
-      transferredRows: Math.max(0, normalized.length - 1),
-      transferredColumns: headers.length,
-      sheetName: sh.getName(),
-      spreadsheetName: ss.getName()
-    };
+    var receiverUrl =
+      'https://docs.google.com/spreadsheets/d/' +
+      NEOCHRONO_SCHEDULE_RECEIVER_V4.SPREADSHEET_ID +
+      '/edit#gid=' +
+      sheet.getSheetId();
+
+    return neoChronoReceiverReply_({
+      type: 'NEOCHRONO_SCHEDULE_PUBLISH_RESULT',
+      ok: true,
+      publishId: publishId,
+      transferredRows: Math.max(0, values.length - 1),
+      transferredColumns: columnCount,
+      spreadsheetName: ss.getName(),
+      sheetName: NEOCHRONO_SCHEDULE_RECEIVER_V4.SHEET_NAME,
+      receiverUrl: receiverUrl,
+      message:
+        'Schedule was written successfully to the Google Sheet tab named Schedule.'
+    });
+
+  } catch (error) {
+    var failedPublishId = '';
+
+    try {
+      failedPublishId = String(
+        e && e.parameter
+          ? e.parameter.publishId || ''
+          : ''
+      );
+    } catch (ignore) {}
+
+    return neoChronoReceiverReply_({
+      type: 'NEOCHRONO_SCHEDULE_PUBLISH_RESULT',
+      ok: false,
+      publishId: failedPublishId,
+      message:
+        error && error.message
+          ? error.message
+          : String(error)
+    });
 
   } finally {
-    lock.releaseLock();
+    try {
+      lock.releaseLock();
+    } catch (ignore) {}
   }
 }
 
 
-function neoChronoReceiverSpreadsheet_() {
-  const active = SpreadsheetApp.getActiveSpreadsheet();
+function neoChronoEnsureSheetSize_(sheet, rows, columns) {
+  var maxRows = sheet.getMaxRows();
+  var maxColumns = sheet.getMaxColumns();
 
-  if (active) {
-    return active;
-  }
-
-  const id = PropertiesService
-    .getScriptProperties()
-    .getProperty(
-      NEOCHRONO_RECEIVER.SPREADSHEET_ID_PROPERTY
-    );
-
-  if (!id) {
-    throw new Error(
-      'Receiver spreadsheet is not configured. Run setupNeoChronoScheduleReceiver() once from the bound Apps Script editor, then deploy a new web-app version.'
-    );
-  }
-
-  return SpreadsheetApp.openById(id);
-}
-
-
-function neoChronoEnsureSheetSize_(sheet, rows, cols) {
-  const needRows = Math.max(1, Number(rows || 1));
-  const needCols = Math.max(1, Number(cols || 1));
-
-  if (sheet.getMaxRows() < needRows) {
+  if (maxRows < rows) {
     sheet.insertRowsAfter(
-      sheet.getMaxRows(),
-      needRows - sheet.getMaxRows()
+      maxRows,
+      rows - maxRows
     );
   }
 
-  if (sheet.getMaxColumns() < needCols) {
+  if (maxColumns < columns) {
     sheet.insertColumnsAfter(
-      sheet.getMaxColumns(),
-      needCols - sheet.getMaxColumns()
+      maxColumns,
+      columns - maxColumns
     );
   }
 }
 
 
-function neoChronoReceiverValue_(header, value, rowIndex) {
-  if (rowIndex === 0) {
-    return String(value == null ? '' : value);
+function neoChronoNormalizeScheduleValues_(values) {
+  if (!values.length) {
+    return values;
   }
 
-  if (value === null || value === undefined || value === '') {
-    return '';
-  }
+  var headers = values[0].map(function(value) {
+    return String(value || '').trim();
+  });
 
-  const dateOnlyHeaders = {
+  var dateOnlyHeaders = {
     'Date': true,
     'Start Date': true,
     'End Date': true,
@@ -344,80 +258,106 @@ function neoChronoReceiverValue_(header, value, rowIndex) {
     'Effective End': true
   };
 
-  const dateTimeHeaders = {
+  var dateTimeHeaders = {
     'Updated At': true,
-    'Finalized At': true,
     'Submitted At': true,
-    'Reviewed At': true
+    'Reviewed At': true,
+    'Finalized At': true,
+    'Created At': true
   };
 
-  if (dateOnlyHeaders[header]) {
-    const d = neoChronoReceiverDate_(value, true);
-    return d || value;
+  var output = [headers];
+
+  for (var r = 1; r < values.length; r++) {
+    var row = [];
+
+    for (var c = 0; c < headers.length; c++) {
+      var header = headers[c];
+      var value = values[r][c];
+
+      if (
+        value !== '' &&
+        value !== null &&
+        value !== undefined &&
+        (
+          dateOnlyHeaders[header] ||
+          dateTimeHeaders[header]
+        )
+      ) {
+        var parsed = new Date(value);
+
+        if (!isNaN(parsed.getTime())) {
+          value = parsed;
+        }
+      }
+
+      if (value === null || value === undefined) {
+        value = '';
+      }
+
+      row.push(value);
+    }
+
+    output.push(row);
   }
 
-  if (dateTimeHeaders[header]) {
-    const d = neoChronoReceiverDate_(value, false);
-    return d || value;
-  }
-
-  return value;
+  return output;
 }
 
 
-function neoChronoReceiverDate_(value, dateOnly) {
-  if (value instanceof Date) {
-    return value;
-  }
+function neoChronoReceiverReply_(result) {
+  var json = JSON.stringify(result)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
 
-  const text = String(value || '').trim();
+  var html =
+    '<!doctype html>' +
+    '<html><head><meta charset="utf-8"></head>' +
+    '<body>' +
+    '<script>' +
+    'window.parent.postMessage(' +
+    json +
+    ',"*");' +
+    '<\/script>' +
+    '</body></html>';
 
-  if (!text) {
-    return '';
-  }
-
-  if (
-    dateOnly &&
-    /^\d{4}-\d{2}-\d{2}$/.test(text)
-  ) {
-    const parts = text.split('-').map(Number);
-    const d = new Date(
-      parts[0],
-      parts[1] - 1,
-      parts[2],
-      12,0,0,0
+  return HtmlService
+    .createHtmlOutput(html)
+    .setXFrameOptionsMode(
+      HtmlService.XFrameOptionsMode.ALLOWALL
     );
-
-    return isNaN(d.getTime()) ? '' : d;
-  }
-
-  const d = new Date(text);
-
-  return isNaN(d.getTime()) ? '' : d;
 }
 
 
 /**
- * Returns a tiny HTML page inside NeoChrono's hidden iframe.
- * postMessage works cross-origin, so NeoChrono receives a verified success or
- * failure without relying on fetch/CORS.
+ * Optional manual test from the Apps Script editor.
+ * Running this confirms this project can access the target spreadsheet
+ * and the tab named "Schedule".
  */
-function neoChronoReceiverHtmlResponse_(payload) {
-  const json = JSON
-    .stringify(payload || {})
-    .replace(/</g,'\\u003c');
+function testNeoChronoScheduleReceiverV4() {
+  var ss = SpreadsheetApp.openById(
+    NEOCHRONO_SCHEDULE_RECEIVER_V4.SPREADSHEET_ID
+  );
 
-  return HtmlService
-    .createHtmlOutput(
-      '<!doctype html><html><body>' +
-      '<script>' +
-      'try{' +
-      'window.parent.postMessage(' + json + ', "*");' +
-      '}catch(e){}' +
-      '<\/script>' +
-      '</body></html>'
-    )
-    .setXFrameOptionsMode(
-      HtmlService.XFrameOptionsMode.ALLOWALL
-    );
+  var sheet = ss.getSheetByName(
+    NEOCHRONO_SCHEDULE_RECEIVER_V4.SHEET_NAME
+  );
+
+  return {
+    spreadsheetId: ss.getId(),
+    spreadsheetName: ss.getName(),
+    scheduleSheetExists: !!sheet,
+    scheduleSheetId: sheet
+      ? sheet.getSheetId()
+      : null,
+    url: sheet
+      ? (
+          'https://docs.google.com/spreadsheets/d/' +
+          ss.getId() +
+          '/edit#gid=' +
+          sheet.getSheetId()
+        )
+      : ss.getUrl()
+  };
 }
