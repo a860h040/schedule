@@ -485,6 +485,11 @@
       const localMatrix=Array.isArray(localSheet.values)?localSheet.values:[];
       const merged=mergeGooglePtoIntoGithub_(localMatrix,googleMatrix);
 
+      // Poll every 5 seconds, but write to GitHub ONLY when Google actually changed.
+      if(JSON.stringify(localMatrix)===JSON.stringify(merged)){
+        return {ok:true,changed:false,rows:Math.max(0,merged.length-1)};
+      }
+
       data.sheets[GOOGLE_PTO_SHEET]={values:merged};
       data.meta=data.meta||{};
       data.meta.googlePtoSyncedAt=new Date().toISOString();
@@ -497,7 +502,7 @@
           reason||'Sync PTO from Google Sheet'
         );
         cache={data,sha:(result&&result.content&&result.content.sha)||loaded.sha,loadedAt:Date.now()};
-        return {ok:true,rows:Math.max(0,merged.length-1)};
+        return {ok:true,changed:true,rows:Math.max(0,merged.length-1)};
       }catch(e){
         lastError=e;
         const conflict=
@@ -516,6 +521,46 @@
     }
 
     throw lastError||new Error('Could not sync Google PTO into neochrono-data.');
+  }
+
+  let googlePtoPollBusy_=false;
+  let googlePtoPollTimer_=null;
+
+  async function pollGooglePtoToGithub_(){
+    if(googlePtoPollBusy_)return;
+    if(!window.__neoGooglePtoSource||typeof window.__neoGooglePtoSource.fetchSnapshot!=='function')return;
+
+    // A GitHub token must already be configured on this NeoChrono device.
+    try{ cfg(); }catch(_e){ return; }
+
+    googlePtoPollBusy_=true;
+    try{
+      const snapshot=await window.__neoGooglePtoSource.fetchSnapshot();
+      const synced=await syncGooglePtoMatrix_(
+        snapshot.matrix,
+        'Sync PTO from Google Sheet (5-second poll)'
+      );
+
+      if(synced&&synced.changed){
+        cache={data:null,sha:null,loadedAt:0};
+        try{
+          window.dispatchEvent(new CustomEvent('neochrono:pto-synced',{
+            detail:{rows:synced.rows,at:new Date().toISOString()}
+          }));
+        }catch(_e){}
+      }
+    }catch(e){
+      // Keep the scheduler usable from the last GitHub copy if Google is temporarily unavailable.
+      console.warn('NeoChrono 5-second Google PTO sync failed:',e);
+    }finally{
+      googlePtoPollBusy_=false;
+    }
+  }
+
+  function startGooglePtoFiveSecondSync_(){
+    if(googlePtoPollTimer_)return;
+    setTimeout(pollGooglePtoToGithub_,750);
+    googlePtoPollTimer_=setInterval(pollGooglePtoToGithub_,5000);
   }
 
   window.__neoRuntime={
@@ -625,6 +670,8 @@
       return p;
     }
   };
+
+  startGooglePtoFiveSecondSync_();
 
   function chain(state){
     return new Proxy({},{
