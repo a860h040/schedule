@@ -65,8 +65,54 @@
   async function loadWorkbook(force=false){
     const c=cfg();
     if(cache.data&&!force&&Date.now()-cache.loadedAt<10000)return cache;
-    const f=await gh(apiUrl(c,c.workbookPath)+'?ref='+encodeURIComponent(c.branch),{},c);
-    const data=JSON.parse(b64decodeUtf8(f.content||''));
+
+    const f=await gh(
+      apiUrl(c,c.workbookPath)+'?ref='+encodeURIComponent(c.branch),
+      {},
+      c
+    );
+
+    let encoded=String((f&&f.content)||'').replace(/\n/g,'');
+
+    // GitHub's Contents API omits inline "content" for larger files.
+    // When workbook.json grows beyond that threshold, load the same blob
+    // through the Git Data API instead of attempting JSON.parse('').
+    if(!encoded){
+      const sha=String((f&&f.sha)||'').trim();
+      if(!sha){
+        throw new Error(
+          'NeoChrono could not read workbook.json from GitHub because the file response did not include content or a blob SHA.'
+        );
+      }
+
+      const blobUrl=
+        'https://api.github.com/repos/'+
+        encodeURIComponent(c.owner)+'/'+
+        encodeURIComponent(c.repo)+
+        '/git/blobs/'+encodeURIComponent(sha);
+
+      const blob=await gh(blobUrl,{},c);
+      encoded=String((blob&&blob.content)||'').replace(/\n/g,'');
+
+      if(!encoded){
+        throw new Error(
+          'NeoChrono found workbook.json in GitHub but GitHub returned an empty blob.'
+        );
+      }
+    }
+
+    let text='';
+    let data=null;
+    try{
+      text=b64decodeUtf8(encoded);
+      data=JSON.parse(text);
+    }catch(e){
+      throw new Error(
+        'NeoChrono could not parse workbook.json from GitHub. '+
+        'The stored workbook may be incomplete or invalid JSON. '+e.message
+      );
+    }
+
     cache={data,sha:f.sha,loadedAt:Date.now()};
     return cache;
   }
