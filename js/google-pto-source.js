@@ -2,12 +2,12 @@
 (function(){
   'use strict';
 
-  const ENDPOINT='https://script.google.com/macros/s/AKfycbxBTnuzFvNXOROz4fpGni_exZap2YfSTm5aNWw4eAwnyGe-m9jU3SZriupyFf3yDP-r/exec';
+  const ENDPOINT='https://script.google.com/macros/s/AKfycbzd-2TtruGPlfUbRlS7EDFlm7jgBlBUgfM66PJX03zMpZOHFoXBSXBd-rJMX7s71fXk/exec';
   const SHEET='PTO / Availability Requests';
   const READ_ACTION='neochronoPto';
   const WRITE_ACTION='neochronoPtoWrite';
-  const CACHE_KEY='neochrono_google_pto_cache_v2';
-  const ACTIVE_KEY='neochrono_google_pto_active_v2';
+  const CACHE_KEY='neochrono_google_pto_cache_v3';
+  const ACTIVE_KEY='neochrono_google_pto_active_v3';
   const CACHE_MS=15000;
 
   const HEADERS=[
@@ -109,7 +109,7 @@
       const script=document.createElement('script');
       const timer=setTimeout(()=>{
         cleanup();
-        reject(new Error('Google PTO source did not return data. Make sure Code5.gs is deployed in the existing Apps Script web app.'));
+        reject(new Error('Google PTO source did not return data. Make sure the PTO read API is deployed at the configured Apps Script web app URL.'));
       },12000);
 
       function cleanup(){
@@ -220,12 +220,12 @@
 
     const refreshed=await load(true);
     if(!refreshed){
-      throw new Error('The Google PTO write API is not active yet. Add Code5.gs, update doGet/doPost, and deploy a new version of the existing Apps Script web app.');
+      throw new Error('The Google PTO write API is not active yet. Confirm the PTO read/write API is deployed at the configured Apps Script web app URL.');
     }
     const rows=matrixToObjects(refreshed.matrix);
     const saved=rows.find(r=>String(r['Record ID']||'')===row['Record ID']);
     if(!saved){
-      throw new Error('Google Apps Script accepted the request, but the row was not found in the Google Sheet after saving. Confirm Code5.gs is deployed as a new version of the existing web app.');
+      throw new Error('Google Apps Script accepted the request, but the row was not found in the Google Sheet after saving. Confirm the configured Apps Script deployment exposes the PTO API.');
     }
 
     return {
@@ -249,7 +249,7 @@
 
     const refreshed=await load(true);
     if(!refreshed){
-      throw new Error('The Google PTO write API is not active yet. Deploy Code5.gs in the existing Apps Script web app.');
+      throw new Error('The Google PTO write API is not active yet. Confirm the PTO API is deployed at the configured Apps Script web app URL.');
     }
     const rows=matrixToObjects(refreshed.matrix);
     const saved=rows.find(r=>String(r['Record ID']||'')===id);
@@ -269,7 +269,7 @@
     await postWrite({operation:'delete',recordId:id});
     const refreshed=await load(true);
     if(!refreshed){
-      throw new Error('The Google PTO write API is not active yet. Deploy Code5.gs in the existing Apps Script web app.');
+      throw new Error('The Google PTO write API is not active yet. Confirm the PTO API is deployed at the configured Apps Script web app URL.');
     }
     const rows=matrixToObjects(refreshed.matrix);
     if(rows.some(r=>String(r['Record ID']||'')===id)){
