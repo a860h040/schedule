@@ -2,7 +2,7 @@
 (function(){
   'use strict';
 
-  const ENDPOINT='https://script.google.com/macros/s/AKfycbzd-2TtruGPlfUbRlS7EDFlm7jgBlBUgfM66PJX03zMpZOHFoXBSXBd-rJMX7s71fXk/exec';
+  const ENDPOINT='https://script.google.com/macros/s/AKfycbxBTnuzFvNXOROz4fpGni_exZap2YfSTm5aNWw4eAwnyGe-m9jU3SZriupyFf3yDP-r/exec';
   const SHEET='PTO / Availability Requests';
   const READ_ACTION='neochronoPto';
   const WRITE_ACTION='neochronoPtoWrite';
@@ -257,7 +257,7 @@
       throw new Error('The request could not be found in the Google Sheet after review.');
     }
     if(String(saved.Status||'').trim().toLowerCase()!==String(status||'').trim().toLowerCase()){
-      throw new Error('The Google Sheet did not confirm the requested status change. Check the Code5.gs deployment.');
+      throw new Error('The Google Sheet did not confirm the requested status change. Check the PTO Code4.gs deployment.');
     }
 
     return {ok:true,recordId:id,status:saved.Status,message:'Review saved to Google Sheet.'};
