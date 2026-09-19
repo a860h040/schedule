@@ -203,7 +203,7 @@ function pharmacistSchedulePostToGoogle_(payload) {
     timeoutId = setTimeout(function() {
       finishError(
         'Google did not confirm the schedule transfer. ' +
-        'Make sure Code5.gs is saved, then go to Deploy → Manage deployments → Edit → New version → Deploy. ' +
+        'Make sure Code4.gs is saved, then go to Deploy → Manage deployments → Edit → New version → Deploy. ' +
         'Also confirm the web app is deployed to run as you and can be accessed by the browser.'
       );
     }, 20000);
