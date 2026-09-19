@@ -386,6 +386,19 @@ body:has(.paper-page-shell) .content{
   background:#ffd9d9;
   color:#9c0006;
 }
+.paper-table tr.paper-category-row td{
+  background:#dbe7ef;
+  color:#17384d;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  text-align:left;
+  padding:3px 5px!important;
+  height:20px;
+  border-top:2px solid #17384d!important;
+  border-bottom:1px solid #8ea6b6!important;
+}
+
 
 .paper-unfilled-chip{
   display:block;
