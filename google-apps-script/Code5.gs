@@ -67,6 +67,12 @@ function doPost(e) {
       return neoChronoHandlePtoRead_(requestId, parsed.sheet);
     }
 
+    // Used by the neochrono-data GitHub Action. Returns plain JSON rather
+    // than iframe HTML so the workflow can import Google PTO into GitHub.
+    if (action === 'neochronoPtoExport') {
+      return neoChronoHandlePtoExport_(parsed.sheet);
+    }
+
     if (action === 'neochronoPtoWrite') {
       return neoChronoHandlePtoWrite_(requestId, parsed.sheet, payload);
     }
@@ -278,10 +284,7 @@ function neoChronoHandlePtoRead_(requestId, requestedSheet) {
   lock.waitLock(30000);
   try {
     neoChronoReconcilePtoAutoApprovals_(sheet, 'SYSTEM');
-    var table = neoChronoReadPtoTable_(sheet);
-    var rows = table.rows.map(function(item) {
-      return neoChronoSerializePtoObject_(item.object, ss);
-    });
+    var snapshot = neoChronoPtoSnapshot_(sheet, ss);
 
     return neoChronoBridgeResponse_({
       type: NEOCHRONO_RECEIVER.PTO_MESSAGE_TYPE,
@@ -289,15 +292,63 @@ function neoChronoHandlePtoRead_(requestId, requestedSheet) {
       success: true,
       requestId: requestId,
       sheet: NEOCHRONO_RECEIVER.PTO_SHEET,
-      headers: table.headers,
-      rows: rows,
-      rowCount: rows.length,
-      generatedAt: new Date().toISOString(),
+      headers: snapshot.headers,
+      rows: snapshot.rows,
+      rowCount: snapshot.rowCount,
+      generatedAt: snapshot.generatedAt,
       message: 'PTO data loaded from Google Sheets.'
     });
   } finally {
     lock.releaseLock();
   }
+}
+
+function neoChronoHandlePtoExport_(requestedSheet) {
+  neoChronoValidatePtoSheetName_(requestedSheet);
+
+  var ss = neoChronoSpreadsheet_();
+  var sheet = neoChronoPreparePtoSheet_(ss);
+  var lock = LockService.getScriptLock();
+
+  lock.waitLock(30000);
+  try {
+    neoChronoReconcilePtoAutoApprovals_(sheet, 'SYSTEM');
+    var snapshot = neoChronoPtoSnapshot_(sheet, ss);
+
+    return neoChronoJsonResponse_({
+      ok: true,
+      success: true,
+      sheet: NEOCHRONO_RECEIVER.PTO_SHEET,
+      headers: snapshot.headers,
+      rows: snapshot.rows,
+      rowCount: snapshot.rowCount,
+      generatedAt: snapshot.generatedAt,
+      message: 'PTO export generated for neochrono-data.'
+    });
+  } catch (error) {
+    return neoChronoJsonResponse_({
+      ok: false,
+      success: false,
+      sheet: NEOCHRONO_RECEIVER.PTO_SHEET,
+      message: error && error.message ? error.message : String(error)
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function neoChronoPtoSnapshot_(sheet, ss) {
+  var table = neoChronoReadPtoTable_(sheet);
+  var rows = table.rows.map(function(item) {
+    return neoChronoSerializePtoObject_(item.object, ss);
+  });
+
+  return {
+    headers: table.headers,
+    rows: rows,
+    rowCount: rows.length,
+    generatedAt: new Date().toISOString()
+  };
 }
 
 function neoChronoHandlePtoWrite_(requestId, requestedSheet, payload) {
@@ -344,6 +395,11 @@ function neoChronoHandlePtoWrite_(requestId, requestedSheet, payload) {
 
     SpreadsheetApp.flush();
 
+    // Return the entire confirmed Google PTO snapshot. The NeoChrono browser
+    // commits this snapshot into neochrono-data immediately, then the scheduler
+    // reads only from GitHub.
+    var snapshot = neoChronoPtoSnapshot_(sheet, ss);
+
     return neoChronoBridgeResponse_({
       type: NEOCHRONO_RECEIVER.PTO_MESSAGE_TYPE,
       ok: true,
@@ -355,6 +411,10 @@ function neoChronoHandlePtoWrite_(requestId, requestedSheet, payload) {
       status: result.status || '',
       autoApproved: !!result.autoApproved,
       blockedDates: result.blockedDates || [],
+      headers: snapshot.headers,
+      rows: snapshot.rows,
+      rowCount: snapshot.rowCount,
+      generatedAt: snapshot.generatedAt,
       message: result.message || 'PTO change saved to Google Sheets.'
     });
 
@@ -1068,6 +1128,12 @@ function neoChronoSpreadsheet_() {
   return SpreadsheetApp.openById(
     NEOCHRONO_RECEIVER.SPREADSHEET_ID
   );
+}
+
+function neoChronoJsonResponse_(result) {
+  return ContentService
+    .createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function neoChronoBridgeResponse_(result) {
