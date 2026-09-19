@@ -1,206 +1,194 @@
 /**
- * NeoChrono Schedule Publisher
+ * NeoChrono -> Pharmacists Google Sheet publisher
  *
- * Sends the selected schedule period from the private GitHub workbook to the
- * pharmacist-facing Google Apps Script web app. The receiver writes the data
- * into a sheet named exactly "Schedule".
- *
- * Browser transport intentionally uses a normal HTML form targeted to a hidden
- * iframe. This avoids Google Apps Script CORS limitations while still allowing
- * the receiver to post a verified result back to NeoChrono.
+ * Sends the selected schedule period from the GitHub-backed NeoChrono app
+ * to the Google Apps Script receiver. The receiver writes the data into the
+ * sheet named exactly "Schedule".
  */
 
 const PHARMACIST_SCHEDULE_RECEIVER = Object.freeze({
   WEB_APP_URL: 'https://script.google.com/macros/s/AKfycbyKpDf3Fe6TyvX0vxrQ6_5O18f1DT2ZiEciQbMEC_VObA2WE_COLzXXzwRRMjR17clK/exec',
   SHEET_NAME: 'Schedule',
-  TIMEOUT_MS: 45000
+  HEADERS: Object.freeze([
+    'Generation ID',
+    'Assignment ID',
+    'Date',
+    'Day',
+    'Shift',
+    'Slot',
+    'Assigned Pharmacist',
+    'Username',
+    'Hours',
+    'Credited Hours',
+    'Required Skill',
+    'Coverage For Pharmacist',
+    'Coverage For Username',
+    'Coverage Reason',
+    'Shift Type',
+    'Weekend',
+    'Weekend Group',
+    'Holiday',
+    'Locked',
+    'Manual',
+    'Status',
+    'Warning',
+    'Updated At',
+    'Updated By',
+    'Finalized At'
+  ])
 });
 
-function neoChronoPublishDateKey_(value) {
+function pharmacistSchedulePublishDateKey_(value) {
+  if (value === null || value === undefined || value === '') return '';
+
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return [
+      value.getFullYear(),
+      String(value.getMonth() + 1).padStart(2,'0'),
+      String(value.getDate()).padStart(2,'0')
+    ].join('-');
+  }
+
+  var raw = String(value).trim();
+  var iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
+
   try {
-    if (value instanceof Date) return formatDateKey_(startOfDay_(value));
-    const d = asDate_(value);
+    var d = asDate_(value);
     return d ? formatDateKey_(startOfDay_(d)) : '';
-  } catch (ignore) {
-    return String(value || '').slice(0,10);
+  } catch (_e) {
+    return '';
   }
 }
 
-function neoChronoPublishCell_(header, value) {
-  if (value instanceof Date) {
-    if (
-      header === 'Date' ||
-      header === 'Start Date' ||
-      header === 'End Date' ||
-      header === 'Weekend Saturday' ||
-      header === 'Weekend Sunday' ||
-      header === 'Effective Start' ||
-      header === 'Effective End'
-    ) {
-      return formatDateKey_(startOfDay_(value));
-    }
-    return value.toISOString();
+function pharmacistSchedulePublishCell_(header, value) {
+  if (value === null || value === undefined) return '';
+
+  if (header === 'Date') {
+    return pharmacistSchedulePublishDateKey_(value);
   }
 
-  if (value === undefined || value === null) return '';
+  if (
+    header === 'Updated At' ||
+    header === 'Finalized At'
+  ) {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      return value.toISOString();
+    }
+    return String(value || '');
+  }
+
   return value;
 }
 
-function neoChronoScheduleMatrixForPeriod_(startDate, endDate) {
-  const ss = getDb_();
-  const sheetName =
-    (typeof APP !== 'undefined' && APP.SHEETS && APP.SHEETS.SCHEDULE)
-      ? APP.SHEETS.SCHEDULE
-      : 'Schedule';
-
-  const sh = ss.getSheetByName(sheetName);
-  if (!sh) throw new Error('NeoChrono Schedule sheet was not found.');
-
-  const values = sh.getDataRange().getValues();
-  if (!values.length) throw new Error('The NeoChrono Schedule sheet is empty.');
-
-  const headers = (values[0] || []).map(function(v){ return clean_(v); });
-  const dateIndex = headers.indexOf('Date');
-
-  if (dateIndex < 0) {
-    throw new Error('The Schedule sheet is missing the Date column.');
-  }
-
-  const startKey = neoChronoPublishDateKey_(startDate);
-  const endKey = neoChronoPublishDateKey_(endDate);
+function pharmacistSchedulePayloadRows_(startDate, endDate) {
+  var startKey = pharmacistSchedulePublishDateKey_(startDate);
+  var endKey = pharmacistSchedulePublishDateKey_(endDate);
 
   if (!startKey || !endKey) {
-    throw new Error('A valid Start Date and End Date are required.');
+    throw new Error('Start Date and End Date are required.');
   }
-  if (endKey < startKey) {
-    throw new Error('End Date must be on or after Start Date.');
-  }
-
-  const rows = values.slice(1).filter(function(row){
-    const dk = neoChronoPublishDateKey_(row[dateIndex]);
-    return dk && dk >= startKey && dk <= endKey;
-  });
-
-  if (!rows.length) {
-    throw new Error(
-      'No Schedule rows were found from ' + startKey + ' through ' + endKey + '.'
-    );
+  if (startKey > endKey) {
+    throw new Error('Start Date must be before or equal to End Date.');
   }
 
-  const matrix = [
-    headers,
-    ...rows.map(function(row){
-      return headers.map(function(header, i){
-        return neoChronoPublishCell_(header, row[i]);
-      });
+  var headers = PHARMACIST_SCHEDULE_RECEIVER.HEADERS.slice();
+  var rows = readTable_(APP.SHEETS.SCHEDULE)
+    .filter(function(r) {
+      var dk = pharmacistSchedulePublishDateKey_(r.Date);
+      return dk && dk >= startKey && dk <= endKey;
     })
-  ];
+    .map(function(r) {
+      return headers.map(function(h) {
+        return pharmacistSchedulePublishCell_(h, r[h]);
+      });
+    });
 
   return {
-    matrix: matrix,
     startDate: startKey,
     endDate: endKey,
-    rowCount: rows.length,
-    columnCount: headers.length
+    headers: headers,
+    rows: rows
   };
 }
 
-function neoChronoPostScheduleToReceiver_(payload) {
-  if (
-    typeof document === 'undefined' ||
-    typeof window === 'undefined'
-  ) {
-    throw new Error(
-      'Direct pharmacist schedule publishing requires the NeoChrono web app.'
-    );
-  }
+/**
+ * Cross-origin POST using a normal HTML form targeted at a hidden iframe.
+ * Code4.gs posts a verified result back to the parent window with postMessage.
+ */
+function pharmacistSchedulePostToGoogle_(payload) {
+  return new Promise(function(resolve, reject) {
+    if (typeof document === 'undefined' || typeof window === 'undefined') {
+      reject(new Error('Google Sheet transfer requires the NeoChrono browser app.'));
+      return;
+    }
 
-  return new Promise(function(resolve, reject){
-    const publishId = String(payload.publishId || '');
-    const frameName =
-      'neoScheduleReceiver_' +
-      publishId.replace(/[^A-Za-z0-9_]/g,'_');
+    var transferId = String(payload.transferId || '');
+    var frameName = 'neoScheduleReceiver_' + transferId.replace(/[^A-Za-z0-9_]/g,'_');
+    var iframe = document.createElement('iframe');
+    var form = document.createElement('form');
+    var input = document.createElement('input');
+    var finished = false;
 
-    const iframe = document.createElement('iframe');
     iframe.name = frameName;
-    iframe.id = frameName;
     iframe.style.display = 'none';
     iframe.setAttribute('aria-hidden','true');
 
-    const form = document.createElement('form');
     form.method = 'POST';
     form.action = PHARMACIST_SCHEDULE_RECEIVER.WEB_APP_URL;
     form.target = frameName;
     form.style.display = 'none';
 
-    function hidden(name, value) {
-      const input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = name;
-      input.value = String(value == null ? '' : value);
-      form.appendChild(input);
-    }
-
-    hidden('action','replaceSchedule');
-    hidden('publishId',publishId);
-    hidden('sheet',PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME);
-    hidden('payload',JSON.stringify(payload));
-
-    let done = false;
+    input.type = 'hidden';
+    input.name = 'payload';
+    input.value = JSON.stringify(payload);
+    form.appendChild(input);
 
     function cleanup() {
       window.removeEventListener('message', onMessage);
-      try { form.remove(); } catch (ignore) {}
-      try { iframe.remove(); } catch (ignore) {}
+      try { form.remove(); } catch (_e) {}
+      setTimeout(function() {
+        try { iframe.remove(); } catch (_e) {}
+      }, 250);
     }
 
     function finishError(err) {
-      if (done) return;
-      done = true;
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       cleanup();
       reject(err instanceof Error ? err : new Error(String(err)));
     }
 
-    function finishSuccess(result) {
-      if (done) return;
-      done = true;
+    function onMessage(event) {
+      var data = event && event.data;
+      if (!data || data.type !== 'NEOCHRONO_SCHEDULE_RECEIVER') return;
+      if (String(data.transferId || '') !== transferId) return;
+
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       cleanup();
-      resolve(result);
-    }
 
-    function onMessage(event) {
-      if (event.source !== iframe.contentWindow) return;
-      const data = event.data;
-      if (!data || data.type !== 'NEOCHRONO_SCHEDULE_PUBLISH_RESULT') return;
-      if (String(data.publishId || '') !== publishId) return;
-
-      if (data.ok) {
-        finishSuccess(data);
-      } else {
-        finishError(
-          new Error(
-            data.message ||
-            'The pharmacists Schedule sheet rejected the upload.'
-          )
-        );
+      if (!data.ok) {
+        reject(new Error(data.message || 'Google Sheet receiver reported an error.'));
+        return;
       }
+
+      resolve(data);
     }
 
     window.addEventListener('message', onMessage);
+
+    var timer = setTimeout(function() {
+      finishError(new Error(
+        'The schedule was submitted to Google, but NeoChrono did not receive confirmation. ' +
+        'Confirm Code4.gs is deployed in the receiver Apps Script web app and that access is allowed.'
+      ));
+    }, 45000);
+
     document.body.appendChild(iframe);
     document.body.appendChild(form);
-
-    const timer = setTimeout(function(){
-      finishError(
-        new Error(
-          'The pharmacists Schedule receiver did not confirm the upload within ' +
-          Math.round(PHARMACIST_SCHEDULE_RECEIVER.TIMEOUT_MS / 1000) +
-          ' seconds. Make sure Code4.gs is deployed in the receiver Apps Script project.'
-        )
-      );
-    }, PHARMACIST_SCHEDULE_RECEIVER.TIMEOUT_MS);
 
     try {
       form.submit();
@@ -211,103 +199,75 @@ function neoChronoPostScheduleToReceiver_(payload) {
 }
 
 /**
- * Called by the existing "Finalize & Send" button.
- *
- * 1) Finalizes the selected period in NeoChrono.
- * 2) Reads that exact date range from the GitHub-backed Schedule sheet.
- * 3) Sends it to the pharmacist-facing Apps Script receiver.
- * 4) Receiver clears/replaces the sheet named exactly "Schedule".
+ * Called by the dashboard button "Finalize & Send".
  */
 async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
-  const ctx = requireAdmin_(token);
+  var ctx = requireAdmin_(token);
+  var prepared = pharmacistSchedulePayloadRows_(startDate, endDate);
 
-  const startKey = neoChronoPublishDateKey_(startDate);
-  const endKey = neoChronoPublishDateKey_(endDate);
-
-  if (!startKey || !endKey) {
-    throw new Error('Start Date and End Date are required.');
+  if (!prepared.rows.length) {
+    throw new Error(
+      'There are no Schedule rows from ' +
+      prepared.startDate + ' through ' + prepared.endDate + '.'
+    );
   }
 
-  // "Finalize & Send" should actually finalize before publishing.
-  if (typeof finalizeSchedule === 'function') {
-    finalizeSchedule(token, startKey, endKey, true);
-  }
-
-  const schedule = neoChronoScheduleMatrixForPeriod_(startKey, endKey);
-  const publishId =
-    'PUB_' +
+  var transferId =
+    'NEO-' +
     Date.now() +
-    '_' +
-    Utilities.getUuid().slice(0,8).toUpperCase();
+    '-' +
+    String(Utilities.getUuid()).slice(0,8).toUpperCase();
 
-  const payload = {
+  var payload = {
     action: 'replaceSchedule',
-    publishId: publishId,
-    sheet: PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
-    startDate: schedule.startDate,
-    endDate: schedule.endDate,
-    rows: schedule.rowCount,
-    columns: schedule.columnCount,
-    generatedAt: new Date().toISOString(),
-    values: schedule.matrix
+    transferId: transferId,
+    sheetName: PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
+    headers: prepared.headers,
+    rows: prepared.rows,
+    startDate: prepared.startDate,
+    endDate: prepared.endDate,
+    sentAt: new Date().toISOString(),
+    sentBy: ctx.username || ''
   };
 
-  let receipt;
-  try {
-    receipt = await neoChronoPostScheduleToReceiver_(payload);
-  } catch (err) {
+  var receipt = await pharmacistSchedulePostToGoogle_(payload);
+
+  if (
+    Number(receipt.transferredRows) !== prepared.rows.length ||
+    String(receipt.receiverSheetName || '') !== PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
+  ) {
     throw new Error(
-      'Send failed: ' +
-      (err && err.message ? err.message : String(err))
+      'Google responded, but transfer verification did not match. ' +
+      'NeoChrono sent ' + prepared.rows.length +
+      ' rows and Google reported ' + Number(receipt.transferredRows || 0) + '.'
     );
   }
 
   if (typeof audit_ === 'function') {
     audit_(
       'SEND_SCHEDULE_TO_GOOGLE',
-      schedule.startDate + ' through ' + schedule.endDate,
+      prepared.startDate + ' through ' + prepared.endDate,
       '', '', '', '', '',
       'No', '',
-      'Published ' + schedule.rowCount +
-        ' Schedule row(s) to Google receiver web app. Target sheet: ' +
-        PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME +
-        '. Publish ID: ' + publishId + '.',
+      'Sent ' + prepared.rows.length +
+      ' Schedule row(s) to Google receiver sheet "' +
+      PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME +
+      '". Transfer ID: ' + transferId + '.',
       ctx.username
     );
   }
 
   return {
     ok: true,
-    transferredRows: Number(receipt.transferredRows || schedule.rowCount),
-    transferredColumns: Number(receipt.transferredColumns || schedule.columnCount),
-    receiverSpreadsheetName:
-      receipt.spreadsheetName ||
-      'Pharmacists Schedule',
-    receiverSheetName:
-      receipt.sheetName ||
-      PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
-    receiverUrl:
-      receipt.receiverUrl ||
-      PHARMACIST_SCHEDULE_RECEIVER.WEB_APP_URL,
-    publishId: publishId,
-    validationWasRequired: false,
+    transferId: transferId,
+    transferredRows: prepared.rows.length,
+    transferredColumns: prepared.headers.length,
+    receiverSpreadsheetId: receipt.receiverSpreadsheetId || '',
+    receiverSpreadsheetName: receipt.receiverSpreadsheetName || 'Pharmacists Schedule',
+    receiverSheetName: receipt.receiverSheetName || PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
+    receiverUrl: receipt.receiverUrl || '',
     message:
-      receipt.message ||
-      'Schedule was finalized and uploaded to the Google Sheet named Schedule.'
-  };
-}
-
-/**
- * Browser-side connectivity check. This verifies that the receiver URL is
- * configured; the real write is verified during Finalize & Send through the
- * postMessage receipt returned by Code4.gs.
- */
-function testPharmacistScheduleReceiverConnection() {
-  return {
-    ok: true,
-    webAppUrl: PHARMACIST_SCHEDULE_RECEIVER.WEB_APP_URL,
-    sheetName: PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
-    message:
-      'Receiver is configured. Use Finalize & Send to verify the deployed Code4.gs receiver.'
+      'Schedule was verified in the Google Sheet tab "' +
+      PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME + '".'
   };
 }
