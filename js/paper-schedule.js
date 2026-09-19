@@ -65,7 +65,25 @@
       .toLowerCase()
       .replace(/\s+/g,'');
 
+    var employmentType=String(user&&user['Employment Type']||'')
+      .trim()
+      .toUpperCase();
+
     var skills=paperUserSkillCodes_(user);
+
+    /*
+     * PRN pharmacists always appear in their own section at the bottom,
+     * immediately before the UNFILLED row. This takes priority over every
+     * other visual group so a PRN pharmacist is never mixed into Night,
+     * Resident, Regular, or 7-on/7-off sections.
+     */
+    if(employmentType==='PRN'){
+      return {
+        rank:4,
+        key:'PRN',
+        label:'PRN Pharmacists'
+      };
+    }
 
     /*
      * Put dedicated night pharmacists together first.
@@ -162,6 +180,10 @@
      *   2. Residents
      *   3. Regular pharmacists
      *   4. Non-night 7-on/7-off pharmacists
+     *   5. PRN pharmacists
+     *
+     * UNFILLED is rendered after all pharmacist groups, so PRN is the
+     * final pharmacist section immediately above UNFILLED.
      *
      * Within each section:
      *   preferred/home shift first, then pharmacist name.
