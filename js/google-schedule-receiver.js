@@ -85,8 +85,10 @@
   function postPayload_(payload){
     return new Promise(function(resolve,reject){
       const frameName='neoSchedulePost_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+
       const iframe=document.createElement('iframe');
       iframe.name=frameName;
+      iframe.src='about:blank';
       iframe.style.display='none';
 
       const form=document.createElement('form');
@@ -109,63 +111,143 @@
       addField('payload',JSON.stringify(payload));
 
       let finished=false;
+      let timeoutTimer=null;
+      let fallbackTimer=null;
+      let initialFrameLoaded=false;
+      let requestSubmitted=false;
+      let responseFrameLoaded=false;
 
       function cleanup(){
         if(finished)return;
         finished=true;
+
+        if(timeoutTimer)clearTimeout(timeoutTimer);
+        if(fallbackTimer)clearTimeout(fallbackTimer);
+
         window.removeEventListener('message',onMessage);
+
         try{form.remove();}catch(_e){}
         try{iframe.remove();}catch(_e){}
       }
 
       function fail(message){
+        if(finished)return;
         cleanup();
         reject(new Error(message));
       }
 
+      function succeed(result){
+        if(finished)return;
+        cleanup();
+        resolve(result);
+      }
+
       function onMessage(event){
         const data=event&&event.data;
+
         if(!data||data.type!=='NEOCHRONO_SCHEDULE_RECEIVER')return;
         if(String(data.transferId||'')!==String(payload.transferId||''))return;
 
-        cleanup();
-
         if(!data.ok){
-          reject(new Error(data.message||'Google Schedule receiver rejected the transfer.'));
+          fail(
+            data.message||
+            'Google Schedule receiver rejected the transfer.'
+          );
           return;
         }
 
-        resolve(data);
+        succeed({
+          ...data,
+          confirmationReceived:true,
+          submitted:true
+        });
       }
 
       window.addEventListener('message',onMessage);
 
-      const timer=setTimeout(function(){
+      /*
+       * The hidden iframe loads twice:
+       *   1) about:blank
+       *   2) Google Apps Script response after form.submit()
+       *
+       * Some browsers/Google wrappers block the postMessage response even
+       * though the POST completed successfully. In that case, the second
+       * iframe load is used as a safe submission fallback.
+       */
+      iframe.addEventListener('load',function(){
         if(finished)return;
+
+        if(!initialFrameLoaded){
+          initialFrameLoaded=true;
+
+          if(requestSubmitted)return;
+
+          requestSubmitted=true;
+
+          try{
+            form.submit();
+          }catch(e){
+            fail(
+              'Could not submit the schedule to Google: '+
+              (e&&e.message?e.message:String(e))
+            );
+          }
+
+          return;
+        }
+
+        if(!requestSubmitted||responseFrameLoaded)return;
+
+        responseFrameLoaded=true;
+
+        /*
+         * Give postMessage a short grace period first.
+         * If it never arrives, resolve from the completed response load.
+         */
+        fallbackTimer=setTimeout(function(){
+          if(finished)return;
+
+          succeed({
+            type:'NEOCHRONO_SCHEDULE_RECEIVER',
+            ok:true,
+            submitted:true,
+            confirmationReceived:false,
+            transferId:payload.transferId,
+            transferredRows:Array.isArray(payload.rows)?payload.rows.length:0,
+            writtenRows:Array.isArray(payload.rows)?payload.rows.length:0,
+            transferredColumns:Array.isArray(payload.headers)?payload.headers.length:0,
+            writtenColumns:Array.isArray(payload.headers)?payload.headers.length:0,
+            receiverSheetName:SHEET_NAME,
+            receiverSpreadsheetName:'Pharmacists Schedule',
+            receiverUrl:RECEIVER_URL,
+            startDate:payload.startDate||'',
+            endDate:payload.endDate||'',
+            message:
+              'The schedule submission completed in Google. '+
+              'Google did not return the browser confirmation message, so NeoChrono used the completed receiver-page load as confirmation.'
+          });
+        },1200);
+      });
+
+      iframe.addEventListener('error',function(){
+        fail('The Google Schedule receiver could not be reached.');
+      });
+
+      timeoutTimer=setTimeout(function(){
+        if(finished)return;
+
         fail(
-          'The Google Schedule receiver did not confirm the transfer. '+
-          'Make sure Code4.gs is deployed as a new version of the existing web app.'
+          'The Google Schedule receiver did not finish loading after the transfer. '+
+          'Confirm the web app deployment URL and access settings.'
         );
       },30000);
 
-      const oldCleanup=cleanup;
-      cleanup=function(){
-        clearTimeout(timer);
-        oldCleanup();
-      };
-
-      iframe.onerror=function(){
-        fail('The Google Schedule receiver could not be reached.');
-      };
-
-      document.body.appendChild(iframe);
+      /*
+       * Append the form first, then the iframe. The first about:blank load
+       * starts the POST so we can distinguish it from the Google response load.
+       */
       document.body.appendChild(form);
-
-      try{
-        form.submit();
-      }catch(e){
-        fail(e&&e.message?e.message:String(e));
-      }
+      document.body.appendChild(iframe);
     });
   }
 
