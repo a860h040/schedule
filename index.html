@@ -711,7 +711,7 @@
 
 <div id="modalRoot"></div>
 
-<script src="js/google-schedule-receiver.js?v=20260919-schedrecv4"></script>
+<script src="js/google-schedule-receiver.js?v=20260919-schedrecv5"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
 <script src="js/legacy/main-backend.js?v=20260919-customdates1"></script>
@@ -1250,7 +1250,7 @@ async function finalizeAndSendUI(){
   if(!confirm(
     'Send the NeoChrono schedule from '+start+' through '+end+
     ' to the Google Sheet tab named "Schedule"?\n\n'+
-    'The existing contents of the receiver Schedule sheet will be replaced.'
+    'Only schedule rows inside this selected date range will be replaced. Existing schedule rows outside this range will be preserved.'
   ))return;
 
   try{
