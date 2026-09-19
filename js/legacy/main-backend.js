@@ -28,7 +28,7 @@ const APP = Object.freeze({
     ADMINS: ['Admin ID','Admin Name','Username','Temporary Password','Password Hash','Password Salt','Active','Must Change Password','Updated At','Updated By'],
     USERS: [
       'Employee ID','Pharmacist Name','Username','Temporary Password','Password Hash','Password Salt','Active','Role',
-      'Schedule Type','Preceptor','Resident','Weekend Group','Weekly Hour Maximum','Target Weekly Hours',
+      'Schedule Type','Employment Type','Preceptor','Resident','Weekend Group','Weekly Hour Maximum','Target Weekly Hours',
       'Maximum Evening Shifts Per Month','Preferred Start Time','Preferred End Time','Custom Hours Enabled',
       'Custom Hours Mode','Preferred Shift Type','Off-Day Coverage Skills','Weekend Eligible','Evening Eligible','Night Eligible',
       'Resident Covers Regular','Resident Weekends','Resident Evenings','Resident Nights','Rotation Anchor Date',
@@ -3012,6 +3012,7 @@ function saveEmployee(token,data) {
     APP.HEADERS.USERS.forEach(h => { if (values[h] === undefined) values[h] = ''; });
     if (!values.Active) values.Active = 'Yes';
     if (!values['Schedule Type']) values['Schedule Type'] = 'Regular';
+    if (!values['Employment Type']) values['Employment Type'] = 'Regular';
     if (!values['Weekly Hour Maximum']) values['Weekly Hour Maximum'] = num_(getSettingsMap_()['Weekly Hours Limit'],40);
     if (!values['Target Weekly Hours']) values['Target Weekly Hours'] = 40;
     if (!values['Maximum Evening Shifts Per Month']) values['Maximum Evening Shifts Per Month'] = 7;
