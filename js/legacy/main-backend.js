@@ -855,23 +855,47 @@ function preflightScheduleGeneration(token, options) {
   if(end<start) return {ok:false,stage:'PERIOD',errors:['End Date must be on or after Start Date.'],warnings:[]};
   const totalDays=daysBetween_(start,end)+1;
   if(totalDays>181) return {ok:false,stage:'PERIOD',errors:['For safety, one generation cannot exceed 181 days.'],warnings:[]};
+
+  const periodWarnings=(cfg.warnings||[]).slice();
   const hasRegularEmployees=model.users.some(u=>yes_(u.Active)&&regularFiveDayRuleApplies_(u));
-  if(hasRegularEmployees&&(dayIndex_(start)!==0||dayIndex_(end)!==6||totalDays%7!==0)){
-    return {ok:false,stage:'PERIOD_ALIGNMENT',errors:['The five-day scheduling rule requires the generation period to start on Sunday, end on Saturday, and contain complete Sunday-Saturday weeks.'],warnings:[]};
+  if(
+    hasRegularEmployees &&
+    (dayIndex_(start)!==0 || dayIndex_(end)!==6 || totalDays%7!==0)
+  ){
+    periodWarnings.unshift(
+      'The selected range begins or ends in a partial Sunday-Saturday week. The exact five-workday rule will be enforced only for complete Sunday-Saturday weeks fully contained inside the selected range.'
+    );
   }
-  const mode=clean_(options.mode||'NEW').toUpperCase();
+
   const existing=readTable_(APP.SHEETS.SCHEDULE);
   const overlap=existing.filter(r=>inDateRange_(asDate_(r.Date),start,end));
   const finalized=overlap.filter(r=>asDate_(r['Finalized At']));
-  if(finalized.length&&!yes_(options.allowFinalizedOverlap)){
-    return {ok:false,stage:'OVERLAP',errors:['The selected dates overlap a finalized schedule. Unfinalize the period before regenerating.'],warnings:[]};
+  const locked=overlap.filter(r=>yes_(r.Locked));
+  const overlapDates=[...new Set(overlap.map(r=>formatDateKey_(startOfDay_(asDate_(r.Date)))).filter(Boolean))].sort();
+
+  if(overlap.length){
+    periodWarnings.unshift(
+      'OVERWRITE WARNING: '+overlap.length+' existing schedule row(s) on '+overlapDates.length+
+      ' date(s) fall inside the selected range and will be replaced if the administrator confirms.'
+    );
   }
-  if(mode==='NEW'&&overlap.length){
-    return {ok:false,stage:'OVERLAP',errors:['The selected dates overlap an existing schedule. Choose Regenerate Existing Period instead of Generate New Period.'],warnings:[]};
-  }
+
   const tz=getTz_();
   const batchId='GEN_'+Utilities.formatDate(start,tz,'yyyyMMdd')+'_'+Utilities.formatDate(end,tz,'yyyyMMdd')+'_'+Utilities.formatDate(new Date(),tz,'HHmmss');
-  return serialize_({ok:true,batchGenerationId:batchId,startDate:formatDateKey_(start),endDate:formatDateKey_(end),totalDays:totalDays,totalWeeks:Math.ceil(totalDays/7),warnings:cfg.warnings});
+  return serialize_({
+    ok:true,
+    batchGenerationId:batchId,
+    startDate:formatDateKey_(start),
+    endDate:formatDateKey_(end),
+    totalDays:totalDays,
+    totalWeeks:Math.ceil(totalDays/7),
+    overlapCount:overlap.length,
+    overlapDateCount:overlapDates.length,
+    finalizedOverlapCount:finalized.length,
+    lockedOverlapCount:locked.length,
+    requiresOverwriteConfirmation:overlap.length>0,
+    warnings:periodWarnings
+  });
 }
 
 function generateSchedule(token, options) {
@@ -895,33 +919,31 @@ function generateSchedule(token, options) {
     if (end < start) throw new Error('End Date must be on or after Start Date.');
     if (daysBetween_(start,end) > 180) throw new Error('For safety, one generation cannot exceed 181 days.');
 
-    // Exact five-day weeks are defined Sunday through Saturday. Requiring a
-    // complete-week generation period prevents partial boundary weeks from
-    // silently producing fewer than five workdays.
-    const hasRegularEmployees = model.users.some(
-      u => yes_(u.Active) && regularFiveDayRuleApplies_(u)
-    );
-    if (hasRegularEmployees && (dayIndex_(start)!==0 || dayIndex_(end)!==6)) {
+    // The administrator may generate any calendar date range. Partial
+    // Sunday-Saturday boundary weeks are allowed. Exact five-workday validation
+    // still applies to every complete Sunday-Saturday week fully inside the range.
+    const mode = 'OVERWRITE';
+    const existing = readTable_(APP.SHEETS.SCHEDULE);
+    const overlap = existing.filter(r => inDateRange_(asDate_(r.Date),start,end));
+
+    // Never silently replace an existing schedule. The browser preflight must
+    // obtain explicit administrator confirmation and pass overwriteConfirmed.
+    if (overlap.length && !yes_(options.overwriteConfirmed)) {
       return {
         ok:false,
-        stage:'PERIOD_ALIGNMENT',
-        errors:['The five-day scheduling rule requires the generation period to start on Sunday and end on Saturday. The default is now 56 days (8 complete weeks).'],
-        warnings:['Selected period: '+formatDateKey_(start)+' through '+formatDateKey_(end)+'.']
+        stage:'OVERLAP_CONFIRMATION_REQUIRED',
+        errors:[
+          'The selected dates contain '+overlap.length+
+          ' existing schedule row(s). Confirm the overwrite warning before generating.'
+        ],
+        warnings:[]
       };
     }
 
-    const mode = clean_(options.mode || 'NEW').toUpperCase();
-    const existing = readTable_(APP.SHEETS.SCHEDULE);
-    const overlap = existing.filter(r => inDateRange_(asDate_(r.Date),start,end));
-    const finalized = overlap.filter(r => asDate_(r['Finalized At']));
-    if (finalized.length && !yes_(options.allowFinalizedOverlap)) {
-      return {ok:false, stage:'OVERLAP', errors:['The selected dates overlap a finalized schedule. Unfinalize or explicitly allow finalized overlap before regenerating.'], warnings:[]};
-    }
-    if (mode === 'NEW' && overlap.length) {
-      return {ok:false, stage:'OVERLAP', errors:['The selected dates overlap an existing schedule. Choose Regenerate Existing Period instead of Generate New Period.'], warnings:[]};
-    }
-
-    const preserved = mode === 'REGENERATE' ? overlap.filter(r => yes_(r.Locked)) : [];
+    // Confirmed overwrite means EVERYTHING inside the selected date range is
+    // replaced, including previously locked/finalized rows. Rows outside the
+    // selected range remain untouched.
+    const preserved = [];
     const generationId = clean_(options.batchGenerationId) || makeGenerationId_(start,end);
     const slots = createRequiredSlots_(model,start,end,generationId);
     const preservedKeys = new Set(preserved.map(r => slotKey_(dateKey_(r.Date),clean_(r.Shift),num_(r.Slot,1))));
@@ -2374,10 +2396,9 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
   }
 
 
-  // v12 regular work-pattern validation: because generation is restricted to
-  // complete Sunday-Saturday weeks, every regular pharmacist must have exactly
-  // five workdays in every generated week. Weekend days count normally; a
-  // Saturday belongs to the ending week and Sunday belongs to the new week.
+  // Regular work-pattern validation. Custom date ranges may begin/end midweek,
+  // so exact five-workday validation applies only to complete Sunday-Saturday
+  // weeks fully contained in the selected range. Weekend days count normally.
   const regularUsers=model.users.filter(u=>yes_(u.Active)&&regularFiveDayRuleApplies_(u));
   weekStartsInRange_(start,end,model.settings.weekStart).forEach(ws=>{
     const we=addDays_(ws,6);
@@ -2466,7 +2487,13 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
   }
 
   // Validate the regular-pharmacist period-hour requirement inside the selected generated period.
-  if(!validationOptions.skipPeriodHours){
+  const selectedPeriodDays=daysBetween_(start,end)+1;
+  const configuredPeriodDays=num_(model.settings.raw['Default Schedule Days'],56);
+  const enforceExactPeriodHours=
+    !validationOptions.skipPeriodHours &&
+    selectedPeriodDays>=configuredPeriodDays;
+
+  if(enforceExactPeriodHours){
   // True 7-on/7-off pharmacists are governed by their block rotation instead.
   const periodHours={};
 
@@ -2510,6 +2537,18 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
     }
   });
 
+  }
+
+  if(
+    !validationOptions.skipPeriodHours &&
+    selectedPeriodDays<configuredPeriodDays
+  ){
+    warnings.push(
+      'Selected range is '+selectedPeriodDays+' day(s), shorter than the configured '+
+      configuredPeriodDays+'-day schedule period. The exact '+
+      num_(model.settings.periodHoursTarget,320)+
+      '-hour period target is not enforced for this shorter custom range.'
+    );
   }
 
   assignments.filter(a=>a.status==='UNFILLED').forEach(a=>warnings.push(a.dateKey+' '+a.shiftCode+' slot '+a.slot+' is UNFILLED.'));
