@@ -5,20 +5,48 @@
   const RECEIVER_URL='https://script.google.com/macros/s/AKfycbyKpDf3Fe6TyvX0vxrQ6_5O18f1DT2ZiEciQbMEC_VObA2WE_COLzXXzwRRMjR17clK/exec';
   const SHEET_NAME='Schedule';
 
-  function cleanDate_(value){
-    if(value==null||value==='')return '';
+  const HEADERS=[
+    'Generation ID',
+    'Assignment ID',
+    'Date',
+    'Day',
+    'Shift',
+    'Slot',
+    'Assigned Pharmacist',
+    'Username',
+    'Hours',
+    'Credited Hours',
+    'Required Skill',
+    'Coverage For Pharmacist',
+    'Coverage For Username',
+    'Coverage Reason',
+    'Shift Type',
+    'Weekend',
+    'Weekend Group',
+    'Holiday',
+    'Locked',
+    'Manual',
+    'Status',
+    'Warning',
+    'Updated At',
+    'Updated By',
+    'Finalized At'
+  ];
+
+  function clean_(value){
+    if(value===null||value===undefined)return '';
     if(value instanceof Date&&!isNaN(value))return value.toISOString();
     return String(value);
   }
 
-  function rowDateKey_(row){
-    const raw=cleanDate_(row&&row.Date);
+  function dateKey_(row){
+    const raw=clean_(row&&row.Date);
     return raw?raw.slice(0,10):'';
   }
 
   function scheduleRows_(startDate,endDate){
     return (State.data.schedule||[]).filter(function(r){
-      const dk=rowDateKey_(r);
+      const dk=dateKey_(r);
       if(!dk)return false;
       if(startDate&&dk<startDate)return false;
       if(endDate&&dk>endDate)return false;
@@ -26,39 +54,36 @@
     });
   }
 
-  function scheduleHeaders_(rows){
-    const preferred=[
-      'Assignment ID','Date','Day','Shift','Slot','Required Skill',
-      'Assigned Pharmacist','Username','Hours','Credited Hours','Shift Type',
-      'Weekend','Weekend Group','Holiday','Status','Locked','Manual',
-      'Warning','Reason','Generation ID','Finalized','Finalized At',
-      'Coverage For Pharmacist','Coverage Type','Updated At','Updated By'
-    ];
-    const set=new Set();
-    (rows||[]).forEach(r=>Object.keys(r||{}).forEach(k=>set.add(k)));
-    const out=preferred.filter(h=>set.has(h));
-    [...set].forEach(h=>{if(!out.includes(h))out.push(h);});
-    return out;
+  function makeTransferId_(){
+    if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();
+    return 'TX-'+Date.now()+'-'+Math.random().toString(36).slice(2);
   }
 
   function payload_(startDate,endDate){
     const rows=scheduleRows_(startDate,endDate);
-    if(!rows.length)throw new Error('No schedule rows were found in the selected date range.');
 
-    const headers=scheduleHeaders_(rows);
+    if(!rows.length){
+      throw new Error('No schedule rows were found in the selected date range.');
+    }
+
     return {
       action:'replaceSchedule',
-      sheet:SHEET_NAME,
+      sheetName:SHEET_NAME,
+      transferId:makeTransferId_(),
       startDate:startDate||'',
       endDate:endDate||'',
       sentAt:new Date().toISOString(),
-      headers:headers,
-      rows:rows.map(r=>headers.map(h=>cleanDate_(r[h])))
+      headers:HEADERS.slice(),
+      rows:rows.map(function(r){
+        return HEADERS.map(function(h){
+          return clean_(r[h]);
+        });
+      })
     };
   }
 
-  function postForm_(payload){
-    return new Promise((resolve,reject)=>{
+  function postPayload_(payload){
+    return new Promise(function(resolve,reject){
       const frameName='neoSchedulePost_'+Date.now()+'_'+Math.random().toString(36).slice(2);
       const iframe=document.createElement('iframe');
       iframe.name=frameName;
@@ -70,153 +95,117 @@
       form.target=frameName;
       form.style.display='none';
 
-      function add(name,value){
+      function addField(name,value){
         const input=document.createElement('input');
         input.type='hidden';
         input.name=name;
-        input.value=String(value==null?'':value);
+        input.value=String(value===null||value===undefined?'':value);
         form.appendChild(input);
       }
 
-      add('action','replaceSchedule');
-      add('sheet',SHEET_NAME);
-      add('sentAt',payload.sentAt||'');
-      add('payload',JSON.stringify(payload));
+      addField('action','replaceSchedule');
+      addField('sheet',SHEET_NAME);
+      addField('transferId',payload.transferId);
+      addField('payload',JSON.stringify(payload));
 
-      let submitted=false;
-      const timer=setTimeout(()=>{
+      let finished=false;
+
+      function cleanup(){
+        if(finished)return;
+        finished=true;
+        window.removeEventListener('message',onMessage);
         try{form.remove();}catch(_e){}
         try{iframe.remove();}catch(_e){}
-        if(submitted)resolve();
-        else reject(new Error('The Google Schedule receiver could not be submitted.'));
-      },1200);
+      }
 
-      iframe.onload=()=>{
-        if(!submitted)return;
+      function fail(message){
+        cleanup();
+        reject(new Error(message));
+      }
+
+      function onMessage(event){
+        const data=event&&event.data;
+        if(!data||data.type!=='NEOCHRONO_SCHEDULE_RECEIVER')return;
+        if(String(data.transferId||'')!==String(payload.transferId||''))return;
+
+        cleanup();
+
+        if(!data.ok){
+          reject(new Error(data.message||'Google Schedule receiver rejected the transfer.'));
+          return;
+        }
+
+        resolve(data);
+      }
+
+      window.addEventListener('message',onMessage);
+
+      const timer=setTimeout(function(){
+        if(finished)return;
+        fail(
+          'The Google Schedule receiver did not confirm the transfer. '+
+          'Make sure Code4.gs is deployed as a new version of the existing web app.'
+        );
+      },30000);
+
+      const oldCleanup=cleanup;
+      cleanup=function(){
         clearTimeout(timer);
-        setTimeout(()=>{
-          try{form.remove();}catch(_e){}
-          try{iframe.remove();}catch(_e){}
-          resolve();
-        },150);
+        oldCleanup();
       };
 
-      iframe.onerror=()=>{
-        clearTimeout(timer);
-        try{form.remove();}catch(_e){}
-        try{iframe.remove();}catch(_e){}
-        reject(new Error('The Google Schedule receiver could not be reached.'));
+      iframe.onerror=function(){
+        fail('The Google Schedule receiver could not be reached.');
       };
 
       document.body.appendChild(iframe);
       document.body.appendChild(form);
 
       try{
-        submitted=true;
         form.submit();
       }catch(e){
-        clearTimeout(timer);
-        try{form.remove();}catch(_e){}
-        try{iframe.remove();}catch(_e){}
-        reject(e);
+        fail(e&&e.message?e.message:String(e));
       }
-    });
-  }
-
-  function statusJsonp_(expectedSentAt){
-    return new Promise((resolve,reject)=>{
-      const cb='__neoScheduleReceiverCb_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-      const script=document.createElement('script');
-      const timer=setTimeout(()=>{
-        cleanup();
-        reject(new Error('The receiver did not confirm the schedule transfer.'));
-      },15000);
-
-      function cleanup(){
-        clearTimeout(timer);
-        try{delete window[cb];}catch(_e){window[cb]=undefined;}
-        if(script.parentNode)script.parentNode.removeChild(script);
-      }
-
-      window[cb]=function(data){
-        cleanup();
-        if(!data||data.success===false){
-          reject(new Error(data&&data.message?data.message:'Receiver verification failed.'));
-          return;
-        }
-        resolve(data);
-      };
-
-      script.onerror=function(){
-        cleanup();
-        reject(new Error('Could not verify the pharmacists Schedule sheet.'));
-      };
-
-      const qs=new URLSearchParams({
-        action:'status',
-        sheet:SHEET_NAME,
-        callback:cb,
-        expectedSentAt:expectedSentAt||'',
-        _:String(Date.now())
-      });
-      script.src=RECEIVER_URL+'?'+qs.toString();
-      script.async=true;
-      document.head.appendChild(script);
     });
   }
 
   async function sendSchedule(startDate,endDate){
     const payload=payload_(startDate,endDate);
+    const result=await postPayload_(payload);
 
-    await postForm_(payload);
+    const expectedRows=payload.rows.length;
+    const gotRows=Number(result.transferredRows||0);
+    const gotCols=Number(result.transferredColumns||0);
 
-    // Give Apps Script a moment to finish writing before verification.
-    let lastError=null;
-    for(let attempt=0;attempt<7;attempt++){
-      await new Promise(r=>setTimeout(r,1000+attempt*700));
-      try{
-        const status=await statusJsonp_(payload.sentAt);
-        const expectedRows=payload.rows.length;
-        const receiverRows=Number(status.dataRows||0);
-
-        const receiverSentAt=String(status.lastSentAt||'');
-        const exactUpload=receiverSentAt===String(payload.sentAt||'');
-
-        if(receiverRows===expectedRows&&exactUpload){
-          return {
-            ok:true,
-            transferredRows:expectedRows,
-            transferredColumns:payload.headers.length,
-            receiverSheetName:SHEET_NAME,
-            receiverSpreadsheetName:status.spreadsheetName||'Pharmacists Schedule',
-            receiverUrl:status.spreadsheetUrl||RECEIVER_URL,
-            receiverLastReceivedAt:status.lastReceivedAt||'',
-            receiverLastSentAt:receiverSentAt,
-            message:'Schedule verified in Google Sheet.'
-          };
-        }
-
-        if(!exactUpload){
-          lastError=new Error(
-            'Google still shows the previous upload. The new Schedule payload was not confirmed by Code4.gs.'
-          );
-        }else{
-          lastError=new Error(
-            'Google confirmed the new upload, but the Schedule sheet has '+receiverRows+
-            ' row(s) while NeoChrono sent '+expectedRows+'.'
-          );
-        }
-      }catch(e){
-        lastError=e;
-      }
+    if(gotRows!==expectedRows){
+      throw new Error(
+        'Google confirmed the transfer, but row count does not match. '+
+        'NeoChrono sent '+expectedRows+' row(s); Google wrote '+gotRows+'.'
+      );
     }
 
-    throw lastError||new Error('The Google receiver did not confirm this exact schedule upload.');
+    if(gotCols!==HEADERS.length){
+      throw new Error(
+        'Google confirmed the transfer, but expected 25 columns and received '+gotCols+'.'
+      );
+    }
+
+    return {
+      ok:true,
+      transferredRows:gotRows,
+      transferredColumns:gotCols,
+      receiverSheetName:result.receiverSheetName||SHEET_NAME,
+      receiverSpreadsheetName:result.receiverSpreadsheetName||'Pharmacists Schedule',
+      receiverUrl:result.receiverUrl||RECEIVER_URL,
+      transferId:payload.transferId,
+      message:result.message||'Schedule written to Google Sheet.'
+    };
   }
 
   window.__neoScheduleReceiver={
     url:RECEIVER_URL,
     sheet:SHEET_NAME,
+    headers:HEADERS.slice(),
     sendSchedule:sendSchedule
   };
 })();
