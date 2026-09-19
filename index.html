@@ -563,6 +563,81 @@
 .skill-profile-sub{font-size:9px;color:#87949c;margin-top:2px}
 .skill-profile-add{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px}
 
+
+
+/* Pharmacist profile photos ------------------------------------------------ */
+.employee-photo-img{
+  width:100%;
+  height:100%;
+  display:block;
+  object-fit:cover;
+  object-position:center;
+  border-radius:inherit;
+}
+.employee-photo-fallback{
+  display:grid;
+  place-items:center;
+  width:100%;
+  height:100%;
+}
+.pharm-v32-avatar.has-photo,
+.rotation-avatar.has-photo{
+  background:#e8eef1!important;
+  overflow:hidden;
+}
+.employee-photo-editor{
+  display:grid;
+  grid-template-columns:92px minmax(0,1fr);
+  gap:14px;
+  align-items:center;
+  padding:12px;
+  margin-bottom:12px;
+  border:1px solid #dfe7eb;
+  border-radius:16px;
+  background:#f8fafb;
+}
+.employee-photo-editor.new-employee{
+  opacity:.82;
+}
+.employee-photo-preview{
+  width:86px;
+  height:86px;
+  border-radius:22px;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  background:linear-gradient(145deg,#163e4a,#0c8b83);
+  color:#fff;
+  font-size:22px;
+  font-weight:950;
+  border:3px solid #fff;
+  box-shadow:0 5px 16px rgba(27,67,78,.16);
+}
+.employee-photo-preview.has-photo{
+  background:#e8eef1;
+}
+.employee-photo-editor-copy strong{
+  display:block;
+  color:#243844;
+  font-size:13px;
+}
+.employee-photo-editor-copy p{
+  margin:4px 0 9px;
+  color:#73828b;
+  font-size:9px;
+  line-height:1.45;
+}
+.employee-photo-actions{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-bottom:5px;
+}
+@media(max-width:620px){
+  .employee-photo-editor{
+    grid-template-columns:1fr;
+  }
+}
 </style>
 </head>
 <body>
@@ -598,7 +673,7 @@
 <div id="modalRoot"></div>
 
 <script src="js/google-pto-source.js?v=20260918-googlepto1"></script>
-<script src="js/github-legacy-runtime.js?v=20260918-googlepto1"></script>
+<script src="js/github-legacy-runtime.js?v=20260919-photos1"></script>
 <script src="js/legacy/main-backend.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
@@ -1100,6 +1175,188 @@ function employeeComparisonSummary(month){const selected=selectedCalendarEmploye
 function calItem(r){const t=String(r['Shift Type']||'').toLowerCase(),cls=[t,r.Status==='UNFILLED'?'unfilled':'',yes(r.Locked)?'locked':'',yes(r.Manual)?'manual':''].join(' '),sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{},time=[sh.Start,sh.End].filter(Boolean).join('–'),cover=r['Coverage For Pharmacist']?`Covering ${r['Coverage For Pharmacist']} — ${r['Coverage Reason']||'coverage'}`:'';const detail=[time,cover,r.Warning].filter(Boolean).join(' · ');return `<div class="cal-item ${cls}" data-assignment-id="${attr(r['Assignment ID'])}" data-date="${attr(r.Date)}" data-shift="${attr(r.Shift)}" data-slot="${attr(num(r.Slot,1))}" onclick="openAssignmentFromCalendarCard(this)"><b>${esc(r.Shift)}${num(r.Slot,1)>1?' #'+r.Slot:''} · ${esc(r['Assigned Pharmacist'])}</b><span>${esc(detail)}</span></div>`}
 function openAssignmentFromCalendarCard(el){openAssignmentModal(el.dataset.assignmentId||'',el.dataset.date||'',el.dataset.shift||'',num(el.dataset.slot,1))}
 
+
+function employeePhotoAvatar_(u,cls){
+  const eid=String((u&&u['Employee ID'])||'');
+  const name=String((u&&u['Pharmacist Name'])||'Unnamed Pharmacist');
+  return '<div class="'+attr(cls||'pharm-v32-avatar')+'" data-employee-photo-id="'+attr(eid)+'" data-employee-photo-name="'+attr(name)+'">'+
+    '<span class="employee-photo-fallback">'+esc(peopleInitials_(name))+'</span>'+
+  '</div>';
+}
+
+async function hydrateEmployeePhotos_(root){
+  if(!window.__neoRuntime||typeof window.__neoRuntime.getEmployeePhotoDataUrl!=='function')return;
+  const scope=root||document;
+  const nodes=[...scope.querySelectorAll('[data-employee-photo-id]')];
+  const groups={};
+
+  nodes.forEach(el=>{
+    const id=String(el.dataset.employeePhotoId||'').trim();
+    if(!id||el.dataset.photoLoaded==='1')return;
+    if(!groups[id])groups[id]=[];
+    groups[id].push(el);
+  });
+
+  await Promise.all(Object.entries(groups).map(async ([id,els])=>{
+    try{
+      const src=await window.__neoRuntime.getEmployeePhotoDataUrl(id);
+      els.forEach(el=>{
+        el.dataset.photoLoaded='1';
+        if(!src)return;
+        const name=el.dataset.employeePhotoName||'Pharmacist';
+        el.innerHTML='<img class="employee-photo-img" src="'+attr(src)+'" alt="'+attr(name)+'">';
+        el.classList.add('has-photo');
+      });
+    }catch(_e){
+      els.forEach(el=>el.dataset.photoLoaded='1');
+    }
+  }));
+}
+
+function employeePhotoEditorHtml_(u){
+  const eid=String((u&&u['Employee ID'])||'');
+  const name=String((u&&u['Pharmacist Name'])||'Pharmacist');
+
+  if(!eid){
+    return '<div class="employee-photo-editor new-employee">'+
+      '<div class="employee-photo-preview"><span>'+esc(peopleInitials_(name))+'</span></div>'+
+      '<div><strong>Profile Photo</strong><p>Save this pharmacist first, then reopen the profile to upload a photo.</p></div>'+
+    '</div>';
+  }
+
+  return '<div class="employee-photo-editor">'+
+    '<div id="employeePhotoPreview" class="employee-photo-preview" data-employee-photo-id="'+attr(eid)+'" data-employee-photo-name="'+attr(name)+'">'+
+      '<span class="employee-photo-fallback">'+esc(peopleInitials_(name))+'</span>'+
+    '</div>'+
+    '<div class="employee-photo-editor-copy">'+
+      '<strong>Profile Photo</strong>'+
+      '<p>Stored privately in <b>neochrono-data/employee-photos</b>. JPG, PNG, or WebP. The image is automatically center-cropped to a square.</p>'+
+      '<div class="employee-photo-actions">'+
+        '<input id="employeePhotoFile" type="file" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="uploadEmployeePhotoUI_(this,\''+attr(eid)+'\')">'+
+        '<button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById(\'employeePhotoFile\').click()">Upload / Replace Photo</button>'+
+        '<button id="employeePhotoRemoveBtn" type="button" class="btn btn-ghost btn-sm" onclick="removeEmployeePhotoUI_(\''+attr(eid)+'\')" disabled>Remove Photo</button>'+
+      '</div>'+
+      '<div id="employeePhotoStatus" class="small muted"></div>'+
+    '</div>'+
+  '</div>';
+}
+
+async function loadEmployeePhotoEditor_(employeeId){
+  if(!employeeId||!window.__neoRuntime)return;
+  const preview=$('employeePhotoPreview');
+  const removeBtn=$('employeePhotoRemoveBtn');
+  if(!preview)return;
+
+  try{
+    const src=await window.__neoRuntime.getEmployeePhotoDataUrl(employeeId);
+    if(src){
+      preview.innerHTML='<img class="employee-photo-img" src="'+attr(src)+'" alt="Pharmacist profile photo">';
+      preview.classList.add('has-photo');
+      if(removeBtn)removeBtn.disabled=false;
+    }else if(removeBtn){
+      removeBtn.disabled=true;
+    }
+  }catch(e){
+    const status=$('employeePhotoStatus');
+    if(status)status.textContent='Could not load the current photo: '+e.message;
+  }
+}
+
+function prepareEmployeePhotoUpload_(file){
+  return new Promise((resolve,reject)=>{
+    if(!file){reject(new Error('Choose an image first.'));return;}
+    if(!/^image\/(jpeg|png|webp)$/i.test(String(file.type||''))){
+      reject(new Error('Use a JPG, PNG, or WebP image.'));
+      return;
+    }
+    if(file.size>15*1024*1024){
+      reject(new Error('The selected image is larger than 15 MB.'));
+      return;
+    }
+
+    const url=URL.createObjectURL(file);
+    const img=new Image();
+    img.onload=()=>{
+      try{
+        const side=Math.min(img.naturalWidth||img.width,img.naturalHeight||img.height);
+        if(!side)throw new Error('The image has no readable dimensions.');
+
+        const sx=Math.max(0,((img.naturalWidth||img.width)-side)/2);
+        const sy=Math.max(0,((img.naturalHeight||img.height)-side)/2);
+        const canvas=document.createElement('canvas');
+        canvas.width=512;
+        canvas.height=512;
+        const ctx=canvas.getContext('2d');
+        ctx.fillStyle='#ffffff';
+        ctx.fillRect(0,0,512,512);
+        ctx.drawImage(img,sx,sy,side,side,0,0,512,512);
+        const dataUrl=canvas.toDataURL('image/jpeg',0.88);
+        URL.revokeObjectURL(url);
+        resolve(dataUrl);
+      }catch(e){
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror=()=>{
+      URL.revokeObjectURL(url);
+      reject(new Error('The selected image could not be opened.'));
+    };
+    img.src=url;
+  });
+}
+
+async function uploadEmployeePhotoUI_(input,employeeId){
+  const file=input&&input.files&&input.files[0];
+  if(!file)return;
+  const status=$('employeePhotoStatus');
+  const removeBtn=$('employeePhotoRemoveBtn');
+
+  try{
+    if(status)status.textContent='Preparing photo…';
+    const dataUrl=await prepareEmployeePhotoUpload_(file);
+    if(status)status.textContent='Uploading to neochrono-data…';
+    const result=await window.__neoRuntime.uploadEmployeePhoto(employeeId,dataUrl);
+    const preview=$('employeePhotoPreview');
+    if(preview){
+      preview.innerHTML='<img class="employee-photo-img" src="'+attr(result.dataUrl)+'" alt="Pharmacist profile photo">';
+      preview.classList.add('has-photo');
+    }
+    if(removeBtn)removeBtn.disabled=false;
+    if(status)status.textContent='Photo saved in neochrono-data.';
+    toast('Pharmacist photo uploaded','success');
+  }catch(e){
+    if(status)status.textContent=e.message;
+    toast(e.message,'error');
+  }finally{
+    if(input)input.value='';
+  }
+}
+
+async function removeEmployeePhotoUI_(employeeId){
+  if(!employeeId||!window.__neoRuntime)return;
+  if(!confirm('Remove this pharmacist photo?'))return;
+
+  const status=$('employeePhotoStatus');
+  try{
+    if(status)status.textContent='Removing photo…';
+    await window.__neoRuntime.deleteEmployeePhoto(employeeId);
+    const preview=$('employeePhotoPreview');
+    const u=(State.data.users||[]).find(x=>String(x['Employee ID'])===String(employeeId));
+    if(preview){
+      preview.innerHTML='<span class="employee-photo-fallback">'+esc(peopleInitials_((u&&u['Pharmacist Name'])||'Pharmacist'))+'</span>';
+      preview.classList.remove('has-photo');
+    }
+    const removeBtn=$('employeePhotoRemoveBtn');
+    if(removeBtn)removeBtn.disabled=true;
+    if(status)status.textContent='Photo removed from neochrono-data.';
+    toast('Pharmacist photo removed','success');
+  }catch(e){
+    if(status)status.textContent=e.message;
+    toast(e.message,'error');
+  }
+}
+
 function renderEmployees(){
   const pharmacists=(State.data.users||[]).filter(u=>String(u.Role||'Pharmacist').toLowerCase()!=='administrator');
   if(!State.peopleVisual)State.peopleVisual={search:'',segment:'all'};
@@ -1127,13 +1384,14 @@ function renderEmployees(){
   const normalMapped=active.filter(u=>peopleEmployeeSkills_(u,skills).length>0).length;
   const coverMapped=active.filter(u=>peopleCoverageSkills_(u).length>0).length;
   const hero=`<section class="people-v32-hero"><div class="people-v32-hero-top"><div><div class="people-v32-eyebrow">Clinical Workforce Command</div><h2>Pharmacist Operations</h2><p>One visual workspace for rotation, workload, qualifications, coverage-only skills, availability, residents, preceptors, and 7-on/7-off staffing.</p></div><button class="btn people-v32-add" onclick="openEmployeeModal(null)">+ Add Pharmacist</button></div><div class="people-v32-kpis"><div class="people-v32-kpi"><strong>${active.length}</strong><span>Active Pharmacists</span></div><div class="people-v32-kpi"><strong>${residents.length}</strong><span>Residents</span></div><div class="people-v32-kpi"><strong>${preceptors.length}</strong><span>Preceptors</span></div><div class="people-v32-kpi"><strong>${seven.length}</strong><span>7-on / 7-off</span></div><div class="people-v32-kpi"><strong>${coverMapped}</strong><span>Coverage Cross-Trained</span></div></div></section>`;
-  const lane=g=>{const members=active.filter(u=>String(u['Weekend Group']||'').toUpperCase()===g);return `<div class="rotation-lane ${g}"><div class="rotation-lane-top"><div class="rotation-lane-title"><span class="rotation-dot"></span>Weekend Group ${g}</div><span class="rotation-count">${members.length}</span></div><div class="rotation-avatars">${members.length?members.map(u=>`<div class="rotation-person" title="${attr(u['Pharmacist Name'])}"><span class="rotation-avatar">${esc(peopleInitials_(u['Pharmacist Name']))}</span><span class="rotation-name">${esc(u['Pharmacist Name'])}</span></div>`).join(''):'<span class="small muted">No pharmacists</span>'}</div></div>`};
+  const lane=g=>{const members=active.filter(u=>String(u['Weekend Group']||'').toUpperCase()===g);return `<div class="rotation-lane ${g}"><div class="rotation-lane-top"><div class="rotation-lane-title"><span class="rotation-dot"></span>Weekend Group ${g}</div><span class="rotation-count">${members.length}</span></div><div class="rotation-avatars">${members.length?members.map(u=>`<div class="rotation-person" title="${attr(u['Pharmacist Name'])}">${employeePhotoAvatar_(u,'rotation-avatar')}<span class="rotation-name">${esc(u['Pharmacist Name'])}</span></div>`).join(''):'<span class="small muted">No pharmacists</span>'}</div></div>`};
   const pct=n=>active.length?Math.round(n/active.length*100):0;
   const board=`<div class="people-v32-board"><section class="people-v32-panel"><div class="people-v32-panel-head"><div><h3>Weekend Rotation Board</h3><p>See the A/B/C staffing lanes at a glance.</p></div><span class="badge badge-ok">Every 3rd weekend</span></div><div class="rotation-lanes">${lane('A')}${lane('B')}${lane('C')}</div></section><section class="people-v32-panel"><div class="people-v32-panel-head"><div><h3>Workforce Readiness</h3><p>How completely the pharmacist profiles are configured.</p></div></div><div class="people-v32-rings"><div class="people-v32-ring-card"><div class="people-v32-ring" style="--p:${pct(normalMapped)};--c:#0d8b84"><strong>${pct(normalMapped)}%</strong></div><div class="people-v32-ring-label">Normal Skills</div></div><div class="people-v32-ring-card"><div class="people-v32-ring" style="--p:${pct(coverMapped)};--c:#4f7fa4"><strong>${pct(coverMapped)}%</strong></div><div class="people-v32-ring-label">Coverage Skills</div></div><div class="people-v32-ring-card"><div class="people-v32-ring" style="--p:${pct(groupCount.A+groupCount.B+groupCount.C+seven.length)};--c:#c88a31"><strong>${pct(groupCount.A+groupCount.B+groupCount.C+seven.length)}%</strong></div><div class="people-v32-ring-label">Rotation Ready</div></div></div></section></div>`;
   const toolbar=`<div class="people-v32-toolbar"><div class="people-v32-search"><input id="peopleSearch" class="control" value="${attr(vf.search||'')}" placeholder="Search pharmacist, skill, shift, group…" oninput="setPeopleSearch(this.value)"></div><div class="people-v32-tabs">${peopleV32Tab_('all','All',vf.segment)}${peopleV32Tab_('active','Active',vf.segment)}${peopleV32Tab_('resident','Residents',vf.segment)}${peopleV32Tab_('preceptor','Preceptors',vf.segment)}${peopleV32Tab_('7on','7-on/7-off',vf.segment)}${peopleV32Tab_('groupA','Group A',vf.segment)}${peopleV32Tab_('groupB','Group B',vf.segment)}${peopleV32Tab_('groupC','Group C',vf.segment)}</div></div>`;
   const cards=shown.map(u=>peopleV32Card_(u,skills,weekly,sched,periodTarget)).join('');
   const title=`<div class="people-v32-section-title"><div><h3>Pharmacist Profiles</h3><p>Visual profiles show workload, qualifications, coverage flexibility, availability, and rotation setup.</p></div><span class="people-v32-result">${shown.length} shown</span></div>`;
   $('content').innerHTML=`<div class="people-v32">${hero}${board}${toolbar}${title}${cards?`<div class="people-v32-grid">${cards}</div>`:`<div class="people-v32-empty"><strong>No pharmacist profiles match this view.</strong>Try another search or filter.</div>`}</div>`;
+  hydrateEmployeePhotos_();
 }
 function peopleV32Tab_(key,label,current){return `<button class="people-v32-tab ${String(current||'all')===key?'active':''}" onclick="setPeopleSegment('${attr(key)}')">${esc(label)}</button>`}
 function setPeopleSearch(v){State.peopleVisual=State.peopleVisual||{};State.peopleVisual.search=v||'';renderEmployees();const el=$('peopleSearch');if(el){el.focus();try{el.setSelectionRange(el.value.length,el.value.length)}catch(e){}}}
@@ -1167,7 +1425,7 @@ function peopleV32Card_(u,skills,weekly,sched,periodTarget){
   const coverChips=coverage.length?coverage.slice(0,8).map(x=>`<span class="pharm-v32-skill cover">${esc(x)}</span>`).join('')+(coverage.length>8?`<span class="pharm-v32-skill cover">+${coverage.length-8}</span>`:''):'<span class="pharm-v32-skill empty">No OFF-day coverage skills</span>';
   const rotation=g?`Group ${g}`:seven?'7-on / 7-off':'No weekend group';
   const anchor=g?(u['Weekend Rotation Anchor Date']||'No anchor'):seven?(u['Rotation Anchor Date']||'No anchor'):'—';
-  return `<article class="pharm-v32 ${g||''} ${seven?'seven':''} ${!yes(u.Active)?'inactive':''}"><div class="pharm-v32-topline"></div><div class="pharm-v32-head"><div class="pharm-v32-avatar-wrap"><div class="pharm-v32-avatar">${esc(peopleInitials_(name))}</div><span class="pharm-v32-status ${yes(u.Active)?'':'off'}"></span></div><div style="min-width:0"><div class="pharm-v32-name">${esc(name)}</div><div class="pharm-v32-meta">${esc(eid)} · ${esc(u['Preferred Shift Type']||u['Schedule Type']||'Regular')}</div><div class="pharm-v32-badges">${badges||'<span class="pharm-v32-badge">Regular</span>'}</div></div><div class="pharm-v32-gauge" style="--p:${ring};--c:${ringColor}"><div class="pharm-v32-gauge-text"><strong>${pct}%</strong><span>period</span></div></div></div><div class="pharm-v32-stats"><div class="pharm-v32-stat"><strong>${fmtHours(hrs)}</strong><span>Hours</span></div><div class="pharm-v32-stat"><strong>${shifts}</strong><span>Shifts</span></div><div class="pharm-v32-stat"><strong>${weekends}</strong><span>Weekend</span></div><div class="pharm-v32-stat"><strong>${evenings}</strong><span>Evening</span></div></div><div class="pharm-v32-body"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Normal Qualifications</span><span>${normal.length}</span></div><div class="pharm-v32-skills">${skillChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>OFF-Day Coverage Only</span><span>${coverage.length}</span></div><div class="pharm-v32-skills">${coverChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Weekly Availability</span><span>${rules.length?'Configured':'Unrestricted'}</span></div>${peopleV32Week_(rules)}</div><div class="pharm-v32-row"><div class="pharm-v32-rotation"><strong>${esc(rotation)}</strong><span>${esc(String(anchor))}</span></div></div></div><div class="pharm-v32-actions"><button class="btn btn-secondary btn-sm" onclick="openEmployeeModal('${attr(eid)}')">Edit Profile</button><button class="btn btn-ghost btn-sm" onclick="openEmployeeAvailability('${attr(eid)}')">Weekly Availability</button></div></article>`;
+  return `<article class="pharm-v32 ${g||''} ${seven?'seven':''} ${!yes(u.Active)?'inactive':''}"><div class="pharm-v32-topline"></div><div class="pharm-v32-head"><div class="pharm-v32-avatar-wrap">${employeePhotoAvatar_(u,'pharm-v32-avatar')}<span class="pharm-v32-status ${yes(u.Active)?'':'off'}"></span></div><div style="min-width:0"><div class="pharm-v32-name">${esc(name)}</div><div class="pharm-v32-meta">${esc(eid)} · ${esc(u['Preferred Shift Type']||u['Schedule Type']||'Regular')}</div><div class="pharm-v32-badges">${badges||'<span class="pharm-v32-badge">Regular</span>'}</div></div><div class="pharm-v32-gauge" style="--p:${ring};--c:${ringColor}"><div class="pharm-v32-gauge-text"><strong>${pct}%</strong><span>period</span></div></div></div><div class="pharm-v32-stats"><div class="pharm-v32-stat"><strong>${fmtHours(hrs)}</strong><span>Hours</span></div><div class="pharm-v32-stat"><strong>${shifts}</strong><span>Shifts</span></div><div class="pharm-v32-stat"><strong>${weekends}</strong><span>Weekend</span></div><div class="pharm-v32-stat"><strong>${evenings}</strong><span>Evening</span></div></div><div class="pharm-v32-body"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Normal Qualifications</span><span>${normal.length}</span></div><div class="pharm-v32-skills">${skillChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>OFF-Day Coverage Only</span><span>${coverage.length}</span></div><div class="pharm-v32-skills">${coverChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Weekly Availability</span><span>${rules.length?'Configured':'Unrestricted'}</span></div>${peopleV32Week_(rules)}</div><div class="pharm-v32-row"><div class="pharm-v32-rotation"><strong>${esc(rotation)}</strong><span>${esc(String(anchor))}</span></div></div></div><div class="pharm-v32-actions"><button class="btn btn-secondary btn-sm" onclick="openEmployeeModal('${attr(eid)}')">Edit Profile</button><button class="btn btn-ghost btn-sm" onclick="openEmployeeAvailability('${attr(eid)}')">Weekly Availability</button></div></article>`;
 }
 
 function openEmployeeModal(id){
@@ -1175,8 +1433,9 @@ function openEmployeeModal(id){
   const fields=[
     ['Pharmacist Name','Name','text'],['Active','Active','yn'],['Schedule Type','Schedule Type','schedule'],['Weekend Group','Weekend Group','group'],['Weekend Rotation Anchor Date','Weekend Rotation Anchor Date (auto)','readonlydate'],['Weekly Hour Maximum','Weekly Hour Maximum','number'],['Target Weekly Hours','Target Weekly Hours','number'],['Maximum Evening Shifts Per Month','Max Evening Shifts / Month','number'],['Preceptor','Preceptor','yn'],['Resident','Resident','yn'],['Preferred Start Time','Preferred Start Time','time'],['Preferred End Time','Preferred End Time','time'],['Custom Hours Enabled','Custom Hours Enabled','yn'],['Custom Hours Mode','Custom Hours Mode','hardsoft'],['Off-Day Coverage Skills','Off-Day Coverage Skills (comma-separated)','text'],['Weekend Eligible','Weekend Eligible','yn'],['Evening Eligible','Evening Eligible','yn'],['Night Eligible','Night Eligible','yn'],['Resident Covers Regular','Resident Covers Regular','yn'],['Resident Weekends','Resident Weekends','yn'],['Resident Evenings','Resident Evenings','yn'],['Resident Nights','Resident Nights','yn'],['Rotation Anchor Date','7-on/7-off Anchor Date','date'],['SevenOn Weekly Handling','7-on/7-off Weekly Handling','text'],['Notes','Notes','textarea']
   ];
-  const body=`<input type="hidden" id="empId" value="${attr(u['Employee ID']||'')}"><div class="alert alert-ok mb12"><b>No pharmacist login is created.</b> Username and password are not required for pharmacists.<br><span class="small">Weekend Rotation Anchor Date is filled automatically from Weekend Group A/B/C when you save.</span><br><span class="small"><b>Off-Day Coverage Skills</b> are coverage-only. Example: IM,CARD,CC1. They do not make this pharmacist eligible for those shifts on normal days.</span></div><div class="form-grid">${fields.map(f=>formField('emp_'+keyId(f[0]),f[1],f[2],u[f[0]]??defaultEmpValue(f[0]))).join('')}</div>`;
+  const body=`<input type="hidden" id="empId" value="${attr(u['Employee ID']||'')}">${employeePhotoEditorHtml_(u)}<div class="alert alert-ok mb12"><b>No pharmacist login is created.</b> Username and password are not required for pharmacists.<br><span class="small">Weekend Rotation Anchor Date is filled automatically from Weekend Group A/B/C when you save.</span><br><span class="small"><b>Off-Day Coverage Skills</b> are coverage-only. Example: IM,CARD,CC1. They do not make this pharmacist eligible for those shifts on normal days.</span></div><div class="form-grid">${fields.map(f=>formField('emp_'+keyId(f[0]),f[1],f[2],u[f[0]]??defaultEmpValue(f[0]))).join('')}</div>`;
   openModal(id?'Edit Pharmacist':'Add Pharmacist',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save Pharmacist',cls:'btn-primary',action:'saveEmployeeUI()'}]);
+  if(id)setTimeout(()=>loadEmployeePhotoEditor_(id),0);
 }
 function defaultEmpValue(k){const d={'Active':'Yes','Role':'Pharmacist','Schedule Type':'Regular','Weekly Hour Maximum':'40','Target Weekly Hours':'40','Maximum Evening Shifts Per Month':'7','Preceptor':'No','Resident':'No','Custom Hours Enabled':'No','Custom Hours Mode':'SOFT','Weekend Eligible':'Yes','Evening Eligible':'Yes','Night Eligible':'Yes','Resident Covers Regular':'No','Resident Weekends':'No','Resident Evenings':'No','Resident Nights':'No','SevenOn Weekly Handling':'ENFORCE_MAX'};return d[k]||''}
 function keyId(s){return s.replace(/[^A-Za-z0-9]/g,'_')}
