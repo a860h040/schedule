@@ -12,6 +12,7 @@
   const PUBLISHED_PATH='data/published-schedule.json';
   const SESSION_SHEET_KEY='neochronoLegacySessionsV1';
   let cache={data:null,sha:null,loadedAt:0};
+  let photoCache=new Map();
   let invokeQueue=Promise.resolve();
 
   const enc=s=>new TextEncoder().encode(String(s));
@@ -83,6 +84,117 @@
     const body={message:'Publish pharmacist schedule',content:b64encodeUtf8(JSON.stringify(payload,null,2)),branch:c.branch};
     if(old&&old.sha)body.sha=old.sha;
     return gh(apiUrl(c,c.publishedPath),{method:'PUT',body:JSON.stringify(body)},c);
+  }
+
+
+  function employeePhotoSafeId_(employeeId){
+    const id=String(employeeId||'').trim();
+    if(!id)throw new Error('Employee ID is required for a pharmacist photo.');
+    return id.replace(/[^A-Za-z0-9._-]+/g,'_');
+  }
+
+  function employeePhotoPath_(employeeId){
+    return 'employee-photos/'+employeePhotoSafeId_(employeeId)+'.jpg';
+  }
+
+  function base64ToDataUrl_(base64,mime){
+    return 'data:'+(mime||'image/jpeg')+';base64,'+String(base64||'').replace(/\s+/g,'');
+  }
+
+  async function getEmployeePhotoDataUrl(employeeId,force=false){
+    const id=employeePhotoSafeId_(employeeId);
+    if(!force&&photoCache.has(id))return photoCache.get(id);
+
+    const c=cfg();
+    const path=employeePhotoPath_(id);
+    try{
+      const file=await gh(apiUrl(c,path)+'?ref='+encodeURIComponent(c.branch),{},c);
+      const url=base64ToDataUrl_(file.content||'','image/jpeg');
+      photoCache.set(id,url);
+      return url;
+    }catch(e){
+      if(e&&e.status===404){
+        photoCache.set(id,'');
+        return '';
+      }
+      throw e;
+    }
+  }
+
+  async function uploadEmployeePhoto(employeeId,base64Jpeg){
+    const id=employeePhotoSafeId_(employeeId);
+    const content=String(base64Jpeg||'').replace(/^data:image\/[A-Za-z0-9.+-]+;base64,/,'').replace(/\s+/g,'');
+    if(!content)throw new Error('The selected image could not be prepared for upload.');
+
+    // Keep profile photos compact. Base64 is ~4/3 the binary size.
+    if(content.length>1400000){
+      throw new Error('The prepared pharmacist photo is too large. Please use a smaller image.');
+    }
+
+    const c=cfg();
+    const path=employeePhotoPath_(id);
+    let old=null;
+    try{
+      old=await gh(apiUrl(c,path)+'?ref='+encodeURIComponent(c.branch),{},c);
+    }catch(e){
+      if(!e||e.status!==404)throw e;
+    }
+
+    const body={
+      message:'Update pharmacist photo: '+id,
+      content:content,
+      branch:c.branch
+    };
+    if(old&&old.sha)body.sha=old.sha;
+
+    const result=await gh(
+      apiUrl(c,path),
+      {method:'PUT',body:JSON.stringify(body)},
+      c
+    );
+
+    const dataUrl=base64ToDataUrl_(content,'image/jpeg');
+    photoCache.set(id,dataUrl);
+    return {
+      ok:true,
+      employeeId:id,
+      path:path,
+      dataUrl:dataUrl,
+      sha:result&&result.content?result.content.sha:''
+    };
+  }
+
+  async function deleteEmployeePhoto(employeeId){
+    const id=employeePhotoSafeId_(employeeId);
+    const c=cfg();
+    const path=employeePhotoPath_(id);
+    let old=null;
+
+    try{
+      old=await gh(apiUrl(c,path)+'?ref='+encodeURIComponent(c.branch),{},c);
+    }catch(e){
+      if(e&&e.status===404){
+        photoCache.set(id,'');
+        return {ok:true,removed:false,path:path};
+      }
+      throw e;
+    }
+
+    await gh(
+      apiUrl(c,path),
+      {
+        method:'DELETE',
+        body:JSON.stringify({
+          message:'Remove pharmacist photo: '+id,
+          sha:old.sha,
+          branch:c.branch
+        })
+      },
+      c
+    );
+
+    photoCache.set(id,'');
+    return {ok:true,removed:true,path:path};
   }
 
   function clone(v){return v instanceof Date?new Date(v):Array.isArray(v)?v.map(clone):(v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,clone(x)])):v);}
@@ -329,7 +441,7 @@
   }
 
   window.__neoRuntime={
-    cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,
+    cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,getEmployeePhotoDataUrl,uploadEmployeePhoto,deleteEmployeePhoto,employeePhotoPath:employeePhotoPath_,
     currentBook:()=>currentBook(),
     markDirty:()=>{if(window.__neoVBook)window.__neoVBook.dirty=true;},
     invoke(fn,args){
