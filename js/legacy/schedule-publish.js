@@ -124,11 +124,13 @@ function pharmacistSchedulePostToGoogle_(payload) {
     }
 
     var transferId = String(payload.transferId || '');
-    var frameName = 'neoScheduleReceiver_' + transferId.replace(/[^A-Za-z0-9_]/g,'_');
+    var frameName =
+      'neoScheduleReceiver_' +
+      transferId.replace(/[^A-Za-z0-9_]/g,'_');
+
     var iframe = document.createElement('iframe');
     var form = document.createElement('form');
     var input = document.createElement('input');
-    var finished = false;
 
     iframe.name = frameName;
     iframe.style.display = 'none';
@@ -144,50 +146,16 @@ function pharmacistSchedulePostToGoogle_(payload) {
     input.value = JSON.stringify(payload);
     form.appendChild(input);
 
-    function cleanup() {
-      window.removeEventListener('message', onMessage);
-      try { form.remove(); } catch (_e) {}
-      setTimeout(function() {
-        try { iframe.remove(); } catch (_e) {}
-      }, 250);
-    }
+    document.body.appendChild(iframe);
+    document.body.appendChild(form);
 
-    function finishError(err) {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      cleanup();
-      reject(err instanceof Error ? err : new Error(String(err)));
-    }
+    try {
+      form.submit();
 
-    function onMessage(event) {
-      var data = event && event.data;
-      if (!data || data.type !== 'NEOCHRONO_SCHEDULE_RECEIVER') return;
-      if (String(data.transferId || '') !== transferId) return;
-
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      cleanup();
-
-      if (!data.ok) {
-        reject(new Error(data.message || 'Google Sheet receiver reported an error.'));
-        return;
-      }
-
-      resolve(data);
-    }
-
-    window.addEventListener('message', onMessage);
-
-    var timer = setTimeout(function() {
-      if (finished) return;
-      finished = true;
-      cleanup();
-
-      // The Apps Script receiver can successfully write the Schedule sheet
-      // even when a cross-origin iframe cannot post its receipt back to
-      // GitHub Pages. Do not turn that browser limitation into a false error.
+      // Fire-and-forget by design.
+      // The user does not want NeoChrono to wait for or require a receipt
+      // from Google Apps Script. A successful browser form submission is
+      // treated as a successful send.
       resolve({
         ok: true,
         submitted: true,
@@ -195,15 +163,18 @@ function pharmacistSchedulePostToGoogle_(payload) {
         transferId: transferId,
         receiverSheetName: PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
       });
-    }, 3000);
 
-    document.body.appendChild(iframe);
-    document.body.appendChild(form);
+      // Leave the iframe/form in place briefly so the browser has time to
+      // complete the POST before cleanup.
+      setTimeout(function() {
+        try { form.remove(); } catch (_e) {}
+        try { iframe.remove(); } catch (_e) {}
+      }, 8000);
 
-    try {
-      form.submit();
     } catch (e) {
-      finishError(e);
+      try { form.remove(); } catch (_e) {}
+      try { iframe.remove(); } catch (_e) {}
+      reject(e);
     }
   });
 }
@@ -242,28 +213,13 @@ async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
 
   var receipt = await pharmacistSchedulePostToGoogle_(payload);
 
-  if (
-    receipt &&
-    receipt.confirmationReceived !== false &&
-    (
-      Number(receipt.transferredRows) !== prepared.rows.length ||
-      String(receipt.receiverSheetName || '') !== PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
-    )
-  ) {
-    throw new Error(
-      'Google returned a transfer receipt that did not match the schedule sent. ' +
-      'NeoChrono sent ' + prepared.rows.length +
-      ' rows and Google reported ' + Number(receipt.transferredRows || 0) + '.'
-    );
-  }
-
   if (typeof audit_ === 'function') {
     audit_(
       'SEND_SCHEDULE_TO_GOOGLE',
       prepared.startDate + ' through ' + prepared.endDate,
       '', '', '', '', '',
       'No', '',
-      'Sent ' + prepared.rows.length +
+      'Submitted ' + prepared.rows.length +
       ' Schedule row(s) to Google receiver sheet "' +
       PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME +
       '". Transfer ID: ' + transferId + '.',
@@ -282,7 +238,7 @@ async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
     receiverUrl: receipt.receiverUrl || '',
     confirmationReceived: receipt.confirmationReceived !== false,
     message:
-      'Schedule was sent to the Google Sheet tab "' +
+      'Schedule was submitted to the Google Sheet receiver for tab "' +
       PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME + '".'
   };
 }
