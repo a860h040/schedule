@@ -67,9 +67,11 @@
     for(let r=1;r<matrix.length;r++){
       const row=matrix[r]||[];
       const out=HEADERS.map(h=>index[h]!==undefined?(row[index[h]]??''):'');
-      const recordType=String(out[0]||'').trim();
+      const recordType=String(out[0]||'').trim().toUpperCase();
       const recordId=String(out[1]||'').trim();
-      if(!recordType&&!recordId)continue;
+      if(recordType!=='PTO')continue;
+      if(!recordId)continue;
+      out[0]='PTO';
       normalized.push(out);
     }
     return normalized;
@@ -214,6 +216,7 @@
   async function saveRequest(data){
     const row={...(data||{})};
     row['Record Type']=String(row['Record Type']||'PTO').trim().toUpperCase();
+    if(row['Record Type']!=='PTO')throw new Error('Google PTO source only accepts PTO records.');
     row['Record ID']=String(row['Record ID']||'').trim()||makeRecordId();
 
     await postWrite({operation:'save',row:row});
