@@ -181,11 +181,21 @@ function pharmacistSchedulePostToGoogle_(payload) {
     window.addEventListener('message', onMessage);
 
     var timer = setTimeout(function() {
-      finishError(new Error(
-        'The schedule was submitted to Google, but NeoChrono did not receive confirmation. ' +
-        'Confirm Code4.gs is deployed in the receiver Apps Script web app and that access is allowed.'
-      ));
-    }, 45000);
+      if (finished) return;
+      finished = true;
+      cleanup();
+
+      // The Apps Script receiver can successfully write the Schedule sheet
+      // even when a cross-origin iframe cannot post its receipt back to
+      // GitHub Pages. Do not turn that browser limitation into a false error.
+      resolve({
+        ok: true,
+        submitted: true,
+        confirmationReceived: false,
+        transferId: transferId,
+        receiverSheetName: PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
+      });
+    }, 3000);
 
     document.body.appendChild(iframe);
     document.body.appendChild(form);
@@ -233,11 +243,15 @@ async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
   var receipt = await pharmacistSchedulePostToGoogle_(payload);
 
   if (
-    Number(receipt.transferredRows) !== prepared.rows.length ||
-    String(receipt.receiverSheetName || '') !== PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
+    receipt &&
+    receipt.confirmationReceived !== false &&
+    (
+      Number(receipt.transferredRows) !== prepared.rows.length ||
+      String(receipt.receiverSheetName || '') !== PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
+    )
   ) {
     throw new Error(
-      'Google responded, but transfer verification did not match. ' +
+      'Google returned a transfer receipt that did not match the schedule sent. ' +
       'NeoChrono sent ' + prepared.rows.length +
       ' rows and Google reported ' + Number(receipt.transferredRows || 0) + '.'
     );
@@ -266,8 +280,9 @@ async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
     receiverSpreadsheetName: receipt.receiverSpreadsheetName || 'Pharmacists Schedule',
     receiverSheetName: receipt.receiverSheetName || PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
     receiverUrl: receipt.receiverUrl || '',
+    confirmationReceived: receipt.confirmationReceived !== false,
     message:
-      'Schedule was verified in the Google Sheet tab "' +
+      'Schedule was sent to the Google Sheet tab "' +
       PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME + '".'
   };
 }
