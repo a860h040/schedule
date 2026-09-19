@@ -713,7 +713,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv4"></script>
 <script src="js/google-pto-source.js?v=20260918-googlepto1"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-pharmgroups2"></script>
-<script src="js/legacy/main-backend.js?v=20260919-pharmgroups2"></script>
+<script src="js/legacy/main-backend.js?v=20260919-customdates1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-sendfix1"></script>
@@ -917,12 +917,11 @@ function renderDashboard(){
     html+=`
     <section class="workspace-grid">
       <div class="workspace-main">
-        <div class="section-heading"><div><span class="section-kicker">SCHEDULE CONTROL</span><h2>Build and publish</h2></div><span class="section-note">Sunday–Saturday workweek</span></div>
+        <div class="section-heading"><div><span class="section-kicker">SCHEDULE CONTROL</span><h2>Build and publish</h2></div><span class="section-note">Choose any date range</span></div>
         <div class="control-panel">
           <div class="toolbar premium-toolbar">
             <div class="field"><label>Start Date</label><input id="genStart" type="date" class="control" value="${dateKey(defaultStart)}"></div>
             <div class="field"><label>End Date</label><input id="genEnd" type="date" class="control" value="${dateKey(defaultEnd)}"></div>
-            <div class="field mode-field"><label>Mode</label><select id="genMode" class="control"><option value="NEW">Generate New Period</option><option value="REGENERATE">Regenerate Existing Period</option></select></div>
           </div>
           <div class="primary-actions">
             <button id="generateScheduleBtn" class="btn btn-primary action-main" onclick="generateScheduleUI()">Generate Schedule</button>
@@ -1004,52 +1003,205 @@ async function exportScheduleCsvUI(){
   finally{if(btn){btn.disabled=false;btn.textContent='Export CSV'}}
 }
 async function generateScheduleUI(){
-  const payload={startDate:$('genStart').value,endDate:$('genEnd').value,mode:$('genMode').value};
+  const payload={
+    startDate:$('genStart').value,
+    endDate:$('genEnd').value
+  };
   const btn=$('generateScheduleBtn');
+
+  if(!payload.startDate||!payload.endDate){
+    toast('Choose a Start Date and End Date.','error');
+    return;
+  }
+
   try{
-    if(btn){btn.disabled=true;btn.textContent='Preparing...'}
+    if(btn){
+      btn.disabled=true;
+      btn.textContent='Checking dates...';
+    }
+
     const pre=await server('preflightScheduleGeneration',State.token,payload);
+
     if(!pre.ok){
-      $('generationResult').innerHTML=(pre.errors||[]).map(x=>`<div class="alert alert-danger">${esc(x)}</div>`).join('')+(pre.warnings||[]).map(x=>`<div class="alert alert-warn">${esc(x)}</div>`).join('');
+      $('generationResult').innerHTML=
+        (pre.errors||[]).map(x=>'<div class="alert alert-danger">'+esc(x)+'</div>').join('')+
+        (pre.warnings||[]).map(x=>'<div class="alert alert-warn">'+esc(x)+'</div>').join('');
       return;
     }
-    const start=parseDate(payload.startDate),end=parseDate(payload.endDate);
-    const chunks=[];
-    for(let d=new Date(start);d<=end;d=addDays(d,7)){
-      const ce=addDays(d,6)>end?end:addDays(d,6);
-      chunks.push({startDate:dateKey(d),endDate:dateKey(ce)});
+
+    let overwriteConfirmed=false;
+
+    if(pre.requiresOverwriteConfirmation){
+      const details=[
+        'The selected range already contains '+Number(pre.overlapCount||0)+' schedule row(s)',
+        'across '+Number(pre.overlapDateCount||0)+' date(s).'
+      ];
+
+      if(Number(pre.lockedOverlapCount||0)>0){
+        details.push(Number(pre.lockedOverlapCount||0)+' locked row(s) are included.');
+      }
+
+      if(Number(pre.finalizedOverlapCount||0)>0){
+        details.push(Number(pre.finalizedOverlapCount||0)+' finalized row(s) are included.');
+      }
+
+      const ok=confirm(
+        'OVERWRITE EXISTING SCHEDULE?\n\n'+
+        details.join('\n')+
+        '\n\nIf you continue, NeoChrono will DELETE and REPLACE every schedule row inside '+
+        payload.startDate+' through '+payload.endDate+'.\n\n'+
+        'Schedule rows outside this date range will not be changed.\n\n'+
+        'Continue and overwrite these dates?'
+      );
+
+      if(!ok){
+        $('generationResult').innerHTML=
+          '<div class="alert alert-warn"><b>Generation cancelled.</b><br>'+
+          'Nothing was changed. The selected dates overlap an existing schedule, and overwrite was not confirmed.'+
+          '</div>';
+        return;
+      }
+
+      overwriteConfirmed=true;
     }
+
+    const startDate=parseDate(payload.startDate);
+    const endDate=parseDate(payload.endDate);
+    const chunks=[];
+
+    // Build chunks on real Sunday-Saturday boundaries. The first and last
+    // chunks may be partial weeks, allowing any start/end dates.
+    let cursor=new Date(startDate);
+    while(cursor<=endDate){
+      const daysToSaturday=6-cursor.getDay();
+      const weekEnd=addDays(cursor,daysToSaturday);
+      const chunkEnd=weekEnd>endDate?endDate:weekEnd;
+
+      chunks.push({
+        startDate:dateKey(cursor),
+        endDate:dateKey(chunkEnd)
+      });
+
+      cursor=addDays(chunkEnd,1);
+    }
+
     let totalFilled=0,totalRequired=0,totalUnfilled=0;
     const allUnfilled=[];
     const chunkWarnings=[];
+
     for(let i=0;i<chunks.length;i++){
-      const c=chunks[i];
-      if(btn)btn.textContent=`Generating week ${i+1} of ${chunks.length}...`;
-      $('generationResult').innerHTML=`<div class="alert alert-warn"><b>Generating schedule in week-sized batches...</b><br>Week ${i+1} of ${chunks.length}: ${esc(c.startDate)} through ${esc(c.endDate)}.<br>This prevents Google Apps Script from timing out on the full 8-week schedule.</div>`;
-      const r=await server('generateSchedule',State.token,{startDate:c.startDate,endDate:c.endDate,mode:payload.mode,chunked:'Yes',batchGenerationId:pre.batchGenerationId});
-      if(!r.ok){
-        $('generationResult').innerHTML=(r.errors||[]).map(x=>`<div class="alert alert-danger">${esc(x)}</div>`).join('')+(r.warnings||[]).map(x=>`<div class="alert alert-warn">${esc(x)}</div>`).join('');
-        throw new Error('Generation stopped during week '+(i+1)+' of '+chunks.length+'.');
+      const part=chunks[i];
+
+      if(btn){
+        btn.textContent='Generating '+(i+1)+' of '+chunks.length+'...';
       }
-      totalFilled+=Number(r.filled||0);totalRequired+=Number(r.required||0);totalUnfilled+=Number(r.unfilled||0);
+
+      $('generationResult').innerHTML=
+        '<div class="alert alert-warn"><b>Generating selected date range...</b><br>'+
+        'Part '+(i+1)+' of '+chunks.length+': '+
+        esc(part.startDate)+' through '+esc(part.endDate)+'.'+
+        (overwriteConfirmed?'<br><b>Confirmed overwrite:</b> existing rows in the selected dates are being replaced.':'')+
+        '</div>';
+
+      const r=await server(
+        'generateSchedule',
+        State.token,
+        {
+          startDate:part.startDate,
+          endDate:part.endDate,
+          mode:'OVERWRITE',
+          chunked:'Yes',
+          overwriteConfirmed:overwriteConfirmed?'Yes':'No',
+          allowFinalizedOverlap:overwriteConfirmed?'Yes':'No',
+          batchGenerationId:pre.batchGenerationId
+        }
+      );
+
+      if(!r.ok){
+        $('generationResult').innerHTML=
+          (r.errors||[]).map(x=>'<div class="alert alert-danger">'+esc(x)+'</div>').join('')+
+          (r.warnings||[]).map(x=>'<div class="alert alert-warn">'+esc(x)+'</div>').join('');
+        throw new Error('Generation stopped during part '+(i+1)+' of '+chunks.length+'.');
+      }
+
+      totalFilled+=Number(r.filled||0);
+      totalRequired+=Number(r.required||0);
+      totalUnfilled+=Number(r.unfilled||0);
       (r.unfilledDetails||[]).forEach(x=>allUnfilled.push(x));
       (r.warnings||[]).forEach(x=>chunkWarnings.push(x));
     }
-    if(btn)btn.textContent='Validating full period...';
-    const finalCheck=await server('validateSavedSchedule',State.token,payload.startDate,payload.endDate);
+
+    if(btn)btn.textContent='Validating selected range...';
+
+    const finalCheck=await server(
+      'validateSavedSchedule',
+      State.token,
+      payload.startDate,
+      payload.endDate
+    );
+
     const feasible=!!finalCheck.ok;
-    let h=`<div class="alert ${feasible?'alert-ok':'alert-warn'}"><b>${feasible?'Schedule generated and full-period validation passed.':'Schedule generation completed, but the full-period validation found rules that still need attention.'}</b><br>Generation ${esc(pre.batchGenerationId)}: ${totalFilled}/${totalRequired} filled (${totalRequired?Math.round(totalFilled*1000/totalRequired)/10:100}%).<br>Generated in ${chunks.length} separate Sunday-Saturday batches to avoid the Apps Script execution-time limit.</div>`;
+
+    let h=
+      '<div class="alert '+(feasible?'alert-ok':'alert-warn')+'">'+
+      '<b>'+(feasible
+        ?'Schedule generated for the selected dates.'
+        :'Schedule generated, but validation found items that need review.')+
+      '</b><br>'+
+      'Generation '+esc(pre.batchGenerationId)+': '+
+      totalFilled+'/'+totalRequired+' filled ('+
+      (totalRequired?Math.round(totalFilled*1000/totalRequired)/10:100)+'%).<br>'+
+      'Selected range: '+esc(payload.startDate)+' through '+esc(payload.endDate)+'.'+
+      (overwriteConfirmed?'<br>Existing schedule rows in this date range were replaced after confirmation.':'')+
+      '</div>';
+
     const finalErrors=finalCheck.errors||[];
-    if(finalErrors.length)h+=finalErrors.slice(0,25).map(x=>`<div class="alert alert-danger">${esc(x)}</div>`).join('');
-    const warnings=[...(finalCheck.warnings||[]),...chunkWarnings];
-    if(warnings.length)h+=warnings.slice(0,25).map(x=>`<div class="alert alert-warn">${esc(x)}</div>`).join('');
-    if(allUnfilled.length)h+=`<div class="table-wrap mt12"><table class="table"><thead><tr><th>Date</th><th>Shift</th><th>Slot</th><th>Reason</th></tr></thead><tbody>${allUnfilled.slice(0,100).map(x=>`<tr><td>${esc(x.date)}</td><td>${esc(x.shift)}</td><td>${x.slot}</td><td>${esc(x.reason)}</td></tr>`).join('')}</tbody></table></div>`;
+    if(finalErrors.length){
+      h+=finalErrors.slice(0,25)
+        .map(x=>'<div class="alert alert-danger">'+esc(x)+'</div>')
+        .join('');
+    }
+
+    const warnings=[
+      ...(pre.warnings||[]),
+      ...(finalCheck.warnings||[]),
+      ...chunkWarnings
+    ];
+
+    if(warnings.length){
+      h+=[...new Set(warnings)].slice(0,30)
+        .map(x=>'<div class="alert alert-warn">'+esc(x)+'</div>')
+        .join('');
+    }
+
+    if(allUnfilled.length){
+      h+='<div class="table-wrap mt12"><table class="table">'+
+        '<thead><tr><th>Date</th><th>Shift</th><th>Slot</th><th>Reason</th></tr></thead>'+
+        '<tbody>'+
+        allUnfilled.slice(0,100).map(x=>
+          '<tr><td>'+esc(x.date)+'</td><td>'+esc(x.shift)+'</td><td>'+x.slot+'</td><td>'+esc(x.reason)+'</td></tr>'
+        ).join('')+
+        '</tbody></table></div>';
+    }
+
     $('generationResult').innerHTML=h;
-    toast('Schedule generation completed',feasible?'success':'');
+    toast(
+      overwriteConfirmed?'Schedule overwritten for selected dates':'Schedule generation completed',
+      feasible?'success':''
+    );
+
     await refreshData(false);
-  }catch(e){toast(e.message,'error')}
-  finally{if(btn){btn.disabled=false;btn.textContent='Generate Schedule'}}
+
+  }catch(e){
+    toast(e.message,'error');
+  }finally{
+    if(btn){
+      btn.disabled=false;
+      btn.textContent='Generate Schedule';
+    }
+  }
 }
+
 async function finalizeAndSendUI(){
   const start=$('genStart')?.value||'';
   const end=$('genEnd')?.value||'';
