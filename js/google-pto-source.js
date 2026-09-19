@@ -4,10 +4,11 @@
 
   const ENDPOINT='https://script.google.com/macros/s/AKfycbxBTnuzFvNXOROz4fpGni_exZap2YfSTm5aNWw4eAwnyGe-m9jU3SZriupyFf3yDP-r/exec';
   const SHEET='PTO / Availability Requests';
-  const ACTION='neochronoPto';
-  const CACHE_KEY='neochrono_google_pto_cache_v1';
-  const ACTIVE_KEY='neochrono_google_pto_active_v1';
-  const CACHE_MS=30000;
+  const READ_ACTION='neochronoPto';
+  const WRITE_ACTION='neochronoPtoWrite';
+  const CACHE_KEY='neochrono_google_pto_cache_v2';
+  const ACTIVE_KEY='neochrono_google_pto_active_v2';
+  const CACHE_MS=15000;
 
   const HEADERS=[
     'Record Type','Record ID','Pharmacist','Username','Date','Start Date','End Date',
@@ -15,7 +16,7 @@
     'Reviewed By','Reviewed At','Updated At','Updated By'
   ];
 
-  let memory={matrix:null,loadedAt:0,lastError:'',source:'github',recordIds:new Set()};
+  let memory={matrix:null,loadedAt:0,lastError:'',source:'google',recordIds:new Set()};
 
   function clone(v){return JSON.parse(JSON.stringify(v));}
 
@@ -26,31 +27,36 @@
     ];
   }
 
+  function matrixToObjects(matrix){
+    if(!Array.isArray(matrix)||!matrix.length)return [];
+    const headers=(matrix[0]||[]).map(x=>String(x??'').trim());
+    return matrix.slice(1).map(row=>{
+      const o={};
+      headers.forEach((h,i)=>o[h]=row?.[i]??'');
+      return o;
+    });
+  }
+
   function normalizePayload(payload){
     if(!payload||payload.success===false){
       throw new Error(payload&&payload.message?payload.message:'Google PTO API returned no data.');
     }
 
     let matrix=null;
-
-    if(Array.isArray(payload.values)){
-      matrix=payload.values;
-    }else if(Array.isArray(payload.matrix)){
-      matrix=payload.matrix;
-    }else if(Array.isArray(payload.rows)&&payload.rows.length&&Array.isArray(payload.rows[0])){
+    if(Array.isArray(payload.values))matrix=payload.values;
+    else if(Array.isArray(payload.matrix))matrix=payload.matrix;
+    else if(Array.isArray(payload.rows)&&payload.rows.length&&Array.isArray(payload.rows[0])){
       matrix=[Array.isArray(payload.headers)?payload.headers:HEADERS].concat(payload.rows);
-    }else if(Array.isArray(payload.rows)){
-      matrix=objectRowsToMatrix(payload.rows);
-    }else if(Array.isArray(payload.requests)){
-      matrix=objectRowsToMatrix(payload.requests);
-    }else if(Array.isArray(payload.data)){
+    }else if(Array.isArray(payload.rows))matrix=objectRowsToMatrix(payload.rows);
+    else if(Array.isArray(payload.requests))matrix=objectRowsToMatrix(payload.requests);
+    else if(Array.isArray(payload.data)){
       matrix=payload.data.length&&Array.isArray(payload.data[0])
         ? [Array.isArray(payload.headers)?payload.headers:HEADERS].concat(payload.data)
         : objectRowsToMatrix(payload.data);
     }
 
     if(!Array.isArray(matrix)||!matrix.length){
-      throw new Error('Google PTO API response does not contain PTO rows.');
+      throw new Error('Google PTO API response does not contain request rows.');
     }
 
     const sourceHeaders=(matrix[0]||[]).map(x=>String(x??'').trim());
@@ -61,26 +67,18 @@
     for(let r=1;r<matrix.length;r++){
       const row=matrix[r]||[];
       const out=HEADERS.map(h=>index[h]!==undefined?(row[index[h]]??''):'');
-      const recordType=String(out[0]||'').trim().toUpperCase();
+      const recordType=String(out[0]||'').trim();
       const recordId=String(out[1]||'').trim();
       if(!recordType&&!recordId)continue;
       normalized.push(out);
     }
-
     return normalized;
   }
 
   function recordIdsFromMatrix(matrix){
     const out=new Set();
-    if(!matrix||matrix.length<2)return out;
-    const headers=matrix[0].map(x=>String(x??'').trim());
-    const idIdx=headers.indexOf('Record ID');
-    const typeIdx=headers.indexOf('Record Type');
-    if(idIdx<0)return out;
-    for(let i=1;i<matrix.length;i++){
-      const type=typeIdx>=0?String(matrix[i]?.[typeIdx]||'').trim().toUpperCase():'PTO';
-      if(type!=='PTO')continue;
-      const id=String(matrix[i]?.[idIdx]||'').trim();
+    for(const r of matrixToObjects(matrix)){
+      const id=String(r['Record ID']||'').trim();
       if(id)out.add(id);
     }
     return out;
@@ -105,13 +103,13 @@
     try{return localStorage.getItem(ACTIVE_KEY)==='1';}catch(_e){return false;}
   }
 
-  function jsonp(){
+  function jsonp(force){
     return new Promise((resolve,reject)=>{
       const cb='__neoPtoCb_'+Date.now()+'_'+Math.random().toString(36).slice(2);
       const script=document.createElement('script');
       const timer=setTimeout(()=>{
         cleanup();
-        reject(new Error('Google PTO source did not return data. The Apps Script PTO API may not be deployed yet.'));
+        reject(new Error('Google PTO source did not return data. Make sure Code5.gs is deployed in the existing Apps Script web app.'));
       },12000);
 
       function cleanup(){
@@ -128,11 +126,11 @@
 
       script.onerror=()=>{
         cleanup();
-        reject(new Error('Could not load PTO data from the Google Apps Script deployment.'));
+        reject(new Error('Could not load PTO / Availability Requests from Google Apps Script.'));
       };
 
       const qs=new URLSearchParams({
-        action:ACTION,
+        action:READ_ACTION,
         sheet:SHEET,
         callback:cb,
         _:String(Date.now())
@@ -149,7 +147,7 @@
     }
 
     try{
-      const matrix=await jsonp();
+      const matrix=await jsonp(force);
       memory={
         matrix,
         loadedAt:Date.now(),
@@ -162,9 +160,6 @@
     }catch(e){
       memory.lastError=String(e&&e.message||e);
       const cached=loadCache();
-
-      // Once Google PTO has successfully connected, never go back to GitHub PTO.
-      // Use the last Google copy if the Google endpoint has a temporary outage.
       if(wasActivated()&&cached&&Array.isArray(cached.matrix)){
         const ids=recordIdsFromMatrix(cached.matrix);
         memory={
@@ -176,13 +171,99 @@
         };
         return {matrix:clone(cached.matrix),source:'google-cache',recordIds:new Set(ids)};
       }
-
-      // Migration-safe state before the Apps Script API is deployed.
-      // The legacy GitHub PTO source remains temporarily available so the
-      // scheduling app does not break during deployment.
-      memory.source='github-fallback';
-      return null;
+      throw e;
     }
+  }
+
+  function makeRecordId(){
+    const d=new Date();
+    const pad=n=>String(n).padStart(2,'0');
+    const stamp=''+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+
+      pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds());
+    return 'REQ-'+stamp+'-'+Math.floor(Math.random()*900+100);
+  }
+
+  async function postWrite(payload){
+    const body=JSON.stringify({
+      action:WRITE_ACTION,
+      sheet:SHEET,
+      payload:payload
+    });
+
+    try{
+      await fetch(ENDPOINT,{
+        method:'POST',
+        mode:'no-cors',
+        cache:'no-store',
+        headers:{'Content-Type':'text/plain;charset=UTF-8'},
+        body:body
+      });
+    }catch(e){
+      throw new Error('Could not send the PTO change to Google Sheets. '+(e&&e.message?e.message:''));
+    }
+
+    // Apps Script writes are asynchronous from the browser's perspective.
+    // Re-read the sheet after a short delay and verify the change actually landed.
+    await new Promise(resolve=>setTimeout(resolve,900));
+    memory.loadedAt=0;
+  }
+
+  async function saveRequest(data){
+    const row={...(data||{})};
+    row['Record Type']=String(row['Record Type']||'PTO').trim().toUpperCase();
+    row['Record ID']=String(row['Record ID']||'').trim()||makeRecordId();
+
+    await postWrite({operation:'save',row:row});
+
+    const refreshed=await load(true);
+    const rows=matrixToObjects(refreshed.matrix);
+    const saved=rows.find(r=>String(r['Record ID']||'')===row['Record ID']);
+    if(!saved){
+      throw new Error('Google Apps Script accepted the request, but the row was not found in the Google Sheet after saving. Confirm Code5.gs is deployed as a new version of the existing web app.');
+    }
+
+    return {
+      ok:true,
+      recordId:row['Record ID'],
+      status:String(saved.Status||''),
+      message:'Saved to Google Sheet: '+SHEET
+    };
+  }
+
+  async function reviewRequest(recordId,status,comment){
+    const id=String(recordId||'').trim();
+    if(!id)throw new Error('Request ID is required.');
+
+    await postWrite({
+      operation:'review',
+      recordId:id,
+      status:String(status||'').trim(),
+      comment:comment===undefined?'':String(comment)
+    });
+
+    const refreshed=await load(true);
+    const rows=matrixToObjects(refreshed.matrix);
+    const saved=rows.find(r=>String(r['Record ID']||'')===id);
+    if(!saved){
+      throw new Error('The request could not be found in the Google Sheet after review.');
+    }
+    if(String(saved.Status||'').trim().toLowerCase()!==String(status||'').trim().toLowerCase()){
+      throw new Error('The Google Sheet did not confirm the requested status change. Check the Code5.gs deployment.');
+    }
+
+    return {ok:true,recordId:id,status:saved.Status,message:'Review saved to Google Sheet.'};
+  }
+
+  async function removeRequest(recordId){
+    const id=String(recordId||'').trim();
+    if(!id)throw new Error('Request ID is required.');
+    await postWrite({operation:'delete',recordId:id});
+    const refreshed=await load(true);
+    const rows=matrixToObjects(refreshed.matrix);
+    if(rows.some(r=>String(r['Record ID']||'')===id)){
+      throw new Error('The request still exists in the Google Sheet after delete.');
+    }
+    return {ok:true,recordId:id};
   }
 
   function status(){
@@ -196,7 +277,7 @@
     };
   }
 
-  function isExternalPtoRecord(recordId){
+  function isExternalRecord(recordId){
     return memory.recordIds.has(String(recordId||''));
   }
 
@@ -205,7 +286,11 @@
     sheet:SHEET,
     headers:HEADERS.slice(),
     load,
+    saveRequest,
+    reviewRequest,
+    removeRequest,
     status,
-    isExternalPtoRecord
+    isExternalRecord,
+    isExternalPtoRecord:isExternalRecord
   };
 })();
