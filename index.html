@@ -1414,18 +1414,65 @@ function peopleCoverageSkills_(u){return [...new Set(String(u['Off-Day Coverage 
 function peopleInitials_(name){const p=String(name||'?').replace(/,/g,' ').trim().split(/\s+/).filter(Boolean);return ((p[0]?.[0]||'')+(p[p.length-1]?.[0]||'')).toUpperCase()||'RX'}
 function peopleWeeklyFor_(u,weekly){const eid=String(u['Employee ID']||''),un=String(u.Username||'');return (weekly||[]).filter(r=>{const reid=String(r['Employee ID']||''),run=String(r.Username||'');return (eid&&reid===eid)||(!reid&&un&&run===un)||(un&&run===un)})}
 function peopleV32Week_(rules){const days=[['S','Sunday'],['M','Monday'],['T','Tuesday'],['W','Wednesday'],['T','Thursday'],['F','Friday'],['S','Saturday']],by={};(rules||[]).forEach(r=>{if(!by[r.Day])by[r.Day]=r});return `<div class="pharm-v32-week">${days.map(([a,d])=>{const r=by[d];let cls='free',title=d+': unrestricted';if(r){if(!yes(r.Available)){cls='no';title=d+': OFF'}else if(String(r['Rule Type']||'').toUpperCase()==='SOFT'){cls='soft';title=d+': soft availability'}else{cls='yes';title=d+': available'}}return `<div class="pharm-v32-day" title="${attr(title)}"><b>${a}</b><i class="${cls}"></i></div>`}).join('')}</div>`}
+function peopleCurrentScheduleRows_(rows){
+  const active=(rows||[]).filter(r=>{
+    const status=String(r.Status||'').trim().toUpperCase();
+    const who=String(r['Assigned Pharmacist']||'').trim();
+    return status!=='UNFILLED'&&status!=='CANCELLED'&&who&&who.toUpperCase()!=='UNFILLED'&&r.Date;
+  });
+  if(!active.length)return [];
+
+  const generated=active.filter(r=>String(r['Generation ID']||'').trim());
+  let rangeStart='',rangeEnd='';
+  if(generated.length){
+    const genMeta={};
+    generated.forEach(r=>{
+      const g=String(r['Generation ID']||'').trim();
+      const t=Date.parse(r['Updated At']||'')||0;
+      if(!genMeta[g])genMeta[g]={latest:0,dates:[]};
+      genMeta[g].latest=Math.max(genMeta[g].latest,t);
+      genMeta[g].dates.push(String(r.Date||'').slice(0,10));
+    });
+    const latest=Object.entries(genMeta).sort((a,b)=>b[1].latest-a[1].latest||String(b[0]).localeCompare(String(a[0])))[0];
+    if(latest){
+      const ds=latest[1].dates.filter(Boolean).sort();
+      rangeStart=ds[0]||'';rangeEnd=ds[ds.length-1]||'';
+    }
+  }
+
+  const inPeriod=active.filter(r=>{
+    if(!rangeStart||!rangeEnd)return true;
+    const d=String(r.Date||'').slice(0,10);
+    return d>=rangeStart&&d<=rangeEnd;
+  });
+
+  const latestBySlot=new Map();
+  inPeriod.forEach(r=>{
+    const key=[String(r.Date||'').slice(0,10),String(r.Shift||''),String(r.Slot||'1')].join('|');
+    const old=latestBySlot.get(key);
+    const rt=Date.parse(r['Updated At']||'')||0;
+    const ot=old?(Date.parse(old['Updated At']||'')||0):-1;
+    if(!old||rt>=ot)latestBySlot.set(key,r);
+  });
+  return [...latestBySlot.values()];
+}
+
 function peopleV32Card_(u,skills,weekly,sched,periodTarget){
   const eid=String(u['Employee ID']||''),un=String(u.Username||''),name=u['Pharmacist Name']||'Unnamed Pharmacist',g=String(u['Weekend Group']||'').toUpperCase(),seven=String(u['Schedule Type']||'').toLowerCase().includes('7');
   const normal=peopleEmployeeSkills_(u,skills),coverage=peopleCoverageSkills_(u),rules=peopleWeeklyFor_(u,weekly);
-  const mine=(sched||[]).filter(r=>String(r.Username||'')===un||String(r['Assigned Pharmacist']||'')===String(name));
-  const hrs=mine.reduce((a,r)=>a+num(r['Credited Hours']||r.Hours,0),0),shifts=mine.length,weekends=mine.filter(r=>yes(r.Weekend)).length,evenings=mine.filter(r=>String(r['Shift Type']||'').toLowerCase()==='evening').length;
+  const currentRows=peopleCurrentScheduleRows_(sched||[]);
+  const mine=currentRows.filter(r=>(un&&String(r.Username||'')===un)||String(r['Assigned Pharmacist']||'')===String(name));
+  const hrs=mine.reduce((a,r)=>a+num(r['Credited Hours']!==''&&r['Credited Hours']!=null?r['Credited Hours']:r.Hours,0),0);
+  const shifts=new Set(mine.map(r=>String(r.Date||'').slice(0,10)).filter(Boolean)).size;
+  const weekends=new Set(mine.filter(r=>yes(r.Weekend)).map(r=>String(r.Date||'').slice(0,10)).filter(Boolean)).size;
+  const evenings=new Set(mine.filter(r=>String(r['Shift Type']||'').trim().toLowerCase()==='evening').map(r=>String(r.Date||'').slice(0,10)).filter(Boolean)).size;
   const target=num(periodTarget,320),pct=target?Math.round(hrs/target*100):0,ring=Math.max(0,Math.min(100,pct)),ringColor=pct>100?'#d45b55':pct<70?'#d5a13a':'#0d8b84';
   const badges=[yes(u.Resident)?'<span class="pharm-v32-badge resident">Resident</span>':'',yes(u.Preceptor)?'<span class="pharm-v32-badge preceptor">Preceptor</span>':'',seven?'<span class="pharm-v32-badge seven">7-on/7-off</span>':'',g?`<span class="pharm-v32-badge group">Weekend ${esc(g)}</span>`:''].filter(Boolean).join('');
   const skillChips=normal.length?normal.slice(0,8).map(x=>`<span class="pharm-v32-skill">${esc(x)}</span>`).join('')+(normal.length>8?`<span class="pharm-v32-skill">+${normal.length-8}</span>`:''):'<span class="pharm-v32-skill empty">No normal skills</span>';
   const coverChips=coverage.length?coverage.slice(0,8).map(x=>`<span class="pharm-v32-skill cover">${esc(x)}</span>`).join('')+(coverage.length>8?`<span class="pharm-v32-skill cover">+${coverage.length-8}</span>`:''):'<span class="pharm-v32-skill empty">No OFF-day coverage skills</span>';
   const rotation=g?`Group ${g}`:seven?'7-on / 7-off':'No weekend group';
   const anchor=g?(u['Weekend Rotation Anchor Date']||'No anchor'):seven?(u['Rotation Anchor Date']||'No anchor'):'—';
-  return `<article class="pharm-v32 ${g||''} ${seven?'seven':''} ${!yes(u.Active)?'inactive':''}"><div class="pharm-v32-topline"></div><div class="pharm-v32-head"><div class="pharm-v32-avatar-wrap">${employeePhotoAvatar_(u,'pharm-v32-avatar')}<span class="pharm-v32-status ${yes(u.Active)?'':'off'}"></span></div><div style="min-width:0"><div class="pharm-v32-name">${esc(name)}</div><div class="pharm-v32-meta">${esc(eid)} · ${esc(u['Preferred Shift Type']||u['Schedule Type']||'Regular')}</div><div class="pharm-v32-badges">${badges||'<span class="pharm-v32-badge">Regular</span>'}</div></div><div class="pharm-v32-gauge" style="--p:${ring};--c:${ringColor}"><div class="pharm-v32-gauge-text"><strong>${pct}%</strong><span>period</span></div></div></div><div class="pharm-v32-stats"><div class="pharm-v32-stat"><strong>${fmtHours(hrs)}</strong><span>Hours</span></div><div class="pharm-v32-stat"><strong>${shifts}</strong><span>Shifts</span></div><div class="pharm-v32-stat"><strong>${weekends}</strong><span>Weekend</span></div><div class="pharm-v32-stat"><strong>${evenings}</strong><span>Evening</span></div></div><div class="pharm-v32-body"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Normal Qualifications</span><span>${normal.length}</span></div><div class="pharm-v32-skills">${skillChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>OFF-Day Coverage Only</span><span>${coverage.length}</span></div><div class="pharm-v32-skills">${coverChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Weekly Availability</span><span>${rules.length?'Configured':'Unrestricted'}</span></div>${peopleV32Week_(rules)}</div><div class="pharm-v32-row"><div class="pharm-v32-rotation"><strong>${esc(rotation)}</strong><span>${esc(String(anchor))}</span></div></div></div><div class="pharm-v32-actions"><button class="btn btn-secondary btn-sm" onclick="openEmployeeModal('${attr(eid)}')">Edit Profile</button><button class="btn btn-ghost btn-sm" onclick="openEmployeeAvailability('${attr(eid)}')">Weekly Availability</button></div></article>`;
+  return `<article class="pharm-v32 ${g||''} ${seven?'seven':''} ${!yes(u.Active)?'inactive':''}"><div class="pharm-v32-topline"></div><div class="pharm-v32-head"><div class="pharm-v32-avatar-wrap">${employeePhotoAvatar_(u,'pharm-v32-avatar')}<span class="pharm-v32-status ${yes(u.Active)?'':'off'}"></span></div><div style="min-width:0"><div class="pharm-v32-name">${esc(name)}</div><div class="pharm-v32-meta">${esc(eid)} · ${esc(u['Preferred Shift Type']||u['Schedule Type']||'Regular')}</div><div class="pharm-v32-badges">${badges||'<span class="pharm-v32-badge">Regular</span>'}</div></div><div class="pharm-v32-gauge" style="--p:${ring};--c:${ringColor}"><div class="pharm-v32-gauge-text"><strong>${pct}%</strong><span>period</span></div></div></div><div class="pharm-v32-stats"><div class="pharm-v32-stat"><strong>${fmtHours(hrs)}</strong><span>Hours</span></div><div class="pharm-v32-stat"><strong>${shifts}</strong><span>Workdays</span></div><div class="pharm-v32-stat"><strong>${weekends}</strong><span>Weekend Days</span></div><div class="pharm-v32-stat"><strong>${evenings}</strong><span>Evening</span></div></div><div class="pharm-v32-body"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Normal Qualifications</span><span>${normal.length}</span></div><div class="pharm-v32-skills">${skillChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>OFF-Day Coverage Only</span><span>${coverage.length}</span></div><div class="pharm-v32-skills">${coverChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Weekly Availability</span><span>${rules.length?'Configured':'Unrestricted'}</span></div>${peopleV32Week_(rules)}</div><div class="pharm-v32-row"><div class="pharm-v32-rotation"><strong>${esc(rotation)}</strong><span>${esc(String(anchor))}</span></div></div></div><div class="pharm-v32-actions"><button class="btn btn-secondary btn-sm" onclick="openEmployeeModal('${attr(eid)}')">Edit Profile</button><button class="btn btn-ghost btn-sm" onclick="openEmployeeAvailability('${attr(eid)}')">Weekly Availability</button></div></article>`;
 }
 
 function openEmployeeModal(id){
