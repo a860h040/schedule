@@ -1399,6 +1399,12 @@ async function removeEmployeePhotoUI_(employeeId){
   }
 }
 
+function peopleCategory_(u){
+  if(String(u['Employment Type']||'Regular').trim().toUpperCase()==='PRN')return 'prn';
+  if(yes(u.Resident))return 'resident';
+  if(yes(u.Preceptor))return 'preceptor';
+  return 'regular';
+}
 function renderEmployees(){
   const pharmacists=(State.data.users||[]).filter(u=>String(u.Role||'Pharmacist').toLowerCase()!=='administrator');
   if(!State.peopleVisual)State.peopleVisual={search:'',segment:'all'};
@@ -1415,12 +1421,9 @@ function renderEmployees(){
   const q=String(vf.search||'').trim().toLowerCase();
   const shown=pharmacists.filter(u=>{
     const g=String(u['Weekend Group']||'').toUpperCase(),segment=String(vf.segment||'all');
-    if(segment==='active'&&!yes(u.Active))return false;
-    if(segment==='resident'&&!yes(u.Resident))return false;
-    if(segment==='preceptor'&&!yes(u.Preceptor))return false;
-    if(segment==='7on'&&!String(u['Schedule Type']||'').toLowerCase().includes('7'))return false;
-    if(/^group[ABC]$/.test(segment)&&g!==segment.slice(-1))return false;
-    if(q){const normal=peopleEmployeeSkills_(u,skills).join(' ');const blob=[u['Pharmacist Name'],u['Employee ID'],u['Schedule Type'],u['Weekend Group'],u['Preferred Shift Type'],u['Off-Day Coverage Skills'],normal].join(' ').toLowerCase();if(!blob.includes(q))return false}
+    const category=peopleCategory_(u);
+    if(segment!=='all'&&category!==segment)return false;
+    if(q){const normal=peopleEmployeeSkills_(u,skills).join(' ');const blob=[u['Pharmacist Name'],u['Employee ID'],u['Employment Type'],u['Schedule Type'],u['Weekend Group'],u['Preferred Shift Type'],u['Off-Day Coverage Skills'],category,normal].join(' ').toLowerCase();if(!blob.includes(q))return false}
     return true;
   });
   const normalMapped=active.filter(u=>peopleEmployeeSkills_(u,skills).length>0).length;
@@ -1429,10 +1432,20 @@ function renderEmployees(){
   const lane=g=>{const members=active.filter(u=>String(u['Weekend Group']||'').toUpperCase()===g);return `<div class="rotation-lane ${g}"><div class="rotation-lane-top"><div class="rotation-lane-title"><span class="rotation-dot"></span>Weekend Group ${g}</div><span class="rotation-count">${members.length}</span></div><div class="rotation-avatars">${members.length?members.map(u=>`<div class="rotation-person" title="${attr(u['Pharmacist Name'])}">${employeePhotoAvatar_(u,'rotation-avatar')}<span class="rotation-name">${esc(u['Pharmacist Name'])}</span></div>`).join(''):'<span class="small muted">No pharmacists</span>'}</div></div>`};
   const pct=n=>active.length?Math.round(n/active.length*100):0;
   const board=`<div class="people-v32-board"><section class="people-v32-panel"><div class="people-v32-panel-head"><div><h3>Weekend Rotation Board</h3><p>See the A/B/C staffing lanes at a glance.</p></div><span class="badge badge-ok">Every 3rd weekend</span></div><div class="rotation-lanes">${lane('A')}${lane('B')}${lane('C')}</div></section><section class="people-v32-panel"><div class="people-v32-panel-head"><div><h3>Workforce Readiness</h3><p>How completely the pharmacist profiles are configured.</p></div></div><div class="people-v32-rings"><div class="people-v32-ring-card"><div class="people-v32-ring" style="--p:${pct(normalMapped)};--c:#0d8b84"><strong>${pct(normalMapped)}%</strong></div><div class="people-v32-ring-label">Normal Skills</div></div><div class="people-v32-ring-card"><div class="people-v32-ring" style="--p:${pct(coverMapped)};--c:#4f7fa4"><strong>${pct(coverMapped)}%</strong></div><div class="people-v32-ring-label">Coverage Skills</div></div><div class="people-v32-ring-card"><div class="people-v32-ring" style="--p:${pct(groupCount.A+groupCount.B+groupCount.C+seven.length)};--c:#c88a31"><strong>${pct(groupCount.A+groupCount.B+groupCount.C+seven.length)}%</strong></div><div class="people-v32-ring-label">Rotation Ready</div></div></div></section></div>`;
-  const toolbar=`<div class="people-v32-toolbar"><div class="people-v32-search"><input id="peopleSearch" class="control" value="${attr(vf.search||'')}" placeholder="Search pharmacist, skill, shift, group…" oninput="setPeopleSearch(this.value)"></div><div class="people-v32-tabs">${peopleV32Tab_('all','All',vf.segment)}${peopleV32Tab_('active','Active',vf.segment)}${peopleV32Tab_('resident','Residents',vf.segment)}${peopleV32Tab_('preceptor','Preceptors',vf.segment)}${peopleV32Tab_('7on','7-on/7-off',vf.segment)}${peopleV32Tab_('groupA','Group A',vf.segment)}${peopleV32Tab_('groupB','Group B',vf.segment)}${peopleV32Tab_('groupC','Group C',vf.segment)}</div></div>`;
-  const cards=shown.map(u=>peopleV32Card_(u,skills,weekly,sched,periodTarget)).join('');
-  const title=`<div class="people-v32-section-title"><div><h3>Pharmacist Profiles</h3><p>Visual profiles show workload, qualifications, coverage flexibility, availability, and rotation setup.</p></div><span class="people-v32-result">${shown.length} shown</span></div>`;
-  $('content').innerHTML=`<div class="people-v32">${hero}${board}${toolbar}${title}${cards?`<div class="people-v32-grid">${cards}</div>`:`<div class="people-v32-empty"><strong>No pharmacist profiles match this view.</strong>Try another search or filter.</div>`}</div>`;
+  const toolbar=`<div class="people-v32-toolbar"><div class="people-v32-search"><input id="peopleSearch" class="control" value="${attr(vf.search||'')}" placeholder="Search pharmacist, skill, group, role…" oninput="setPeopleSearch(this.value)"></div><div class="people-v32-tabs">${peopleV32Tab_('all','All',vf.segment)}${peopleV32Tab_('regular','Regular',vf.segment)}${peopleV32Tab_('preceptor','Preceptors',vf.segment)}${peopleV32Tab_('resident','Residents',vf.segment)}${peopleV32Tab_('prn','PRN',vf.segment)}</div></div>`;
+  const categoryDefs=[
+    {key:'regular',title:'Regular Pharmacists',sub:'Staff pharmacists who are not designated as preceptors, residents, or PRN.'},
+    {key:'preceptor',title:'Preceptors',sub:'Pharmacists designated as active preceptors.'},
+    {key:'resident',title:'Residents',sub:'Pharmacy residents.'},
+    {key:'prn',title:'PRN Pharmacists',sub:'Pharmacists whose Employment Type is PRN.'}
+  ];
+  const visibleDefs=String(vf.segment||'all')==='all'?categoryDefs:categoryDefs.filter(x=>x.key===String(vf.segment));
+  const directory=visibleDefs.map(def=>{
+    const members=shown.filter(u=>peopleCategory_(u)===def.key).sort((a,b)=>String(a['Pharmacist Name']||'').localeCompare(String(b['Pharmacist Name']||'')));
+    const cards=members.map(u=>peopleV32Card_(u,skills,weekly,sched,periodTarget)).join('');
+    return `<section class="people-category-section ${def.key}"><div class="people-category-head"><div><h3>${esc(def.title)}</h3><p>${esc(def.sub)}</p></div><span class="people-category-count">${members.length}</span></div>${cards?`<div class="people-v32-grid">${cards}</div>`:`<div class="people-category-empty">No ${esc(def.title.toLowerCase())}${q?' match this search.':'.'}</div>`}</section>`;
+  }).join('');
+  $('content').innerHTML=`<div class="people-v32">${hero}${board}${toolbar}<div class="people-directory">${directory}</div></div>`;
   hydrateEmployeePhotos_();
 }
 function peopleV32Tab_(key,label,current){return `<button class="people-v32-tab ${String(current||'all')===key?'active':''}" onclick="setPeopleSegment('${attr(key)}')">${esc(label)}</button>`}
