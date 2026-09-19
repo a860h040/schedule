@@ -1,13 +1,13 @@
-
 (function(){
   'use strict';
 
-  const ENDPOINT='https://script.google.com/macros/s/AKfycbxBTnuzFvNXOROz4fpGni_exZap2YfSTm5aNWw4eAwnyGe-m9jU3SZriupyFf3yDP-r/exec';
+  const ENDPOINT='https://script.google.com/macros/s/AKfycbzd-2TtruGPlfUbRlS7EDFlm7jgBlBUgfM66PJX03zMpZOHFoXBSXBd-rJMX7s71fXk/exec';
   const SHEET='PTO / Availability Requests';
   const READ_ACTION='neochronoPto';
   const WRITE_ACTION='neochronoPtoWrite';
-  const CACHE_KEY='neochrono_google_pto_cache_v3';
-  const ACTIVE_KEY='neochrono_google_pto_active_v3';
+  const MESSAGE_TYPE='NEOCHRONO_PTO_RECEIVER';
+  const CACHE_KEY='neochrono_google_pto_cache_v4';
+  const ACTIVE_KEY='neochrono_google_pto_active_v4';
   const CACHE_MS=15000;
 
   const HEADERS=[
@@ -19,6 +19,15 @@
   let memory={matrix:null,loadedAt:0,lastError:'',source:'google',recordIds:new Set()};
 
   function clone(v){return JSON.parse(JSON.stringify(v));}
+
+  function actor_(){
+    try{
+      const u=window.State&&State.data&&State.data.user?State.data.user:{};
+      return String(u.Username||u.username||u['Pharmacist Name']||u.Name||'NeoChrono').trim()||'NeoChrono';
+    }catch(_e){
+      return 'NeoChrono';
+    }
+  }
 
   function objectRowsToMatrix(rows){
     return [
@@ -38,7 +47,7 @@
   }
 
   function normalizePayload(payload){
-    if(!payload||payload.success===false){
+    if(!payload||payload.ok===false||payload.success===false){
       throw new Error(payload&&payload.message?payload.message:'Google PTO API returned no data.');
     }
 
@@ -56,7 +65,7 @@
     }
 
     if(!Array.isArray(matrix)||!matrix.length){
-      throw new Error('Google PTO API response does not contain request rows.');
+      matrix=[HEADERS.slice()];
     }
 
     const sourceHeaders=(matrix[0]||[]).map(x=>String(x??'').trim());
@@ -105,41 +114,79 @@
     try{return localStorage.getItem(ACTIVE_KEY)==='1';}catch(_e){return false;}
   }
 
-  function jsonp(force){
-    return new Promise((resolve,reject)=>{
-      const cb='__neoPtoCb_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-      const script=document.createElement('script');
-      const timer=setTimeout(()=>{
-        cleanup();
-        reject(new Error('Google PTO source did not return data. Make sure the PTO read API is deployed at the configured Apps Script web app URL.'));
-      },12000);
+  function requestId_(){
+    if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();
+    return 'PTO-'+Date.now()+'-'+Math.random().toString(36).slice(2);
+  }
 
-      function cleanup(){
-        clearTimeout(timer);
-        try{delete window[cb];}catch(_e){window[cb]=undefined;}
-        if(script.parentNode)script.parentNode.removeChild(script);
+  function postBridge_(action,payload,timeoutMs){
+    return new Promise((resolve,reject)=>{
+      const requestId=requestId_();
+      const frameName='neoPtoFrame_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+      const iframe=document.createElement('iframe');
+      iframe.name=frameName;
+      iframe.style.display='none';
+
+      const form=document.createElement('form');
+      form.method='POST';
+      form.action=ENDPOINT;
+      form.target=frameName;
+      form.style.display='none';
+
+      function addField(name,value){
+        const input=document.createElement('input');
+        input.type='hidden';
+        input.name=name;
+        input.value=String(value===null||value===undefined?'':value);
+        form.appendChild(input);
       }
 
-      window[cb]=payload=>{
-        cleanup();
-        try{resolve(normalizePayload(payload));}
-        catch(e){reject(e);}
-      };
+      addField('action',action);
+      addField('sheet',SHEET);
+      addField('requestId',requestId);
+      if(payload!==undefined)addField('payload',JSON.stringify(payload));
 
-      script.onerror=()=>{
-        cleanup();
-        reject(new Error('Could not load PTO / Availability Requests from Google Apps Script.'));
-      };
+      let finished=false;
+      let timer=null;
 
-      const qs=new URLSearchParams({
-        action:READ_ACTION,
-        sheet:SHEET,
-        callback:cb,
-        _:String(Date.now())
-      });
-      script.src=ENDPOINT+'?'+qs.toString();
-      script.async=true;
-      document.head.appendChild(script);
+      function cleanup(){
+        if(finished)return;
+        finished=true;
+        if(timer)clearTimeout(timer);
+        window.removeEventListener('message',onMessage);
+        try{form.remove();}catch(_e){}
+        try{iframe.remove();}catch(_e){}
+      }
+
+      function fail(message){
+        cleanup();
+        reject(new Error(message));
+      }
+
+      function onMessage(event){
+        const data=event&&event.data;
+        if(!data||data.type!==MESSAGE_TYPE)return;
+        if(String(data.requestId||'')!==String(requestId))return;
+        cleanup();
+        if(data.ok===false||data.success===false){
+          reject(new Error(data.message||'Google PTO receiver rejected the request.'));
+          return;
+        }
+        resolve(data);
+      }
+
+      window.addEventListener('message',onMessage);
+      timer=setTimeout(()=>{
+        fail('The Google PTO receiver did not confirm the request. Make sure Code5.gs is saved and the Apps Script web app is redeployed as a new version.');
+      },Number(timeoutMs||20000));
+
+      iframe.onerror=()=>fail('The Google PTO receiver could not be reached.');
+
+      document.body.appendChild(iframe);
+      document.body.appendChild(form);
+
+      try{form.submit();}
+      catch(e){fail(e&&e.message?e.message:String(e));}
     });
   }
 
@@ -149,7 +196,8 @@
     }
 
     try{
-      const matrix=await jsonp(force);
+      const response=await postBridge_(READ_ACTION,undefined,20000);
+      const matrix=normalizePayload(response);
       memory={
         matrix,
         loadedAt:Date.now(),
@@ -173,8 +221,6 @@
         };
         return {matrix:clone(cached.matrix),source:'google-cache',recordIds:new Set(ids)};
       }
-      // Before the first successful Code5 connection, keep NeoChrono usable
-      // with its existing GitHub copy. Once Google has connected, use cache.
       memory.source='github-fallback';
       return null;
     }
@@ -189,28 +235,9 @@
   }
 
   async function postWrite(payload){
-    const body=JSON.stringify({
-      action:WRITE_ACTION,
-      sheet:SHEET,
-      payload:payload
-    });
-
-    try{
-      await fetch(ENDPOINT,{
-        method:'POST',
-        mode:'no-cors',
-        cache:'no-store',
-        headers:{'Content-Type':'text/plain;charset=UTF-8'},
-        body:body
-      });
-    }catch(e){
-      throw new Error('Could not send the PTO change to Google Sheets. '+(e&&e.message?e.message:''));
-    }
-
-    // Apps Script writes are asynchronous from the browser's perspective.
-    // Re-read the sheet after a short delay and verify the change actually landed.
-    await new Promise(resolve=>setTimeout(resolve,900));
+    const response=await postBridge_(WRITE_ACTION,payload,25000);
     memory.loadedAt=0;
+    return response;
   }
 
   async function saveRequest(data){
@@ -218,24 +245,31 @@
     row['Record Type']=String(row['Record Type']||'PTO').trim().toUpperCase();
     if(row['Record Type']!=='PTO')throw new Error('Google PTO source only accepts PTO records.');
     row['Record ID']=String(row['Record ID']||'').trim()||makeRecordId();
+    row['Updated By']=String(row['Updated By']||actor_()).trim()||actor_();
 
-    await postWrite({operation:'save',row:row});
+    const response=await postWrite({
+      operation:'save',
+      row:row,
+      actor:actor_()
+    });
 
     const refreshed=await load(true);
     if(!refreshed){
-      throw new Error('The Google PTO write API is not active yet. Confirm the PTO read/write API is deployed at the configured Apps Script web app URL.');
+      throw new Error('The Google PTO API is not active yet. Confirm Code5.gs is deployed at the configured Apps Script web app URL.');
     }
     const rows=matrixToObjects(refreshed.matrix);
     const saved=rows.find(r=>String(r['Record ID']||'')===row['Record ID']);
     if(!saved){
-      throw new Error('Google Apps Script accepted the request, but the row was not found in the Google Sheet after saving. Confirm the configured Apps Script deployment exposes the PTO API.');
+      throw new Error('Google confirmed the save, but the PTO row was not found when NeoChrono re-read the Google Sheet.');
     }
 
     return {
       ok:true,
       recordId:row['Record ID'],
-      status:String(saved.Status||''),
-      message:'Saved to Google Sheet: '+SHEET
+      status:String(saved.Status||response.status||''),
+      autoApproved:!!response.autoApproved,
+      blockedDates:Array.isArray(response.blockedDates)?response.blockedDates:[],
+      message:response.message||('Saved to Google Sheet: '+SHEET)
     };
   }
 
@@ -243,36 +277,41 @@
     const id=String(recordId||'').trim();
     if(!id)throw new Error('Request ID is required.');
 
-    await postWrite({
+    const response=await postWrite({
       operation:'review',
       recordId:id,
       status:String(status||'').trim(),
-      comment:comment===undefined?'':String(comment)
+      comment:comment===undefined?'':String(comment),
+      actor:actor_()
     });
 
     const refreshed=await load(true);
     if(!refreshed){
-      throw new Error('The Google PTO write API is not active yet. Confirm the PTO API is deployed at the configured Apps Script web app URL.');
+      throw new Error('The Google PTO API is not active yet. Confirm Code5.gs is deployed at the configured Apps Script web app URL.');
     }
     const rows=matrixToObjects(refreshed.matrix);
     const saved=rows.find(r=>String(r['Record ID']||'')===id);
-    if(!saved){
-      throw new Error('The request could not be found in the Google Sheet after review.');
-    }
+    if(!saved)throw new Error('The request could not be found in the Google Sheet after review.');
     if(String(saved.Status||'').trim().toLowerCase()!==String(status||'').trim().toLowerCase()){
-      throw new Error('The Google Sheet did not confirm the requested status change. Check the PTO Code4.gs deployment.');
+      throw new Error('The Google Sheet did not confirm the requested status change. Check the Code5.gs deployment.');
     }
 
-    return {ok:true,recordId:id,status:saved.Status,message:'Review saved to Google Sheet.'};
+    return {ok:true,recordId:id,status:saved.Status,message:response.message||'Review saved to Google Sheet.'};
   }
 
   async function removeRequest(recordId){
     const id=String(recordId||'').trim();
     if(!id)throw new Error('Request ID is required.');
-    await postWrite({operation:'delete',recordId:id});
+
+    await postWrite({
+      operation:'delete',
+      recordId:id,
+      actor:actor_()
+    });
+
     const refreshed=await load(true);
     if(!refreshed){
-      throw new Error('The Google PTO write API is not active yet. Confirm the PTO API is deployed at the configured Apps Script web app URL.');
+      throw new Error('The Google PTO API is not active yet. Confirm Code5.gs is deployed at the configured Apps Script web app URL.');
     }
     const rows=matrixToObjects(refreshed.matrix);
     if(rows.some(r=>String(r['Record ID']||'')===id)){
