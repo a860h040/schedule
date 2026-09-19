@@ -93,97 +93,624 @@ function doPost(e) {
       sheet = ss.insertSheet(NEOCHRONO_RECEIVER_SHEET_NAME);
     }
 
+    var timezone =
+      ss.getSpreadsheetTimeZone() ||
+      Session.getScriptTimeZone() ||
+      'America/New_York';
+
     var cleanRows = payload.rows.map(function(row) {
       var source = Array.isArray(row) ? row : [];
+
       return NEOCHRONO_SCHEDULE_HEADERS.map(function(_header, index) {
         var value = source[index];
-        if (value === null || value === undefined) return '';
+
+        if (value === null || value === undefined) {
+          return '';
+        }
+
         return value;
       });
     });
 
-    // Replace the Schedule tab only. Other tabs in the spreadsheet are untouched.
-    sheet.clearContents();
+    /*
+     * Determine exactly which date range NeoChrono is replacing.
+     *
+     * Example:
+     *   Existing Google data = September + October
+     *   Incoming range        = October 1 - October 31
+     *
+     * Result:
+     *   Keep every September row.
+     *   Remove the old October rows.
+     *   Add the newly finalized October rows.
+     */
+    var startKey =
+      neoChronoScheduleDateKey_(
+        payload.startDate,
+        timezone
+      );
 
-    // Always write the exact 25-column header row, even if there are no data rows.
-    sheet
-      .getRange(1, 1, 1, NEOCHRONO_SCHEDULE_HEADERS.length)
-      .setValues([NEOCHRONO_SCHEDULE_HEADERS.slice()]);
+    var endKey =
+      neoChronoScheduleDateKey_(
+        payload.endDate,
+        timezone
+      );
 
-    if (cleanRows.length) {
-      sheet
-        .getRange(2, 1, cleanRows.length, NEOCHRONO_SCHEDULE_HEADERS.length)
-        .setValues(cleanRows);
+    if (!startKey || !endKey) {
+      var incomingDateKeys = cleanRows
+        .map(function(row) {
+          return neoChronoScheduleDateKey_(
+            row[2],
+            timezone
+          );
+        })
+        .filter(function(key) {
+          return !!key;
+        })
+        .sort();
+
+      if (!startKey && incomingDateKeys.length) {
+        startKey = incomingDateKeys[0];
+      }
+
+      if (!endKey && incomingDateKeys.length) {
+        endKey = incomingDateKeys[incomingDateKeys.length - 1];
+      }
     }
 
-    // Keep the receiver easy to read.
-    sheet.setFrozenRows(1);
-    sheet
-      .getRange(1, 1, 1, NEOCHRONO_SCHEDULE_HEADERS.length)
-      .setFontWeight('bold');
+    if (!startKey || !endKey) {
+      throw new Error(
+        'The schedule transfer is missing a valid Start Date / End Date.'
+      );
+    }
 
-    // Column C = Date.
-    if (cleanRows.length) {
+    if (startKey > endKey) {
+      throw new Error(
+        'Schedule Start Date must be before or equal to End Date.'
+      );
+    }
+
+    /*
+     * Validate every incoming row belongs to the selected finalized range.
+     */
+    cleanRows.forEach(function(row, index) {
+      var rowDate =
+        neoChronoScheduleDateKey_(
+          row[2],
+          timezone
+        );
+
+      if (!rowDate) {
+        throw new Error(
+          'Incoming schedule row ' +
+          (index + 1) +
+          ' is missing a valid Date.'
+        );
+      }
+
+      if (
+        rowDate < startKey ||
+        rowDate > endKey
+      ) {
+        throw new Error(
+          'Incoming schedule row ' +
+          (index + 1) +
+          ' has date ' +
+          rowDate +
+          ', which is outside the finalized range ' +
+          startKey +
+          ' through ' +
+          endKey +
+          '.'
+        );
+      }
+    });
+
+    /*
+     * Read the existing Schedule sheet BEFORE writing anything.
+     */
+    var existingRows = [];
+    var oldLastRow = sheet.getLastRow();
+    var oldLastColumn = sheet.getLastColumn();
+
+    if (oldLastRow >= 1 && oldLastColumn > 0) {
+      var existingHeaderWidth =
+        Math.min(
+          oldLastColumn,
+          NEOCHRONO_SCHEDULE_HEADERS.length
+        );
+
+      var existingHeaders =
+        sheet
+          .getRange(
+            1,
+            1,
+            1,
+            existingHeaderWidth
+          )
+          .getValues()[0]
+          .map(function(value) {
+            return String(value || '').trim();
+          });
+
+      var hasExistingHeader =
+        existingHeaders.some(function(value) {
+          return !!value;
+        });
+
+      if (
+        hasExistingHeader &&
+        (
+          existingHeaderWidth !== NEOCHRONO_SCHEDULE_HEADERS.length ||
+          !neoChronoHeadersMatch_(
+            existingHeaders,
+            NEOCHRONO_SCHEDULE_HEADERS
+          )
+        )
+      ) {
+        throw new Error(
+          'The existing Schedule sheet headers do not match NeoChrono. ' +
+          'The receiver stopped before changing any schedule data.'
+        );
+      }
+
+      if (oldLastRow > 1) {
+        existingRows =
+          sheet
+            .getRange(
+              2,
+              1,
+              oldLastRow - 1,
+              NEOCHRONO_SCHEDULE_HEADERS.length
+            )
+            .getValues()
+            .filter(function(row) {
+              return row.some(function(value) {
+                return (
+                  value !== '' &&
+                  value !== null &&
+                  value !== undefined
+                );
+              });
+            });
+      }
+    }
+
+    /*
+     * Preserve ALL existing rows outside the newly finalized range.
+     *
+     * Rows without a usable Date are also preserved so the receiver never
+     * silently destroys old/manual information.
+     */
+    var preservedRows =
+      existingRows.filter(function(row) {
+        var dateKey =
+          neoChronoScheduleDateKey_(
+            row[2],
+            timezone
+          );
+
+        if (!dateKey) {
+          return true;
+        }
+
+        return (
+          dateKey < startKey ||
+          dateKey > endKey
+        );
+      });
+
+    var replacedExistingRows =
+      existingRows.length -
+      preservedRows.length;
+
+    var mergedRows =
+      preservedRows.concat(cleanRows);
+
+    /*
+     * Keep the full historical Schedule sheet in chronological order.
+     * Sorting is stable for rows on the same date.
+     */
+    mergedRows =
+      neoChronoSortScheduleRows_(
+        mergedRows,
+        timezone
+      );
+
+    /*
+     * Make sure the sheet is large enough.
+     */
+    var requiredRows =
+      Math.max(
+        1,
+        mergedRows.length + 1
+      );
+
+    if (
+      sheet.getMaxRows() <
+      requiredRows
+    ) {
+      sheet.insertRowsAfter(
+        sheet.getMaxRows(),
+        requiredRows -
+        sheet.getMaxRows()
+      );
+    }
+
+    if (
+      sheet.getMaxColumns() <
+      NEOCHRONO_SCHEDULE_HEADERS.length
+    ) {
+      sheet.insertColumnsAfter(
+        sheet.getMaxColumns(),
+        NEOCHRONO_SCHEDULE_HEADERS.length -
+        sheet.getMaxColumns()
+      );
+    }
+
+    /*
+     * Write header + the COMPLETE merged data set.
+     *
+     * Do NOT clear the whole Schedule tab.
+     */
+    sheet
+      .getRange(
+        1,
+        1,
+        1,
+        NEOCHRONO_SCHEDULE_HEADERS.length
+      )
+      .setValues([
+        NEOCHRONO_SCHEDULE_HEADERS.slice()
+      ]);
+
+    if (mergedRows.length) {
       sheet
-        .getRange(2, 3, cleanRows.length, 1)
-        .setNumberFormat('yyyy-mm-dd');
+        .getRange(
+          2,
+          1,
+          mergedRows.length,
+          NEOCHRONO_SCHEDULE_HEADERS.length
+        )
+        .setValues(
+          mergedRows
+        );
+    }
+
+    /*
+     * If the new merged result is shorter than the old sheet, clear only
+     * leftover trailing rows. Historical rows already included in mergedRows
+     * are never deleted.
+     */
+    var finalLastRow =
+      mergedRows.length + 1;
+
+    if (
+      oldLastRow >
+      finalLastRow
+    ) {
+      sheet
+        .getRange(
+          finalLastRow + 1,
+          1,
+          oldLastRow - finalLastRow,
+          NEOCHRONO_SCHEDULE_HEADERS.length
+        )
+        .clearContent();
+    }
+
+    sheet.setFrozenRows(1);
+
+    sheet
+      .getRange(
+        1,
+        1,
+        1,
+        NEOCHRONO_SCHEDULE_HEADERS.length
+      )
+      .setFontWeight(
+        'bold'
+      );
+
+    if (mergedRows.length) {
+      sheet
+        .getRange(
+          2,
+          3,
+          mergedRows.length,
+          1
+        )
+        .setNumberFormat(
+          'yyyy-mm-dd'
+        );
     }
 
     SpreadsheetApp.flush();
 
-    // Verify that the sheet really contains what NeoChrono sent.
-    var verifyHeaders = sheet
-      .getRange(1, 1, 1, NEOCHRONO_SCHEDULE_HEADERS.length)
-      .getValues()[0]
-      .map(function(v) { return String(v || '').trim(); });
+    /*
+     * Verify headers.
+     */
+    var verifyHeaders =
+      sheet
+        .getRange(
+          1,
+          1,
+          1,
+          NEOCHRONO_SCHEDULE_HEADERS.length
+        )
+        .getValues()[0]
+        .map(function(value) {
+          return String(value || '').trim();
+        });
 
-    if (!neoChronoHeadersMatch_(verifyHeaders, NEOCHRONO_SCHEDULE_HEADERS)) {
-      throw new Error('Header verification failed after writing the Schedule sheet.');
+    if (
+      !neoChronoHeadersMatch_(
+        verifyHeaders,
+        NEOCHRONO_SCHEDULE_HEADERS
+      )
+    ) {
+      throw new Error(
+        'Header verification failed after writing the Schedule sheet.'
+      );
     }
 
-    var expectedLastRow = cleanRows.length + 1;
-    if (sheet.getLastRow() !== expectedLastRow) {
+    /*
+     * Verify total row count.
+     */
+    var actualLastRow =
+      sheet.getLastRow();
+
+    if (
+      actualLastRow !==
+      finalLastRow
+    ) {
       throw new Error(
         'Row verification failed. Expected ' +
-        expectedLastRow +
+        finalLastRow +
         ' total rows but the Schedule sheet has ' +
-        sheet.getLastRow() +
+        actualLastRow +
         '.'
       );
     }
 
+    /*
+     * Verify that the finalized range contains exactly the rows NeoChrono sent.
+     */
+    var verifyRows =
+      mergedRows.length
+        ? sheet
+            .getRange(
+              2,
+              1,
+              mergedRows.length,
+              NEOCHRONO_SCHEDULE_HEADERS.length
+            )
+            .getValues()
+        : [];
+
+    var verifyIncomingCount =
+      verifyRows.filter(function(row) {
+        var dateKey =
+          neoChronoScheduleDateKey_(
+            row[2],
+            timezone
+          );
+
+        return (
+          dateKey &&
+          dateKey >= startKey &&
+          dateKey <= endKey
+        );
+      }).length;
+
+    if (
+      verifyIncomingCount !==
+      cleanRows.length
+    ) {
+      throw new Error(
+        'Date-range verification failed. NeoChrono sent ' +
+        cleanRows.length +
+        ' row(s) for ' +
+        startKey +
+        ' through ' +
+        endKey +
+        ', but Google contains ' +
+        verifyIncomingCount +
+        ' row(s) in that range.'
+      );
+    }
+
     return neoChronoReceiverResponse_({
-      type: 'NEOCHRONO_SCHEDULE_RECEIVER',
-      ok: true,
-      transferId: transferId,
-      transferredRows: cleanRows.length,
-      transferredColumns: NEOCHRONO_SCHEDULE_HEADERS.length,
-      receiverSpreadsheetId: ss.getId(),
-      receiverSpreadsheetName: ss.getName(),
-      receiverSheetName: NEOCHRONO_RECEIVER_SHEET_NAME,
+      type:
+        'NEOCHRONO_SCHEDULE_RECEIVER',
+
+      ok:
+        true,
+
+      transferId:
+        transferId,
+
+      /*
+       * Keep transferredRows equal to ONLY the rows sent in this transfer.
+       * The NeoChrono browser uses this number to verify the submission.
+       */
+      transferredRows:
+        cleanRows.length,
+
+      writtenRows:
+        cleanRows.length,
+
+      transferredColumns:
+        NEOCHRONO_SCHEDULE_HEADERS.length,
+
+      writtenColumns:
+        NEOCHRONO_SCHEDULE_HEADERS.length,
+
+      preservedRows:
+        preservedRows.length,
+
+      replacedExistingRows:
+        replacedExistingRows,
+
+      totalScheduleRows:
+        mergedRows.length,
+
+      startDate:
+        startKey,
+
+      endDate:
+        endKey,
+
+      receiverSpreadsheetId:
+        ss.getId(),
+
+      receiverSpreadsheetName:
+        ss.getName(),
+
+      receiverSheetName:
+        NEOCHRONO_RECEIVER_SHEET_NAME,
+
       receiverUrl:
         ss.getUrl() +
         '#gid=' +
         sheet.getSheetId(),
+
       message:
-        'Schedule received successfully. ' +
+        'Schedule merged successfully. ' +
         cleanRows.length +
-        ' row(s) were written to "' +
-        ss.getName() +
-        '" -> Schedule.'
+        ' row(s) were written for ' +
+        startKey +
+        ' through ' +
+        endKey +
+        '. ' +
+        preservedRows.length +
+        ' existing row(s) outside that date range were preserved. ' +
+        mergedRows.length +
+        ' total schedule row(s) are now stored.'
     });
 
   } catch (error) {
+
     return neoChronoReceiverResponse_({
-      type: 'NEOCHRONO_SCHEDULE_RECEIVER',
-      ok: false,
-      transferId: transferId,
+      type:
+        'NEOCHRONO_SCHEDULE_RECEIVER',
+
+      ok:
+        false,
+
+      transferId:
+        transferId,
+
       message:
         error && error.message
           ? error.message
           : String(error)
     });
   }
+}
+
+
+/**
+ * Converts a Schedule date to YYYY-MM-DD without changing the calendar date.
+ */
+function neoChronoScheduleDateKey_(value, timezone) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return '';
+  }
+
+  if (
+    value instanceof Date &&
+    !isNaN(value.getTime())
+  ) {
+    return Utilities.formatDate(
+      value,
+      timezone ||
+      Session.getScriptTimeZone() ||
+      'America/New_York',
+      'yyyy-MM-dd'
+    );
+  }
+
+  var raw =
+    String(value).trim();
+
+  var iso =
+    raw.match(
+      /^(\d{4})-(\d{2})-(\d{2})/
+    );
+
+  if (iso) {
+    return (
+      iso[1] +
+      '-' +
+      iso[2] +
+      '-' +
+      iso[3]
+    );
+  }
+
+  var parsed =
+    new Date(raw);
+
+  if (
+    isNaN(parsed.getTime())
+  ) {
+    return '';
+  }
+
+  return Utilities.formatDate(
+    parsed,
+    timezone ||
+    Session.getScriptTimeZone() ||
+    'America/New_York',
+    'yyyy-MM-dd'
+  );
+}
+
+
+/**
+ * Sort the combined historical schedule by Date.
+ * Rows with no valid date are kept at the end and never discarded.
+ */
+function neoChronoSortScheduleRows_(rows, timezone) {
+  return (rows || [])
+    .map(function(row, index) {
+      return {
+        row:
+          row,
+
+        index:
+          index,
+
+        date:
+          neoChronoScheduleDateKey_(
+            row[2],
+            timezone
+          )
+      };
+    })
+    .sort(function(a, b) {
+      if (a.date && b.date) {
+        if (a.date < b.date) return -1;
+        if (a.date > b.date) return 1;
+      } else if (a.date) {
+        return -1;
+      } else if (b.date) {
+        return 1;
+      }
+
+      return (
+        a.index -
+        b.index
+      );
+    })
+    .map(function(item) {
+      return item.row;
+    });
 }
 
 function neoChronoReceiverSpreadsheet_() {
