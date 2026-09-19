@@ -60,21 +60,76 @@
   }
 
   function payload_(startDate,endDate){
-    const rows=scheduleRows_(startDate,endDate);
+    /*
+     * First verify the selected period actually has schedule data.
+     */
+    const selectedRows=scheduleRows_(startDate,endDate);
 
-    if(!rows.length){
+    if(!selectedRows.length){
       throw new Error('No schedule rows were found in the selected date range.');
     }
+
+    /*
+     * IMPORTANT:
+     * Send the ENTIRE saved NeoChrono schedule, not only the selected month.
+     *
+     * This protects previously generated months even if the deployed Google
+     * receiver is still an older replace-all version.
+     *
+     * Example:
+     *   NeoChrono contains September + October + November + December.
+     *   User clicks Finalize & Send while September is selected.
+     *
+     * Google receives ALL four months, so October/November/December cannot
+     * disappear just because September was sent.
+     */
+    const allRows=(State.data.schedule||[])
+      .filter(function(r){
+        return !!dateKey_(r);
+      })
+      .slice()
+      .sort(function(a,b){
+        const ad=dateKey_(a);
+        const bd=dateKey_(b);
+        if(ad<bd)return -1;
+        if(ad>bd)return 1;
+        return 0;
+      });
+
+    if(!allRows.length){
+      throw new Error('No saved NeoChrono schedule rows were found.');
+    }
+
+    const allDates=allRows
+      .map(function(r){return dateKey_(r);})
+      .filter(Boolean)
+      .sort();
+
+    const fullStart=allDates[0]||startDate||'';
+    const fullEnd=allDates[allDates.length-1]||endDate||'';
 
     return {
       action:'replaceSchedule',
       sheetName:SHEET_NAME,
       transferId:makeTransferId_(),
-      startDate:startDate||'',
-      endDate:endDate||'',
+
+      /*
+       * The receiver must treat the payload as the full saved schedule range.
+       */
+      startDate:fullStart,
+      endDate:fullEnd,
+
+      /*
+       * Keep the month/range the administrator clicked for audit/display.
+       */
+      requestedStartDate:startDate||'',
+      requestedEndDate:endDate||'',
+      selectedRows:selectedRows.length,
+
       sentAt:new Date().toISOString(),
       headers:HEADERS.slice(),
-      rows:rows.map(function(r){
+
+      rows:allRows.map(function(r){
         return HEADERS.map(function(h){
           return clean_(r[h]);
         });
@@ -276,11 +331,16 @@
       ok:true,
       transferredRows:gotRows,
       transferredColumns:gotCols,
+      selectedRows:Number(payload.selectedRows||0),
+      fullStartDate:payload.startDate||'',
+      fullEndDate:payload.endDate||'',
+      requestedStartDate:payload.requestedStartDate||startDate||'',
+      requestedEndDate:payload.requestedEndDate||endDate||'',
       receiverSheetName:result.receiverSheetName||SHEET_NAME,
       receiverSpreadsheetName:result.receiverSpreadsheetName||'Pharmacists Schedule',
       receiverUrl:result.receiverUrl||RECEIVER_URL,
       transferId:payload.transferId,
-      message:result.message||'Schedule written to Google Sheet.'
+      message:result.message||'Complete saved schedule written to Google Sheet.'
     };
   }
 
