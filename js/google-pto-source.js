@@ -171,7 +171,10 @@
         };
         return {matrix:clone(cached.matrix),source:'google-cache',recordIds:new Set(ids)};
       }
-      throw e;
+      // Before the first successful Code5 connection, keep NeoChrono usable
+      // with its existing GitHub copy. Once Google has connected, use cache.
+      memory.source='github-fallback';
+      return null;
     }
   }
 
@@ -216,6 +219,9 @@
     await postWrite({operation:'save',row:row});
 
     const refreshed=await load(true);
+    if(!refreshed){
+      throw new Error('The Google PTO write API is not active yet. Add Code5.gs, update doGet/doPost, and deploy a new version of the existing Apps Script web app.');
+    }
     const rows=matrixToObjects(refreshed.matrix);
     const saved=rows.find(r=>String(r['Record ID']||'')===row['Record ID']);
     if(!saved){
@@ -242,6 +248,9 @@
     });
 
     const refreshed=await load(true);
+    if(!refreshed){
+      throw new Error('The Google PTO write API is not active yet. Deploy Code5.gs in the existing Apps Script web app.');
+    }
     const rows=matrixToObjects(refreshed.matrix);
     const saved=rows.find(r=>String(r['Record ID']||'')===id);
     if(!saved){
@@ -259,6 +268,9 @@
     if(!id)throw new Error('Request ID is required.');
     await postWrite({operation:'delete',recordId:id});
     const refreshed=await load(true);
+    if(!refreshed){
+      throw new Error('The Google PTO write API is not active yet. Deploy Code5.gs in the existing Apps Script web app.');
+    }
     const rows=matrixToObjects(refreshed.matrix);
     if(rows.some(r=>String(r['Record ID']||'')===id)){
       throw new Error('The request still exists in the Google Sheet after delete.');
