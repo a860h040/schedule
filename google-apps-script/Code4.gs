@@ -11,9 +11,8 @@
 
 const NEOCHRONO_RECEIVER_SHEET_NAME = 'Schedule';
 
-// Leave blank when this Apps Script project is bound to the correct spreadsheet.
-// If it is a standalone Apps Script project, paste the destination spreadsheet ID here.
-const NEOCHRONO_RECEIVER_SPREADSHEET_ID = '';
+// Explicit destination spreadsheet used by the pharmacists-facing Schedule receiver.
+const NEOCHRONO_RECEIVER_SPREADSHEET_ID = '1flTBzOIM_dbDODjC-S-DHoViAhHASEyNWInZBxab5To';
 
 const NEOCHRONO_SCHEDULE_HEADERS = Object.freeze([
   'Generation ID',
