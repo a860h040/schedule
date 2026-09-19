@@ -36,6 +36,107 @@
     });
   }
 
+  function paperUserSkillCodes_(user){
+    var username=String(user&&user.Username==null?'':user.Username);
+    var name=String(user&&user['Pharmacist Name']||'');
+
+    return (State.data.skills||[])
+      .filter(function(s){
+        if(String(s.Active||'Yes').toLowerCase()==='no')return false;
+
+        return (
+          String(s.Username==null?'':s.Username)===username ||
+          String(s['Pharmacist Name']||'')===name
+        );
+      })
+      .map(function(s){
+        return String(s.Skill||'').trim().toUpperCase();
+      })
+      .filter(Boolean);
+  }
+
+  function paperUserGroup_(user){
+    var preferred=String(user&&user['Preferred Shift Type']||'')
+      .trim()
+      .toUpperCase();
+
+    var scheduleType=String(user&&user['Schedule Type']||'')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g,'');
+
+    var skills=paperUserSkillCodes_(user);
+
+    /*
+     * Put dedicated night pharmacists together first.
+     * Detect them from either Preferred Shift Type or their actual N1/N2 skill.
+     */
+    var isNight=
+      preferred==='N1' ||
+      preferred==='N2' ||
+      preferred==='NIGHT' ||
+      skills.indexOf('N1')>=0 ||
+      skills.indexOf('N2')>=0;
+
+    if(isNight){
+      return {
+        rank:0,
+        key:'NIGHT',
+        label:'Night Pharmacists'
+      };
+    }
+
+    /*
+     * Residents are kept together even though they are regular-schedule users.
+     */
+    if(yes(user&&user.Resident)){
+      return {
+        rank:1,
+        key:'RESIDENT',
+        label:'Residents'
+      };
+    }
+
+    /*
+     * Normal day/evening pharmacists are grouped together.
+     * Preceptors remain in this Regular group unless they are Night/7-on/7-off.
+     */
+    var isSevenOn=
+      scheduleType.indexOf('7-on')>=0 ||
+      scheduleType.indexOf('7on')>=0 ||
+      scheduleType.indexOf('7-on/7-off')>=0 ||
+      scheduleType.indexOf('7on/7off')>=0;
+
+    if(!isSevenOn){
+      return {
+        rank:2,
+        key:'REGULAR',
+        label:'Regular Pharmacists'
+      };
+    }
+
+    /*
+     * Non-night 7-on/7-off pharmacists (for example dedicated E pharmacists)
+     * are kept together as their own group.
+     */
+    return {
+      rank:3,
+      key:'SEVEN_ON',
+      label:'7-on / 7-off Pharmacists'
+    };
+  }
+
+  function paperUserSortKey_(user){
+    var preferred=String(user&&user['Preferred Shift Type']||'')
+      .trim()
+      .toUpperCase();
+
+    if(preferred)return preferred;
+
+    var skills=paperUserSkillCodes_(user);
+    return skills.length?skills[0]:'ZZZ';
+  }
+
   function paperVisibleUsers_(){
     var f=State.calendarFilters||{};
     var selected=selectedCalendarEmployeeKeys();
@@ -55,8 +156,29 @@
       users=users.filter(function(u){return String(u.Preceptor||'')===f.preceptor;});
     }
 
+    /*
+     * Paper Schedule order:
+     *   1. Night pharmacists
+     *   2. Residents
+     *   3. Regular pharmacists
+     *   4. Non-night 7-on/7-off pharmacists
+     *
+     * Within each section:
+     *   preferred/home shift first, then pharmacist name.
+     */
     return users.sort(function(a,b){
-      return String(a['Pharmacist Name']||'').localeCompare(String(b['Pharmacist Name']||''));
+      var ga=paperUserGroup_(a);
+      var gb=paperUserGroup_(b);
+
+      if(ga.rank!==gb.rank)return ga.rank-gb.rank;
+
+      var sa=paperUserSortKey_(a);
+      var sb=paperUserSortKey_(b);
+
+      if(sa!==sb)return sa.localeCompare(sb);
+
+      return String(a['Pharmacist Name']||'')
+        .localeCompare(String(b['Pharmacist Name']||''));
     });
   }
 
@@ -294,7 +416,22 @@
       '</tr></thead><tbody>';
 
     if(State.calendarFilters.status!=='UNFILLED'){
+      var lastPaperGroupKey='';
+
       users.forEach(function(user){
+        var group=paperUserGroup_(user);
+
+        if(group.key!==lastPaperGroupKey){
+          lastPaperGroupKey=group.key;
+
+          html+=
+            '<tr class="paper-category-row">'+
+              '<td colspan="'+(dates.length+1)+'">'+
+                esc(group.label)+
+              '</td>'+
+            '</tr>';
+        }
+
         html+='<tr><td class="name-col">'+esc(user['Pharmacist Name']||'')+'</td>';
 
         dates.forEach(function(dt){
