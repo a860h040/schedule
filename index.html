@@ -712,8 +712,8 @@
 <div id="modalRoot"></div>
 
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv4"></script>
-<script src="js/google-pto-source.js?v=20260919-githubflow1"></script>
-<script src="js/github-legacy-runtime.js?v=20260919-githubflow1"></script>
+<script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
+<script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
 <script src="js/legacy/main-backend.js?v=20260919-customdates1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
@@ -2287,8 +2287,17 @@ function renderStaffing(){if(!State.data.isAdmin)return;const req=State.data.req
 async function saveReqUI(code){const p={Shift:code,Active:$('req_'+code+'_Active').value};['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].forEach(d=>p[d]=$('req_'+code+'_'+d).value);try{await server('saveStaffingRequirement',State.token,p);toast(code+' staffing saved','success');await refreshData(false)}catch(e){toast(e.message,'error')}}
 
 function googlePtoSourceBadge_(){
-  return '<span class="badge badge-ok" title="Google Sheet is synchronized into the private neochrono-data repository. The scheduler reads PTO from GitHub, not directly from Google.">PTO Source: neochrono-data (Google synced)</span>';
+  return '<span class="badge badge-ok" title="Google Sheet is synchronized into the private neochrono-data repository. The scheduler reads PTO from GitHub, not directly from Google.">PTO Source: neochrono-data (Google sync every 5 sec)</span>';
 }
+
+
+window.addEventListener('neochrono:pto-synced',()=>{
+  try{
+    if(window.State&&State.token&&typeof refreshData==='function'){
+      refreshData(false).catch(()=>{});
+    }
+  }catch(_e){}
+});
 
 function renderRequests(){const rows=(State.data.requests||[]).slice().sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));$('content').innerHTML=`<div class="section-title"><div><h3>PTO / Date Availability</h3><p>PTO is first-come, first-served PER REQUESTED OFF DATE. Each calendar day has its own independent queue: request #1 and #2 for that day are automatically approved; request #3 and above for that same day remain Pending for administrator review.</p><div style="margin-top:6px">${googlePtoSourceBadge_()}</div></div><button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add PTO / Availability</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Type / ID</th><th>Pharmacist</th><th>Date(s)</th><th>Available</th><th>Status</th><th>Comment</th><th>Updated</th><th>Review</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td><td>${esc(r.Pharmacist)}</td><td>${requestDates(r)}</td><td>${esc(r.Available)}</td><td>${statusBadge(r.Status)}${String(r['Reviewed By']||'').toUpperCase()==='SYSTEM AUTO-APPROVAL'?'<div class="small muted">Auto-approved</div>':''}</td><td>${esc(r.Comment)}</td><td>${esc(r['Updated At']||r['Submitted At'])}</td><td>${String(r.Status||'').toLowerCase()==='pending'?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button><button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button></div>`:'—'}</td></tr>`).join('')}</tbody></table></div>`}
 
