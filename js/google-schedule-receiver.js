@@ -57,13 +57,69 @@
     };
   }
 
-  function postNoCors_(payload){
-    return fetch(RECEIVER_URL,{
-      method:'POST',
-      mode:'no-cors',
-      cache:'no-store',
-      headers:{'Content-Type':'text/plain;charset=UTF-8'},
-      body:JSON.stringify(payload)
+  function postForm_(payload){
+    return new Promise((resolve,reject)=>{
+      const frameName='neoSchedulePost_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+      const iframe=document.createElement('iframe');
+      iframe.name=frameName;
+      iframe.style.display='none';
+
+      const form=document.createElement('form');
+      form.method='POST';
+      form.action=RECEIVER_URL;
+      form.target=frameName;
+      form.style.display='none';
+
+      function add(name,value){
+        const input=document.createElement('input');
+        input.type='hidden';
+        input.name=name;
+        input.value=String(value==null?'':value);
+        form.appendChild(input);
+      }
+
+      add('action','replaceSchedule');
+      add('sheet',SHEET_NAME);
+      add('sentAt',payload.sentAt||'');
+      add('payload',JSON.stringify(payload));
+
+      let submitted=false;
+      const timer=setTimeout(()=>{
+        try{form.remove();}catch(_e){}
+        try{iframe.remove();}catch(_e){}
+        if(submitted)resolve();
+        else reject(new Error('The Google Schedule receiver could not be submitted.'));
+      },1200);
+
+      iframe.onload=()=>{
+        if(!submitted)return;
+        clearTimeout(timer);
+        setTimeout(()=>{
+          try{form.remove();}catch(_e){}
+          try{iframe.remove();}catch(_e){}
+          resolve();
+        },150);
+      };
+
+      iframe.onerror=()=>{
+        clearTimeout(timer);
+        try{form.remove();}catch(_e){}
+        try{iframe.remove();}catch(_e){}
+        reject(new Error('The Google Schedule receiver could not be reached.'));
+      };
+
+      document.body.appendChild(iframe);
+      document.body.appendChild(form);
+
+      try{
+        submitted=true;
+        form.submit();
+      }catch(e){
+        clearTimeout(timer);
+        try{form.remove();}catch(_e){}
+        try{iframe.remove();}catch(_e){}
+        reject(e);
+      }
     });
   }
 
@@ -112,18 +168,21 @@
   async function sendSchedule(startDate,endDate){
     const payload=payload_(startDate,endDate);
 
-    await postNoCors_(payload);
+    await postForm_(payload);
 
     // Give Apps Script a moment to finish writing before verification.
     let lastError=null;
-    for(let attempt=0;attempt<5;attempt++){
+    for(let attempt=0;attempt<7;attempt++){
       await new Promise(r=>setTimeout(r,1000+attempt*700));
       try{
         const status=await statusJsonp_(payload.sentAt);
         const expectedRows=payload.rows.length;
         const receiverRows=Number(status.dataRows||0);
 
-        if(receiverRows===expectedRows){
+        const receiverSentAt=String(status.lastSentAt||'');
+        const exactUpload=receiverSentAt===String(payload.sentAt||'');
+
+        if(receiverRows===expectedRows&&exactUpload){
           return {
             ok:true,
             transferredRows:expectedRows,
@@ -132,19 +191,27 @@
             receiverSpreadsheetName:status.spreadsheetName||'Pharmacists Schedule',
             receiverUrl:status.spreadsheetUrl||RECEIVER_URL,
             receiverLastReceivedAt:status.lastReceivedAt||'',
+            receiverLastSentAt:receiverSentAt,
             message:'Schedule verified in Google Sheet.'
           };
         }
 
-        lastError=new Error(
-          'Receiver has '+receiverRows+' schedule row(s), but NeoChrono sent '+expectedRows+'.'
-        );
+        if(!exactUpload){
+          lastError=new Error(
+            'Google still shows the previous upload. The new Schedule payload was not confirmed by Code4.gs.'
+          );
+        }else{
+          lastError=new Error(
+            'Google confirmed the new upload, but the Schedule sheet has '+receiverRows+
+            ' row(s) while NeoChrono sent '+expectedRows+'.'
+          );
+        }
       }catch(e){
         lastError=e;
       }
     }
 
-    throw lastError||new Error('The receiver did not verify the schedule transfer.');
+    throw lastError||new Error('The Google receiver did not confirm this exact schedule upload.');
   }
 
   window.__neoScheduleReceiver={
