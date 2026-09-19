@@ -710,6 +710,7 @@
 
 <div id="modalRoot"></div>
 
+<script src="js/google-schedule-receiver.js?v=20260919-schedrecv2"></script>
 <script src="js/google-pto-source.js?v=20260918-googlepto1"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/main-backend.js?v=20260919-pharmgroups2"></script>
@@ -1053,17 +1054,62 @@ async function finalizeAndSendUI(){
   const start=$('genStart')?.value||'';
   const end=$('genEnd')?.value||'';
   const btn=$('finalizeSendBtn');
-  if(!start||!end){toast('Select a Start Date and End Date before sending the schedule.','error');return}
-  if(!confirm('Finalize the schedule from '+start+' through '+end+' and REPLACE the pharmacists receiver Schedule sheet with the donor Schedule sheet?'))return;
+
+  if(!start||!end){
+    toast('Select a Start Date and End Date before sending the schedule.','error');
+    return;
+  }
+
+  if(!window.__neoScheduleReceiver||typeof window.__neoScheduleReceiver.sendSchedule!=='function'){
+    toast('The Google Schedule receiver is not loaded. Hard refresh the page and try again.','error');
+    return;
+  }
+
+  if(!confirm(
+    'Send the NeoChrono schedule from '+start+' through '+end+
+    ' to the Google Sheet tab named "Schedule"?\n\n'+
+    'The existing contents of the receiver Schedule sheet will be replaced.'
+  ))return;
+
   try{
-    if(btn){btn.disabled=true;btn.textContent='Finalizing & Sending...'}
-    const r=await server('finalizeAndSendToPharmacistsSchedule',State.token,start,end);
-    const link=r&&r.receiverUrl?'<br><a href="'+attr(r.receiverUrl)+'" target="_blank" style="font-weight:800">Open pharmacists schedule</a>':'';
-    $('generationResult').innerHTML='<div class="alert alert-ok"><b>Schedule finalized and sent.</b><br>'+esc(String((r&&r.transferredRows)||0))+' schedule row(s) transferred to '+esc((r&&r.receiverSpreadsheetName)||'the receiver Google Sheet')+'.'+link+'</div>';
-    toast('Schedule finalized and sent to pharmacists schedule','success');
-    await refreshData();
-  }catch(err){toast(err.message,'error')}
-  finally{if(btn){btn.disabled=false;btn.textContent='Finalize & Send to Pharmacists Schedule'}}
+    if(btn){
+      btn.disabled=true;
+      btn.textContent='Sending to Google Schedule...';
+    }
+
+    // Reload first so the payload is built from the newest GitHub schedule.
+    await refreshData(false);
+
+    const r=await window.__neoScheduleReceiver.sendSchedule(start,end);
+
+    const link=r&&r.receiverUrl
+      ? '<br><a href="'+attr(r.receiverUrl)+'" target="_blank" style="font-weight:800">Open pharmacists Google Sheet</a>'
+      : '';
+
+    $('generationResult').innerHTML=
+      '<div class="alert alert-ok">'+
+        '<b>Schedule verified in Google Sheet.</b><br>'+
+        esc(String((r&&r.transferredRows)||0))+
+        ' schedule row(s) are now in the sheet named <b>Schedule</b>.'+
+        link+
+      '</div>';
+
+    toast(
+      String((r&&r.transferredRows)||0)+' schedule rows verified in Google Schedule sheet',
+      'success'
+    );
+  }catch(err){
+    $('generationResult').innerHTML=
+      '<div class="alert alert-danger"><b>Schedule was not verified in Google Sheets.</b><br>'+
+      esc(err&&err.message?err.message:String(err))+
+      '</div>';
+    toast(err.message||String(err),'error');
+  }finally{
+    if(btn){
+      btn.disabled=false;
+      btn.textContent='Finalize & Send';
+    }
+  }
 }
 
 async function finalizeUI(finalize){try{const s=$('genStart')?.value||dateKey(State.month),e=$('genEnd')?.value||dateKey(addDays(addMonths(State.month,1),-1));if(!confirm((finalize?'Finalize':'Unfinalize')+' schedule from '+s+' through '+e+'?'))return;await server('finalizeSchedule',State.token,s,e,finalize);toast(finalize?'Schedule finalized':'Schedule unfinalized','success');await refreshData()}catch(err){toast(err.message,'error')}}
