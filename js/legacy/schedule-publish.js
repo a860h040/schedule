@@ -287,6 +287,7 @@ async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
       receipt.sheetName ||
       PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
     receiverUrl:
+      receipt.receiverUrl ||
       PHARMACIST_SCHEDULE_RECEIVER.WEB_APP_URL,
     publishId: publishId,
     validationWasRequired: false,
