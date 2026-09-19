@@ -131,6 +131,8 @@ function pharmacistSchedulePostToGoogle_(payload) {
     var iframe = document.createElement('iframe');
     var form = document.createElement('form');
     var input = document.createElement('input');
+    var settled = false;
+    var timeoutId = null;
 
     iframe.name = frameName;
     iframe.style.display = 'none';
@@ -146,35 +148,73 @@ function pharmacistSchedulePostToGoogle_(payload) {
     input.value = JSON.stringify(payload);
     form.appendChild(input);
 
-    document.body.appendChild(iframe);
-    document.body.appendChild(form);
-
-    try {
-      form.submit();
-
-      // Fire-and-forget by design.
-      // The user does not want NeoChrono to wait for or require a receipt
-      // from Google Apps Script. A successful browser form submission is
-      // treated as a successful send.
-      resolve({
-        ok: true,
-        submitted: true,
-        confirmationReceived: false,
-        transferId: transferId,
-        receiverSheetName: PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME
-      });
-
-      // Leave the iframe/form in place briefly so the browser has time to
-      // complete the POST before cleanup.
+    function cleanup() {
+      if (timeoutId) clearTimeout(timeoutId);
+      window.removeEventListener('message', onMessage);
       setTimeout(function() {
         try { form.remove(); } catch (_e) {}
         try { iframe.remove(); } catch (_e) {}
-      }, 8000);
+      }, 500);
+    }
 
+    function finishError(message) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(message));
+    }
+
+    function onMessage(event) {
+      var data = event && event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type !== 'NEOCHRONO_SCHEDULE_RECEIVER') return;
+      if (String(data.transferId || '') !== transferId) return;
+
+      settled = true;
+      cleanup();
+
+      if (data.ok !== true) {
+        reject(new Error(
+          data.message ||
+          'Google received the transfer but could not update the Schedule sheet.'
+        ));
+        return;
+      }
+
+      resolve({
+        ok: true,
+        submitted: true,
+        confirmationReceived: true,
+        transferId: transferId,
+        receiverSpreadsheetId: data.receiverSpreadsheetId || '',
+        receiverSpreadsheetName: data.receiverSpreadsheetName || '',
+        receiverSheetName: data.receiverSheetName || PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME,
+        receiverUrl: data.receiverUrl || '',
+        writtenRows: Number(data.writtenRows || 0),
+        writtenColumns: Number(data.writtenColumns || 0),
+        message: data.message || 'Google confirmed the Schedule sheet was updated.'
+      });
+    }
+
+    window.addEventListener('message', onMessage);
+    document.body.appendChild(iframe);
+    document.body.appendChild(form);
+
+    timeoutId = setTimeout(function() {
+      finishError(
+        'Google did not confirm the schedule transfer. ' +
+        'Make sure Code5.gs is saved, then go to Deploy → Manage deployments → Edit → New version → Deploy. ' +
+        'Also confirm the web app is deployed to run as you and can be accessed by the browser.'
+      );
+    }, 20000);
+
+    try {
+      form.submit();
     } catch (e) {
-      try { form.remove(); } catch (_e) {}
-      try { iframe.remove(); } catch (_e) {}
-      reject(e);
+      finishError(
+        'Could not submit the schedule to Google: ' +
+        (e && e.message ? e.message : String(e))
+      );
     }
   });
 }
@@ -238,7 +278,7 @@ async function finalizeAndSendToPharmacistsSchedule(token, startDate, endDate) {
     receiverUrl: receipt.receiverUrl || '',
     confirmationReceived: receipt.confirmationReceived !== false,
     message:
-      'Schedule was submitted to the Google Sheet receiver for tab "' +
-      PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME + '".'
+      'Google confirmed that the receiver tab "' +
+      PHARMACIST_SCHEDULE_RECEIVER.SHEET_NAME + '" was updated.'
   };
 }
