@@ -174,14 +174,26 @@ function neoChronoHandleSchedule_(payload, transferId) {
   });
 
   var width = headers.length;
+  var dateColumnIndex = headers.indexOf('Date');
+
+  if (dateColumnIndex < 0) {
+    throw new Error('The incoming Schedule payload does not contain a Date column.');
+  }
 
   var rows = payload.rows.map(function(row, rowIndex) {
     if (!Array.isArray(row)) {
-      throw new Error('Schedule row ' + (rowIndex + 1) + ' is invalid.');
+      throw new Error(
+        'Schedule row ' +
+        (rowIndex + 1) +
+        ' is invalid.'
+      );
     }
 
     var normalized = row.slice(0, width);
-    while (normalized.length < width) normalized.push('');
+
+    while (normalized.length < width) {
+      normalized.push('');
+    }
 
     return normalized.map(function(value) {
       return value === null || value === undefined ? '' : value;
@@ -195,14 +207,194 @@ function neoChronoHandleSchedule_(payload, transferId) {
     sheet = ss.insertSheet(NEOCHRONO_RECEIVER.SCHEDULE_SHEET);
   }
 
-  sheet.clearContents();
+  var timezone =
+    ss.getSpreadsheetTimeZone() ||
+    Session.getScriptTimeZone() ||
+    'America/New_York';
 
-  var matrix = [headers].concat(rows);
+  var startKey =
+    neoChronoScheduleDateKey_(
+      payload.startDate,
+      timezone
+    );
 
-  if (sheet.getMaxRows() < matrix.length) {
+  var endKey =
+    neoChronoScheduleDateKey_(
+      payload.endDate,
+      timezone
+    );
+
+  if (!startKey || !endKey) {
+    var incomingDates =
+      rows
+        .map(function(row) {
+          return neoChronoScheduleDateKey_(
+            row[dateColumnIndex],
+            timezone
+          );
+        })
+        .filter(function(value) {
+          return !!value;
+        })
+        .sort();
+
+    if (!startKey && incomingDates.length) {
+      startKey = incomingDates[0];
+    }
+
+    if (!endKey && incomingDates.length) {
+      endKey = incomingDates[incomingDates.length - 1];
+    }
+  }
+
+  if (!startKey || !endKey) {
+    throw new Error(
+      'The Schedule transfer is missing a valid Start Date / End Date.'
+    );
+  }
+
+  if (startKey > endKey) {
+    throw new Error(
+      'Schedule Start Date must be before or equal to End Date.'
+    );
+  }
+
+  rows.forEach(function(row, index) {
+    var rowDate =
+      neoChronoScheduleDateKey_(
+        row[dateColumnIndex],
+        timezone
+      );
+
+    if (!rowDate) {
+      throw new Error(
+        'Incoming schedule row ' +
+        (index + 1) +
+        ' is missing a valid Date.'
+      );
+    }
+
+    if (
+      rowDate < startKey ||
+      rowDate > endKey
+    ) {
+      throw new Error(
+        'Incoming schedule row ' +
+        (index + 1) +
+        ' has date ' +
+        rowDate +
+        ', outside the finalized range ' +
+        startKey +
+        ' through ' +
+        endKey +
+        '.'
+      );
+    }
+  });
+
+  var oldLastRow = sheet.getLastRow();
+  var oldLastColumn = sheet.getLastColumn();
+  var existingRows = [];
+
+  if (oldLastRow >= 1 && oldLastColumn > 0) {
+    var existingHeaderWidth =
+      Math.min(
+        oldLastColumn,
+        width
+      );
+
+    var existingHeaders =
+      sheet
+        .getRange(
+          1,
+          1,
+          1,
+          existingHeaderWidth
+        )
+        .getValues()[0]
+        .map(function(value) {
+          return String(value || '').trim();
+        });
+
+    var hasExistingHeader =
+      existingHeaders.some(function(value) {
+        return !!value;
+      });
+
+    if (
+      hasExistingHeader &&
+      (
+        existingHeaderWidth !== width ||
+        existingHeaders.join('\u001f') !== headers.join('\u001f')
+      )
+    ) {
+      throw new Error(
+        'The existing Schedule sheet headers do not match the incoming NeoChrono schedule. ' +
+        'No schedule data was changed.'
+      );
+    }
+
+    if (oldLastRow > 1) {
+      existingRows =
+        sheet
+          .getRange(
+            2,
+            1,
+            oldLastRow - 1,
+            width
+          )
+          .getValues()
+          .filter(function(row) {
+            return row.some(function(value) {
+              return (
+                value !== '' &&
+                value !== null &&
+                value !== undefined
+              );
+            });
+          });
+    }
+  }
+
+  var preservedRows =
+    existingRows.filter(function(row) {
+      var dateKey =
+        neoChronoScheduleDateKey_(
+          row[dateColumnIndex],
+          timezone
+        );
+
+      if (!dateKey) {
+        return true;
+      }
+
+      return (
+        dateKey < startKey ||
+        dateKey > endKey
+      );
+    });
+
+  var replacedExistingRows =
+    existingRows.length -
+    preservedRows.length;
+
+  var mergedRows =
+    neoChronoSortScheduleRows_(
+      preservedRows.concat(rows),
+      dateColumnIndex,
+      timezone
+    );
+
+  var requiredRows =
+    Math.max(
+      1,
+      mergedRows.length + 1
+    );
+
+  if (sheet.getMaxRows() < requiredRows) {
     sheet.insertRowsAfter(
       sheet.getMaxRows(),
-      matrix.length - sheet.getMaxRows()
+      requiredRows - sheet.getMaxRows()
     );
   }
 
@@ -214,25 +406,69 @@ function neoChronoHandleSchedule_(payload, transferId) {
   }
 
   sheet
-    .getRange(1, 1, matrix.length, width)
-    .setValues(matrix);
+    .getRange(
+      1,
+      1,
+      1,
+      width
+    )
+    .setValues([
+      headers
+    ]);
+
+  if (mergedRows.length) {
+    sheet
+      .getRange(
+        2,
+        1,
+        mergedRows.length,
+        width
+      )
+      .setValues(
+        mergedRows
+      );
+  }
+
+  var finalLastRow =
+    mergedRows.length + 1;
+
+  if (oldLastRow > finalLastRow) {
+    sheet
+      .getRange(
+        finalLastRow + 1,
+        1,
+        oldLastRow - finalLastRow,
+        width
+      )
+      .clearContent();
+  }
 
   sheet.setFrozenRows(1);
-  sheet.getRange(1, 1, 1, width).setFontWeight('bold');
+
+  sheet
+    .getRange(
+      1,
+      1,
+      1,
+      width
+    )
+    .setFontWeight('bold');
+
+  if (mergedRows.length) {
+    sheet
+      .getRange(
+        2,
+        dateColumnIndex + 1,
+        mergedRows.length,
+        1
+      )
+      .setNumberFormat('yyyy-mm-dd');
+  }
+
   SpreadsheetApp.flush();
 
-  var writtenRows = Math.max(0, sheet.getLastRow() - 1);
-  var writtenColumns = sheet.getLastColumn();
-
-  if (writtenRows !== rows.length) {
-    throw new Error(
-      'Google verification failed. Expected ' +
-      rows.length +
-      ' data rows but found ' +
-      writtenRows +
-      ' in the Schedule sheet.'
-    );
-  }
+  var writtenColumns =
+    sheet.getLastColumn();
 
   if (writtenColumns < width) {
     throw new Error(
@@ -244,30 +480,230 @@ function neoChronoHandleSchedule_(payload, transferId) {
     );
   }
 
+  var actualLastRow =
+    sheet.getLastRow();
+
+  if (actualLastRow !== finalLastRow) {
+    throw new Error(
+      'Google row verification failed. Expected ' +
+      finalLastRow +
+      ' total rows but found ' +
+      actualLastRow +
+      '.'
+    );
+  }
+
+  var verifyRows =
+    mergedRows.length
+      ? sheet
+          .getRange(
+            2,
+            1,
+            mergedRows.length,
+            width
+          )
+          .getValues()
+      : [];
+
+  var rangeCount =
+    verifyRows.filter(function(row) {
+      var dateKey =
+        neoChronoScheduleDateKey_(
+          row[dateColumnIndex],
+          timezone
+        );
+
+      return (
+        dateKey &&
+        dateKey >= startKey &&
+        dateKey <= endKey
+      );
+    }).length;
+
+  if (rangeCount !== rows.length) {
+    throw new Error(
+      'Google date-range verification failed. NeoChrono sent ' +
+      rows.length +
+      ' row(s) for ' +
+      startKey +
+      ' through ' +
+      endKey +
+      ', but Google contains ' +
+      rangeCount +
+      ' row(s) in that range.'
+    );
+  }
+
   var receiverUrl =
     ss.getUrl() +
     '#gid=' +
     sheet.getSheetId();
 
   return neoChronoBridgeResponse_({
-    type: NEOCHRONO_RECEIVER.SCHEDULE_MESSAGE_TYPE,
-    ok: true,
-    success: true,
-    transferId: transferId,
-    receiverSpreadsheetId: ss.getId(),
-    receiverSpreadsheetName: ss.getName(),
-    receiverSheetName: sheet.getName(),
-    receiverUrl: receiverUrl,
+    type:
+      NEOCHRONO_RECEIVER.SCHEDULE_MESSAGE_TYPE,
 
-    // Return BOTH names so old and new NeoChrono clients can verify the write.
-    writtenRows: writtenRows,
-    writtenColumns: width,
-    transferredRows: writtenRows,
-    transferredColumns: width,
+    ok:
+      true,
+
+    success:
+      true,
+
+    transferId:
+      transferId,
+
+    receiverSpreadsheetId:
+      ss.getId(),
+
+    receiverSpreadsheetName:
+      ss.getName(),
+
+    receiverSheetName:
+      sheet.getName(),
+
+    receiverUrl:
+      receiverUrl,
+
+    /*
+     * These represent THIS transfer only so the browser's verification
+     * continues to work.
+     */
+    writtenRows:
+      rows.length,
+
+    writtenColumns:
+      width,
+
+    transferredRows:
+      rows.length,
+
+    transferredColumns:
+      width,
+
+    preservedRows:
+      preservedRows.length,
+
+    replacedExistingRows:
+      replacedExistingRows,
+
+    totalScheduleRows:
+      mergedRows.length,
+
+    startDate:
+      startKey,
+
+    endDate:
+      endKey,
 
     message:
-      'Google confirmed that the Schedule sheet was replaced successfully.'
+      'Schedule merged successfully. ' +
+      rows.length +
+      ' row(s) were written for ' +
+      startKey +
+      ' through ' +
+      endKey +
+      '. ' +
+      preservedRows.length +
+      ' existing row(s) outside that range were preserved. ' +
+      mergedRows.length +
+      ' total schedule row(s) are now stored.'
   });
+}
+
+
+function neoChronoScheduleDateKey_(value, timezone) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return '';
+  }
+
+  if (
+    value instanceof Date &&
+    !isNaN(value.getTime())
+  ) {
+    return Utilities.formatDate(
+      value,
+      timezone ||
+      Session.getScriptTimeZone() ||
+      'America/New_York',
+      'yyyy-MM-dd'
+    );
+  }
+
+  var raw =
+    String(value).trim();
+
+  var iso =
+    raw.match(
+      /^(\d{4})-(\d{2})-(\d{2})/
+    );
+
+  if (iso) {
+    return (
+      iso[1] +
+      '-' +
+      iso[2] +
+      '-' +
+      iso[3]
+    );
+  }
+
+  var parsed =
+    new Date(raw);
+
+  if (isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  return Utilities.formatDate(
+    parsed,
+    timezone ||
+    Session.getScriptTimeZone() ||
+    'America/New_York',
+    'yyyy-MM-dd'
+  );
+}
+
+
+function neoChronoSortScheduleRows_(
+  rows,
+  dateColumnIndex,
+  timezone
+) {
+  return (rows || [])
+    .map(function(row, index) {
+      return {
+        row:
+          row,
+
+        index:
+          index,
+
+        date:
+          neoChronoScheduleDateKey_(
+            row[dateColumnIndex],
+            timezone
+          )
+      };
+    })
+    .sort(function(a, b) {
+      if (a.date && b.date) {
+        if (a.date < b.date) return -1;
+        if (a.date > b.date) return 1;
+      } else if (a.date) {
+        return -1;
+      } else if (b.date) {
+        return 1;
+      }
+
+      return a.index - b.index;
+    })
+    .map(function(item) {
+      return item.row;
+    });
 }
 
 /* =========================
