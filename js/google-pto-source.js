@@ -29,6 +29,20 @@
     }
   }
 
+  function pharmacistName_(username,fallback){
+    const given=String(fallback||'').trim();
+    if(given)return given;
+    const userKey=String(username||'').trim().toLowerCase();
+    if(!userKey)return '';
+    try{
+      const users=window.State&&State.data&&Array.isArray(State.data.users)?State.data.users:[];
+      const match=users.find(u=>String(u.Username||u.username||'').trim().toLowerCase()===userKey);
+      return match?String(match['Pharmacist Name']||match.Pharmacist||match.Name||'').trim():'';
+    }catch(_e){
+      return '';
+    }
+  }
+
   function objectRowsToMatrix(rows){
     return [
       HEADERS.slice(),
@@ -245,6 +259,7 @@
     row['Record Type']=String(row['Record Type']||'PTO').trim().toUpperCase();
     if(row['Record Type']!=='PTO')throw new Error('Google PTO source only accepts PTO records.');
     row['Record ID']=String(row['Record ID']||'').trim()||makeRecordId();
+    row.Pharmacist=pharmacistName_(row.Username,row.Pharmacist);
     row['Updated By']=String(row['Updated By']||actor_()).trim()||actor_();
 
     const response=await postWrite({
