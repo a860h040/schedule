@@ -339,6 +339,42 @@
 @media(max-width:1200px){.people-v32-kpis{grid-template-columns:repeat(3,1fr)}.people-v32-board{grid-template-columns:1fr}.people-v32-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.people-v32-hero-top{flex-direction:column}.people-v32-kpis{grid-template-columns:repeat(2,1fr)}.rotation-lanes{grid-template-columns:1fr}.people-v32-rings{grid-template-columns:repeat(3,1fr)}.people-v32-grid{grid-template-columns:1fr}.people-v32-toolbar{align-items:stretch}.people-v32-search{min-width:100%}.pharm-v32-head{grid-template-columns:auto 1fr}.pharm-v32-gauge{grid-column:1/-1;margin:2px auto 0}}
 
+
+/* v34 pharmacist profile cards: 2 x 2 quadrants */
+.people-v32-grid{grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px}
+.pharm-v34{border-radius:22px;overflow:hidden}
+.pharm-v34-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:minmax(225px,auto) minmax(225px,auto)}
+.pharm-v34-quadrant{min-width:0;padding:16px;background:#fff}
+.pharm-v34-photo-q{display:grid;place-items:center;border-right:1px solid #e4eaed;border-bottom:1px solid #e4eaed;background:linear-gradient(145deg,#f7fafb,#eef4f5)}
+.pharm-v34-summary-q{border-bottom:1px solid #e4eaed}
+.pharm-v34-skills-q{border-right:1px solid #e4eaed}
+.pharm-v34-availability-q{display:flex;flex-direction:column;gap:12px}
+.pharm-v34-photo-q .pharm-v32-avatar{width:190px;height:190px;flex:0 0 190px;border-radius:28px;font-size:42px;border:4px solid #fff;box-shadow:0 15px 34px rgba(24,91,99,.22)}
+.pharm-v34-photo-q .pharm-v32-avatar-wrap{position:relative;display:grid;place-items:center}
+.pharm-v34-photo-q .pharm-v32-status{width:20px;height:20px;right:-4px;bottom:4px;border-width:4px}
+.pharm-v34-summary-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+.pharm-v34-summary-q .pharm-v32-name{font-size:16px;line-height:1.15}
+.pharm-v34-summary-q .pharm-v32-gauge{width:68px;height:68px}
+.pharm-v34-summary-q .pharm-v32-stats{grid-template-columns:repeat(2,1fr);padding:0;margin-top:15px}
+.pharm-v34-summary-q .pharm-v32-stat{padding:10px 6px}
+.pharm-v34-skills-q .pharm-v32-body{padding:0;display:grid;gap:15px}
+.pharm-v34-skills-q .pharm-v32-row{padding-top:0;border-top:0}
+.pharm-v34-skills-q .pharm-v32-row+.pharm-v32-row{padding-top:13px;border-top:1px solid #eef2f3}
+.pharm-v34-availability-q .pharm-v32-row{padding-top:0;border-top:0}
+.pharm-v34-availability-q .pharm-v32-rotation{margin-top:auto}
+.pharm-v34>.pharm-v32-actions{padding:11px 16px 15px}
+@media(max-width:1250px){
+  .people-v32-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .pharm-v34-photo-q .pharm-v32-avatar{width:170px;height:170px;flex-basis:170px}
+}
+@media(max-width:880px){.people-v32-grid{grid-template-columns:1fr}}
+@media(max-width:560px){
+  .pharm-v34-grid{grid-template-columns:1fr;grid-template-rows:auto}
+  .pharm-v34-photo-q,.pharm-v34-skills-q{border-right:0}
+  .pharm-v34-photo-q,.pharm-v34-summary-q,.pharm-v34-skills-q{border-bottom:1px solid #e4eaed}
+  .pharm-v34-photo-q .pharm-v32-avatar{width:200px;height:200px;flex-basis:200px}
+}
+
 /* v33 navigation reliability */
 .sidebar{position:sticky;top:0;z-index:120!important}
 .nav{position:relative;z-index:121;pointer-events:auto!important}
@@ -673,7 +709,7 @@
 <div id="modalRoot"></div>
 
 <script src="js/google-pto-source.js?v=20260918-googlepto1"></script>
-<script src="js/github-legacy-runtime.js?v=20260919-photos2"></script>
+<script src="js/github-legacy-runtime.js?v=20260919-quadrants2"></script>
 <script src="js/legacy/main-backend.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
@@ -1472,7 +1508,7 @@ function peopleV32Card_(u,skills,weekly,sched,periodTarget){
   const coverChips=coverage.length?coverage.slice(0,8).map(x=>`<span class="pharm-v32-skill cover">${esc(x)}</span>`).join('')+(coverage.length>8?`<span class="pharm-v32-skill cover">+${coverage.length-8}</span>`:''):'<span class="pharm-v32-skill empty">No OFF-day coverage skills</span>';
   const rotation=g?`Group ${g}`:seven?'7-on / 7-off':'No weekend group';
   const anchor=g?(u['Weekend Rotation Anchor Date']||'No anchor'):seven?(u['Rotation Anchor Date']||'No anchor'):'—';
-  return `<article class="pharm-v32 ${g||''} ${seven?'seven':''} ${!yes(u.Active)?'inactive':''}"><div class="pharm-v32-topline"></div><div class="pharm-v32-head"><div class="pharm-v32-avatar-wrap">${employeePhotoAvatar_(u,'pharm-v32-avatar')}<span class="pharm-v32-status ${yes(u.Active)?'':'off'}"></span></div><div style="min-width:0"><div class="pharm-v32-name">${esc(name)}</div><div class="pharm-v32-meta">${esc(eid)} · ${esc(u['Preferred Shift Type']||u['Schedule Type']||'Regular')}</div><div class="pharm-v32-badges">${badges||'<span class="pharm-v32-badge">Regular</span>'}</div></div><div class="pharm-v32-gauge" style="--p:${ring};--c:${ringColor}"><div class="pharm-v32-gauge-text"><strong>${pct}%</strong><span>period</span></div></div></div><div class="pharm-v32-stats"><div class="pharm-v32-stat"><strong>${fmtHours(hrs)}</strong><span>Hours</span></div><div class="pharm-v32-stat"><strong>${shifts}</strong><span>Workdays</span></div><div class="pharm-v32-stat"><strong>${weekends}</strong><span>Weekend Days</span></div><div class="pharm-v32-stat"><strong>${evenings}</strong><span>Evening</span></div></div><div class="pharm-v32-body"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Normal Qualifications</span><span>${normal.length}</span></div><div class="pharm-v32-skills">${skillChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>OFF-Day Coverage Only</span><span>${coverage.length}</span></div><div class="pharm-v32-skills">${coverChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Weekly Availability</span><span>${rules.length?'Configured':'Unrestricted'}</span></div>${peopleV32Week_(rules)}</div><div class="pharm-v32-row"><div class="pharm-v32-rotation"><strong>${esc(rotation)}</strong><span>${esc(String(anchor))}</span></div></div></div><div class="pharm-v32-actions"><button class="btn btn-secondary btn-sm" onclick="openEmployeeModal('${attr(eid)}')">Edit Profile</button><button class="btn btn-ghost btn-sm" onclick="openEmployeeAvailability('${attr(eid)}')">Weekly Availability</button></div></article>`;
+  return `<article class="pharm-v32 pharm-v34 ${g||''} ${seven?'seven':''} ${!yes(u.Active)?'inactive':''}"><div class="pharm-v32-topline"></div><div class="pharm-v34-grid"><section class="pharm-v34-quadrant pharm-v34-photo-q"><div class="pharm-v32-avatar-wrap">${employeePhotoAvatar_(u,'pharm-v32-avatar')}<span class="pharm-v32-status ${yes(u.Active)?'':'off'}"></span></div></section><section class="pharm-v34-quadrant pharm-v34-summary-q"><div class="pharm-v34-summary-top"><div style="min-width:0"><div class="pharm-v32-name">${esc(name)}</div><div class="pharm-v32-meta">${esc(eid)} · ${esc(u['Preferred Shift Type']||u['Schedule Type']||'Regular')}</div><div class="pharm-v32-badges">${badges||'<span class="pharm-v32-badge">Regular</span>'}</div></div><div class="pharm-v32-gauge" style="--p:${ring};--c:${ringColor}"><div class="pharm-v32-gauge-text"><strong>${pct}%</strong><span>period</span></div></div></div><div class="pharm-v32-stats"><div class="pharm-v32-stat"><strong>${fmtHours(hrs)}</strong><span>Hours</span></div><div class="pharm-v32-stat"><strong>${shifts}</strong><span>Workdays</span></div><div class="pharm-v32-stat"><strong>${weekends}</strong><span>Weekend Days</span></div><div class="pharm-v32-stat"><strong>${evenings}</strong><span>Evening</span></div></div></section><section class="pharm-v34-quadrant pharm-v34-skills-q"><div class="pharm-v32-body"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Normal Qualifications</span><span>${normal.length}</span></div><div class="pharm-v32-skills">${skillChips}</div></div><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>OFF-Day Coverage Only</span><span>${coverage.length}</span></div><div class="pharm-v32-skills">${coverChips}</div></div></div></section><section class="pharm-v34-quadrant pharm-v34-availability-q"><div class="pharm-v32-row"><div class="pharm-v32-row-head"><span>Weekly Availability</span><span>${rules.length?'Configured':'Unrestricted'}</span></div>${peopleV32Week_(rules)}</div><div class="pharm-v32-row"><div class="pharm-v32-rotation"><strong>${esc(rotation)}</strong><span>${esc(String(anchor))}</span></div></div></section></div><div class="pharm-v32-actions"><button class="btn btn-secondary btn-sm" onclick="openEmployeeModal('${attr(eid)}')">Edit Profile</button><button class="btn btn-ghost btn-sm" onclick="openEmployeeAvailability('${attr(eid)}')">Weekly Availability</button></div></article>`;
 }
 
 function openEmployeeModal(id){
