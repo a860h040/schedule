@@ -3,6 +3,7 @@
 
   const ENDPOINT='https://script.google.com/macros/s/AKfycbzd-2TtruGPlfUbRlS7EDFlm7jgBlBUgfM66PJX03zMpZOHFoXBSXBd-rJMX7s71fXk/exec';
   const SHEET='PTO / Availability Requests';
+  const READ_ACTION='neochronoPto';
   const WRITE_ACTION='neochronoPtoWrite';
   const MESSAGE_TYPE='NEOCHRONO_PTO_RECEIVER';
 
@@ -60,7 +61,7 @@
     return [headers,...rows.map(row=>headers.map(h=>row&&row[h]!==undefined?row[h]:''))];
   }
 
-  function postBridge_(payload,timeoutMs){
+  function postBridge_(action,payload,timeoutMs){
     return new Promise((resolve,reject)=>{
       const requestId=requestId_();
       const frameName='neoPtoFrame_'+Date.now()+'_'+Math.random().toString(36).slice(2);
@@ -82,7 +83,7 @@
         form.appendChild(input);
       }
 
-      addField('action',WRITE_ACTION);
+      addField('action',String(action||WRITE_ACTION));
       addField('sheet',SHEET);
       addField('requestId',requestId);
       addField('payload',JSON.stringify(payload||{}));
@@ -136,7 +137,7 @@
     row.Pharmacist=pharmacistName_(row.Username,row.Pharmacist);
     row['Updated By']=String(row['Updated By']||actor_()).trim()||actor_();
 
-    const result=await postBridge_({operation:'save',row,actor:actor_()});
+    const result=await postBridge_(WRITE_ACTION,{operation:'save',row,actor:actor_()});
     return {
       ok:true,
       recordId:row['Record ID'],
@@ -151,7 +152,7 @@
   async function reviewRequest(recordId,status,comment){
     const id=String(recordId||'').trim();
     if(!id)throw new Error('Request ID is required.');
-    const result=await postBridge_({
+    const result=await postBridge_(WRITE_ACTION,{
       operation:'review',
       recordId:id,
       status:String(status||'').trim(),
@@ -170,12 +171,23 @@
   async function removeRequest(recordId){
     const id=String(recordId||'').trim();
     if(!id)throw new Error('Request ID is required.');
-    const result=await postBridge_({operation:'delete',recordId:id,actor:actor_()});
+    const result=await postBridge_(WRITE_ACTION,{operation:'delete',recordId:id,actor:actor_()});
     return {
       ok:true,
       recordId:id,
       matrix:result.matrix,
       message:result.message||'PTO deleted from Google Sheet and ready to sync to neochrono-data.'
+    };
+  }
+
+  async function fetchSnapshot(){
+    const result=await postBridge_(READ_ACTION,{},20000);
+    return {
+      ok:true,
+      matrix:result.matrix,
+      rowCount:Number(result.rowCount||Math.max(0,(result.matrix||[]).length-1)),
+      generatedAt:String(result.generatedAt||''),
+      message:result.message||'PTO snapshot loaded from Google Sheet.'
     };
   }
 
@@ -190,6 +202,7 @@
     saveRequest,
     reviewRequest,
     removeRequest,
+    fetchSnapshot,
     status,
     load:async()=>null,
     isExternalRecord:()=>false,
