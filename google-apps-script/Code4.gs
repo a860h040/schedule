@@ -11,8 +11,9 @@
 
 const NEOCHRONO_RECEIVER_SHEET_NAME = 'Schedule';
 
-// Explicit destination spreadsheet used by the pharmacists-facing Schedule receiver.
-const NEOCHRONO_RECEIVER_SPREADSHEET_ID = '1flTBzOIM_dbDODjC-S-DHoViAhHASEyNWInZBxab5To';
+// Destination is the Google Spreadsheet this Apps Script project is bound to.
+// The schedule is written only to the tab named exactly "Schedule".
+const NEOCHRONO_RECEIVER_SPREADSHEET_ID = '';
 
 const NEOCHRONO_SCHEDULE_HEADERS = Object.freeze([
   'Generation ID',
@@ -167,7 +168,9 @@ function doPost(e) {
       message:
         'Schedule received successfully. ' +
         cleanRows.length +
-        ' row(s) were written to the Schedule sheet.'
+        ' row(s) were written to "' +
+        ss.getName() +
+        '" -> Schedule.'
     });
 
   } catch (error) {
@@ -184,18 +187,24 @@ function doPost(e) {
 }
 
 function neoChronoReceiverSpreadsheet_() {
-  if (NEOCHRONO_RECEIVER_SPREADSHEET_ID) {
+  // If you intentionally configure an ID above, use it.
+  if (String(NEOCHRONO_RECEIVER_SPREADSHEET_ID || '').trim()) {
     return SpreadsheetApp.openById(
-      NEOCHRONO_RECEIVER_SPREADSHEET_ID
+      String(NEOCHRONO_RECEIVER_SPREADSHEET_ID).trim()
     );
   }
 
+  // Normal setup: Code4.gs lives inside the pharmacists spreadsheet's
+  // Extensions -> Apps Script project.
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
   if (!ss) {
     throw new Error(
-      'This Apps Script project is not bound to a spreadsheet. ' +
-      'Paste the destination spreadsheet ID into NEOCHRONO_RECEIVER_SPREADSHEET_ID in Code4.gs.'
+      'Code4.gs is not running from a spreadsheet-bound Apps Script project. ' +
+      'Open the pharmacists Google Sheet, choose Extensions > Apps Script, ' +
+      'add Code4.gs there, then redeploy the existing web app. ' +
+      'If the project must remain standalone, set NEOCHRONO_RECEIVER_SPREADSHEET_ID ' +
+      'to the pharmacists spreadsheet ID.'
     );
   }
 
