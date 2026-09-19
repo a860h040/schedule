@@ -423,17 +423,6 @@
 
 
   const GOOGLE_PTO_SHEET='PTO / Availability Requests';
-  const GOOGLE_PTO_AWARE_FUNCTIONS=new Set([
-    'getAppData',
-    'generateSchedule',
-    'preflightScheduleGeneration',
-    'validateSavedSchedule',
-    'validateConfiguration',
-    'repairPtoAutoApprovals',
-    'reviewRequest',
-    'saveEmployeeRequest',
-    'submitRequest'
-  ]);
 
   function requestMatrixToObjects_(matrix){
     if(!Array.isArray(matrix)||!matrix.length)return [];
@@ -445,100 +434,171 @@
     });
   }
 
-  function mergeExternalPtoMatrix_(localMatrix,externalMatrix){
-    // Google is authoritative for PTO only. Keep UNAVAILABLE / AVAILABILITY /
-    // PREFERRED and any other non-PTO rules in the NeoChrono GitHub workbook.
-    const headers=(window.__neoGooglePtoSource&&window.__neoGooglePtoSource.headers)
-      ? window.__neoGooglePtoSource.headers.slice()
-      : ['Record Type','Record ID','Pharmacist','Username','Date','Start Date','End Date','Weekend Saturday','Weekend Sunday','Available','Status','Comment','Submitted At','Reviewed By','Reviewed At','Updated At','Updated By'];
+  function mergeGooglePtoIntoGithub_(localMatrix,googleMatrix){
+    const fallbackHeaders=[
+      'Record Type','Record ID','Pharmacist','Username','Date','Start Date','End Date',
+      'Weekend Saturday','Weekend Sunday','Available','Status','Comment','Submitted At',
+      'Reviewed By','Reviewed At','Updated At','Updated By'
+    ];
+
+    const googleHeaders=
+      Array.isArray(googleMatrix)&&Array.isArray(googleMatrix[0])&&googleMatrix[0].length
+        ? googleMatrix[0].map(x=>String(x??'').trim())
+        : fallbackHeaders.slice();
 
     const local=requestMatrixToObjects_(localMatrix||[]);
-    const external=requestMatrixToObjects_(externalMatrix||[]);
+    const google=requestMatrixToObjects_(googleMatrix||[]);
 
+    // Google is authoritative for PTO rows only.
+    // Preserve any non-PTO availability/date-rule records already in GitHub.
     const rows=[
-      ...external.filter(x=>String(x['Record Type']||'').trim().toUpperCase()==='PTO'),
+      ...google.filter(x=>String(x['Record Type']||'').trim().toUpperCase()==='PTO'),
       ...local.filter(x=>String(x['Record Type']||'').trim().toUpperCase()!=='PTO')
     ];
 
-    return [headers,...rows.map(x=>headers.map(h=>x[h]??''))];
+    return [
+      googleHeaders,
+      ...rows.map(x=>googleHeaders.map(h=>x[h]??''))
+    ];
   }
 
-  async function overlayGooglePto_(fn,data){
-    if(!GOOGLE_PTO_AWARE_FUNCTIONS.has(String(fn)))return null;
-    if(!window.__neoGooglePtoSource||typeof window.__neoGooglePtoSource.load!=='function')return null;
+  function recordTypeForId_(matrix,recordId){
+    const id=String(recordId||'').trim();
+    const row=requestMatrixToObjects_(matrix||[])
+      .find(x=>String(x['Record ID']||'').trim()===id);
+    return row?String(row['Record Type']||'').trim().toUpperCase():'';
+  }
 
-    const ext=await window.__neoGooglePtoSource.load(false);
-    if(!ext)return null; // migration-safe fallback until Apps Script API is deployed
+  async function syncGooglePtoMatrix_(googleMatrix,reason){
+    if(!Array.isArray(googleMatrix)||!googleMatrix.length){
+      throw new Error('Google confirmed the PTO change but did not return a sheet snapshot for neochrono-data.');
+    }
 
-    data.sheets=data.sheets||{};
-    const original=clone(data.sheets[GOOGLE_PTO_SHEET]||{values:[]});
-    const localMatrix=original&&Array.isArray(original.values)?original.values:[];
-    const merged=mergeExternalPtoMatrix_(localMatrix,ext.matrix);
+    let lastError=null;
 
-    data.sheets[GOOGLE_PTO_SHEET]={values:merged};
-    return {original,source:ext.source,recordIds:ext.recordIds};
+    for(let attempt=0;attempt<4;attempt++){
+      const loaded=await loadWorkbook(true);
+      const data=clone(loaded.data);
+      data.sheets=data.sheets||{};
+
+      const localSheet=data.sheets[GOOGLE_PTO_SHEET]||{values:[]};
+      const localMatrix=Array.isArray(localSheet.values)?localSheet.values:[];
+      const merged=mergeGooglePtoIntoGithub_(localMatrix,googleMatrix);
+
+      data.sheets[GOOGLE_PTO_SHEET]={values:merged};
+      data.meta=data.meta||{};
+      data.meta.googlePtoSyncedAt=new Date().toISOString();
+      data.meta.googlePtoSource='Google Sheet -> neochrono-data';
+
+      try{
+        const result=await saveWorkbook(
+          data,
+          loaded.sha,
+          reason||'Sync PTO from Google Sheet'
+        );
+        cache={data,sha:(result&&result.content&&result.content.sha)||loaded.sha,loadedAt:Date.now()};
+        return {ok:true,rows:Math.max(0,merged.length-1)};
+      }catch(e){
+        lastError=e;
+        const conflict=
+          e&&(
+            e.status===409||
+            e.status===422||
+            /does not match|sha mismatch|conflict/i.test(String(e.message||''))
+          );
+        if(conflict&&attempt<3){
+          cache={data:null,sha:null,loadedAt:0};
+          await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw lastError||new Error('Could not sync Google PTO into neochrono-data.');
   }
 
   window.__neoRuntime={
     cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,getEmployeePhotoDataUrl,uploadEmployeePhoto,deleteEmployeePhoto,employeePhotoPath:employeePhotoPath_,
+    syncGooglePtoMatrix:syncGooglePtoMatrix_,
     currentBook:()=>currentBook(),
     markDirty:()=>{if(window.__neoVBook)window.__neoVBook.dirty=true;},
     invoke(fn,args){
       const work=async()=>{
         for(let attempt=0;attempt<4;attempt++){
-          // Always start each server-style call from the newest GitHub file.
-          // This prevents stale SHA values after workbook imports or another open tab.
+          // All scheduling reads start from neochrono-data only.
           const loaded=await loadWorkbook(true);
           const data=clone(loaded.data);
-          const ptoOverlay=await overlayGooglePto_(fn,data);
           const book=new VBook(data);window.__neoVBook=book;
+
           try{ if(typeof _DB_CACHE!=='undefined') _DB_CACHE=null; }catch(_e){}
           try{ if(typeof _TZ_CACHE!=='undefined') _TZ_CACHE=null; }catch(_e){}
           try{ if(typeof PRECEPTOR_CALENDAR_RUNTIME_CACHE_!=='undefined') PRECEPTOR_CALENDAR_RUNTIME_CACHE_=null; }catch(_e){}
+
           const callable=window[fn];
           if(typeof callable!=='function')throw new Error('Backend function not found: '+fn);
+
           try{
-            // The Google Sheet is authoritative for the entire PTO / Availability
-            // Requests section. Save/review there directly and verify by re-reading it.
-            if(ptoOverlay&&String(fn)==='saveEmployeeRequest'){
+            // PTO writes go to Google first. Google returns the authoritative
+            // sheet snapshot, which is then committed into neochrono-data.
+            if(window.__neoGooglePtoSource&&String(fn)==='saveEmployeeRequest'){
               const payload=(args||[])[1]||{};
               if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
-                return await window.__neoGooglePtoSource.saveRequest(payload);
+                const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
+                await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO save from Google Sheet');
+                const result={...googleResult};
+                delete result.matrix;
+                return result;
               }
             }
-            if(ptoOverlay&&String(fn)==='submitRequest'){
+
+            if(window.__neoGooglePtoSource&&String(fn)==='submitRequest'){
               const payload=(args||[])[1]||{};
               if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
-                return await window.__neoGooglePtoSource.saveRequest(payload);
+                const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
+                await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO submission from Google Sheet');
+                const result={...googleResult};
+                delete result.matrix;
+                return result;
               }
             }
-            if(ptoOverlay&&String(fn)==='reviewRequest'){
+
+            if(window.__neoGooglePtoSource&&String(fn)==='reviewRequest'){
               const recordId=String((args||[])[1]||'');
-              const status=String((args||[])[2]||'');
-              const comment=(args||[])[3];
-              return await window.__neoGooglePtoSource.reviewRequest(recordId,status,comment);
+              const localMatrix=(
+                data.sheets&&
+                data.sheets[GOOGLE_PTO_SHEET]&&
+                Array.isArray(data.sheets[GOOGLE_PTO_SHEET].values)
+              )?data.sheets[GOOGLE_PTO_SHEET].values:[];
+
+              if(recordTypeForId_(localMatrix,recordId)==='PTO'){
+                const status=String((args||[])[2]||'');
+                const comment=(args||[])[3];
+                const googleResult=await window.__neoGooglePtoSource.reviewRequest(recordId,status,comment);
+                await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO review from Google Sheet');
+                const result={...googleResult};
+                delete result.matrix;
+                return result;
+              }
             }
 
             let result=callable.apply(window,args||[]);
             if(result&&typeof result.then==='function')result=await result;
 
-            // Never persist Google PTO rows into neochrono-data. Google Sheets
-            // is authoritative for PTO only; non-PTO availability stays in GitHub.
-            if(ptoOverlay){
-              book.data.sheets=book.data.sheets||{};
-              book.data.sheets[GOOGLE_PTO_SHEET]=clone(ptoOverlay.original);
-            }
+            const actualChanged=
+              book.dirty &&
+              JSON.stringify(book.data)!==JSON.stringify(loaded.data);
 
-            const actualChanged=book.dirty && JSON.stringify(book.data)!==JSON.stringify(loaded.data);
             if(actualChanged){
               try{
                 await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);
               }catch(e){
-                const conflict =
-                  e.status===409 ||
-                  e.status===422 ||
+                const conflict=
+                  e.status===409||
+                  e.status===422||
                   /does not match|sha mismatch|conflict/i.test(String(e&&e.message||''));
-                if(conflict && attempt<3){
+
+                if(conflict&&attempt<3){
                   cache={data:null,sha:null,loadedAt:0};
                   await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));
                   continue;
@@ -548,11 +608,18 @@
             }else{
               cache={data:book.data,sha:loaded.sha,loadedAt:Date.now()};
             }
+
             return result;
-          }finally{window.__neoVBook=null;}
+          }finally{
+            window.__neoVBook=null;
+          }
         }
-        throw new Error('NeoChrono detected another update to the GitHub database while saving. It retried automatically but the file kept changing. Close other NeoChrono tabs and try again.');
+
+        throw new Error(
+          'NeoChrono detected another update to the GitHub database while saving. It retried automatically but the file kept changing. Close other NeoChrono tabs and try again.'
+        );
       };
+
       const p=invokeQueue.then(work,work);
       invokeQueue=p.catch(()=>{});
       return p;
