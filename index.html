@@ -716,7 +716,7 @@
 <script src="js/legacy/main-backend.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
-<script src="js/legacy/schedule-publish.js?v=20260919-googleschedule4"></script>
+<script src="js/legacy/schedule-publish.js?v=20260919-sendfix1"></script>
 <script src="js/legacy/delete-schedule.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/patches.js?v=20260919-pharmgroups2"></script>
 <script src="js/paper-schedule.js?v=20260918-allevening5"></script>
@@ -1088,19 +1088,19 @@ async function finalizeAndSendUI(){
 
     $('generationResult').innerHTML=
       '<div class="alert alert-ok">'+
-        '<b>Schedule verified in Google Sheet.</b><br>'+
+        '<b>Schedule sent to Google Sheet.</b><br>'+
         esc(String((r&&r.transferredRows)||0))+
-        ' schedule row(s) are now in the sheet named <b>Schedule</b>.'+
+        ' schedule row(s) were sent to the sheet named <b>Schedule</b>.'+
         link+
       '</div>';
 
     toast(
-      String((r&&r.transferredRows)||0)+' schedule rows verified in Google Schedule sheet',
+      String((r&&r.transferredRows)||0)+' schedule rows sent to Google Schedule sheet',
       'success'
     );
   }catch(err){
     $('generationResult').innerHTML=
-      '<div class="alert alert-danger"><b>Schedule was not verified in Google Sheets.</b><br>'+
+      '<div class="alert alert-danger"><b>Schedule send failed.</b><br>'+
       esc(err&&err.message?err.message:String(err))+
       '</div>';
     toast(err.message||String(err),'error');
