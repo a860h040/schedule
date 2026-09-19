@@ -2841,14 +2841,39 @@ function saveManualAssignment(token,payload) {
     const check=validateManualAssignment_(payload);
     const override=yes_(payload.override);
     const model=loadSchedulingModel_();
-    const nonOverrideable=new Set(['WEEKLY_DAYS','CONSECUTIVE_DAYS','EVENING_TO_MORNING','WRONG_WEEKEND_GROUP','RESIDENT_WRONG_WEEKEND_GROUP','WEEKEND_ANCHOR_OFF','PRECEPTOR_WEEKDAY_EVENING']);
-    const hardCodes=(check.reasonCodes||[]).filter(x=>nonOverrideable.has(x));
-    if(hardCodes.length){
-      throw new Error('This assignment cannot be saved because it violates a hard work-pattern rule: '+hardCodes.map(reasonToWarning_).join(' '));
+
+    /*
+     * MANUAL ADMIN ASSIGNMENTS MAY OVERRIDE SCHEDULING RULES.
+     *
+     * Automatic schedule generation still treats the normal eligibility rules
+     * as hard constraints. This exception applies only when an administrator
+     * manually edits/assigns a schedule slot.
+     *
+     * Flow:
+     *   1) validateManualAssignment_ reports every violated rule;
+     *   2) first Save returns those warnings to the UI;
+     *   3) the administrator must explicitly choose Override & Save;
+     *   4) an override reason is required;
+     *   5) the warnings and reason are preserved in the Schedule/Audit data.
+     *
+     * Structural problems such as an invalid date, missing pharmacist/shift,
+     * or trying to edit a finalized period are still blocked later because
+     * those are not scheduling-rule overrides.
+     */
+    if (check.warnings.length && !override) {
+      return serialize_({
+        ok:false,
+        requiresOverride:true,
+        warnings:check.warnings,
+        reasonCodes:check.reasonCodes||[],
+        hoursSummary:check.hoursSummary,
+        message:'This manual assignment violates one or more scheduling rules. Review the warnings, enter an override reason, then choose Override & Save if you still want this assignment.'
+      });
     }
-    if (check.warnings.length && !override) return serialize_({ok:false,requiresOverride:true,warnings:check.warnings,hoursSummary:check.hoursSummary});
-    if (check.warnings.length && override && !model.settings.allowAdminOverride) throw new Error('Administrator rule override is disabled in Settings.');
-    if (check.warnings.length && override && !clean_(payload.overrideReason)) throw new Error('Override reason is required.');
+
+    if (check.warnings.length && override && !clean_(payload.overrideReason)) {
+      throw new Error('Enter an override reason before saving a manual assignment that violates scheduling rules.');
+    }
 
     const rows=readTable_(APP.SHEETS.SCHEDULE);
     const u=model.usersByUsername[clean_(payload.username)] || model.usersByName[clean_(payload.pharmacist)];
@@ -2878,6 +2903,9 @@ function saveManualAssignment(token,payload) {
     if(old && asDate_(old['Finalized At'])) throw new Error('This assignment is in a finalized schedule. Unfinalize the period before editing it.');
     const coverage=check.coverage||{};
     const rowWarnings=(check.warnings||[]).slice();
+    if(override && rowWarnings.length){
+      rowWarnings.unshift('ADMIN MANUAL OVERRIDE: '+clean_(payload.overrideReason));
+    }
     if(coverage.applies){
       rowWarnings.unshift('OFF-DAY COVERAGE ONLY: Covering '+clean_(coverage.coverageForPharmacist)+' on an algorithm-generated OFF day.');
     }
