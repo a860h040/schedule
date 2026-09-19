@@ -714,7 +714,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260919-customdates1"></script>
+<script src="js/legacy/main-backend.js?v=20260919-manualoverride1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -2428,7 +2428,73 @@ function manualHoursWarningHtml(h){
   </div>`;
 }
 
-async function saveAssignmentUI(override){const p={assignmentId:$('asId').value,generationId:$('asGen').value,date:$('asDate').value,slot:$('asSlot').value,shift:$('asShift').value,username:$('asUser').value,locked:$('asLocked').value,override:override?'Yes':'No',overrideReason:override?$('overrideReason').value:''};try{const r=await server('saveManualAssignment',State.token,p);if(r.requiresOverride){$('overrideBox').classList.remove('hidden');$('overrideWarnings').innerHTML='<b>Manual assignment warnings:</b><br>'+r.warnings.map(esc).join('<br>')+manualHoursWarningHtml(r.hoursSummary);const foot=document.querySelector('.modal-foot');if(!$('overrideBtn')){const b=document.createElement('button');b.id='overrideBtn';b.className='btn btn-warning';b.textContent='Override Anyway';b.onclick=()=>saveAssignmentUI(true);foot.appendChild(b)}return}closeModal();const db=r.database||{};toast('Saved to Google Sheet'+(db.name?' — '+db.name:'')+'; unfilled slot cleared','success');await refreshData()}catch(e){toast(e.message,'error')}}
+async function saveAssignmentUI(override){
+  const p={
+    assignmentId:$('asId').value,
+    generationId:$('asGen').value,
+    date:$('asDate').value,
+    slot:$('asSlot').value,
+    shift:$('asShift').value,
+    username:$('asUser').value,
+    locked:$('asLocked').value,
+    override:override?'Yes':'No',
+    overrideReason:override?$('overrideReason').value:''
+  };
+
+  try{
+    const r=await server('saveManualAssignment',State.token,p);
+
+    if(r.requiresOverride){
+      $('overrideBox').classList.remove('hidden');
+
+      $('overrideWarnings').innerHTML=
+        '<b>⚠ This manual assignment violates scheduling rules.</b><br>'+
+        '<span class="small">The automatic scheduler would not make this assignment. An administrator may still save it manually after reviewing the warnings below.</span><br><br>'+
+        (r.warnings||[]).map(x=>'• '+esc(x)).join('<br>')+
+        manualHoursWarningHtml(r.hoursSummary);
+
+      const foot=document.querySelector('.modal-foot');
+
+      if(!$('overrideBtn')){
+        const b=document.createElement('button');
+        b.id='overrideBtn';
+        b.className='btn btn-warning';
+        b.textContent='Override & Save';
+        b.onclick=()=>{
+          const reason=String($('overrideReason')?.value||'').trim();
+          if(!reason){
+            toast('Enter an override reason before saving.','error');
+            $('overrideReason')?.focus();
+            return;
+          }
+
+          if(!confirm(
+            'This assignment violates one or more scheduling rules.\n\n'+
+            'The automatic scheduler will still follow the normal rules.\n'+
+            'Save this manual override anyway?'
+          ))return;
+
+          saveAssignmentUI(true);
+        };
+        foot.appendChild(b);
+      }
+
+      return;
+    }
+
+    closeModal();
+    const db=r.database||{};
+    toast(
+      override
+        ? 'Manual override saved'+(db.name?' — '+db.name:'')
+        : 'Saved to Google Sheet'+(db.name?' — '+db.name:'')+'; unfilled slot cleared',
+      'success'
+    );
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
+}
 async function toggleLockUI(id,locked){try{await server('setAssignmentLock',State.token,id,locked);closeModal();toast(locked?'Assignment locked':'Assignment unlocked','success');await refreshData()}catch(e){toast(e.message,'error')}}
 async function removeAssignmentUI(id){const reason=prompt('Reason for removal (optional):','')??'';if(!confirm('Remove this assignment? Required staffing slots will remain as UNFILLED.'))return;try{await server('removeAssignment',State.token,id,reason);closeModal();toast('Assignment removed','success');await refreshData()}catch(e){toast(e.message,'error')}}
 
