@@ -850,7 +850,7 @@ function renderDashboard(){
   const now=new Date();
   const daysToSunday=(7-now.getDay())%7;
   const defaultStart=addDays(now,daysToSunday);
-  const defaultEnd=addDays(defaultStart,55);
+  const defaultEnd=addDays(defaultStart,60);
   const required=num(h.required,0),filled=num(h.filled,0),unfilled=num(h.unfilled,0);
   const coverage=Math.max(0,Math.min(100,num(h.coveragePercent,required?filled*100/required:100)));
   const warnings=num(h.ruleWarnings,0);
@@ -917,11 +917,11 @@ function renderDashboard(){
     html+=`
     <section class="workspace-grid">
       <div class="workspace-main">
-        <div class="section-heading"><div><span class="section-kicker">SCHEDULE CONTROL</span><h2>Build and publish</h2></div><span class="section-note">Choose any date range</span></div>
+        <div class="section-heading"><div><span class="section-kicker">SCHEDULE CONTROL</span><h2>Build and publish</h2></div><span class="section-note">60-day schedule range</span></div>
         <div class="control-panel">
           <div class="toolbar premium-toolbar">
-            <div class="field"><label>Start Date</label><input id="genStart" type="date" class="control" value="${dateKey(defaultStart)}"></div>
-            <div class="field"><label>End Date</label><input id="genEnd" type="date" class="control" value="${dateKey(defaultEnd)}"></div>
+            <div class="field"><label>Start Date</label><input id="genStart" type="date" class="control" value="${dateKey(defaultStart)}" onchange="updateScheduleEndDateFromStart_()" oninput="updateScheduleEndDateFromStart_()"></div>
+            <div class="field"><label>End Date <span class="small muted">(automatic +60 days)</span></label><input id="genEnd" type="date" class="control" value="${dateKey(defaultEnd)}" readonly></div>
           </div>
           <div class="primary-actions">
             <button id="generateScheduleBtn" class="btn btn-primary action-main" onclick="generateScheduleUI()">Generate Schedule</button>
@@ -977,10 +977,37 @@ function validationPanels(v){let h='';if(v.errors&&v.errors.length)h+=`<div clas
 function statsTable(stats){return `<div class="table-wrap"><table class="table"><thead><tr><th>Pharmacist</th><th>Hours</th><th>Shifts</th><th>Day</th><th>Evening</th><th>Night</th><th>Weekend</th><th>Weekly hours</th><th>Group</th><th>Schedule</th></tr></thead><tbody>${stats.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${fmtHours(s.totalHours)}</td><td>${s.shifts}</td><td>${s.dayShifts}</td><td>${s.eveningShifts}</td><td>${s.nightShifts}</td><td>${s.weekendShifts}</td><td>${Object.entries(s.weeklyHours||{}).map(([k,v])=>`<span class="badge ${v>num(s.weeklyMax,40)?'badge-danger':'badge-ok'}">${esc(k)}: ${fmtHours(v)} / ${fmtHours(s.weeklyMax||40)}</span>`).join(' ')}</td><td>${esc(s.weekendGroup||'')}</td><td>${esc(s.scheduleType||'')}</td></tr>`).join('')}</tbody></table></div>`}
 function myUpcomingTable(){const now=dateKey(new Date()),u=State.data.user.Username;const rows=(State.data.schedule||[]).filter(r=>(r.Username===u||State.data.isAdmin)&&String(r.Date)>=now).sort((a,b)=>String(a.Date).localeCompare(String(b.Date))).slice(0,30);return scheduleTable(rows)}
 
+function updateScheduleEndDateFromStart_(){
+  const startEl=$('genStart');
+  const endEl=$('genEnd');
+  if(!startEl||!endEl)return;
+
+  const raw=String(startEl.value||'').trim();
+  const m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if(!m){
+    endEl.value='';
+    return;
+  }
+
+  const start=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+  if(
+    start.getFullYear()!==Number(m[1]) ||
+    start.getMonth()!==Number(m[2])-1 ||
+    start.getDate()!==Number(m[3])
+  ){
+    endEl.value='';
+    return;
+  }
+
+  endEl.value=dateKey(addDays(start,60));
+}
+
 async function validateConfigUI(){try{const r=await server('validateConfiguration',State.token);$('generationResult').innerHTML=validationPanels(r)||'<div class="alert alert-ok">Configuration validation passed.</div>'}catch(e){toast(e.message,'error')}}
 async function validateSavedUI(){try{const r=await server('validateSavedSchedule',State.token,$('genStart').value,$('genEnd').value);let h=`<div class="alert ${r.ok?'alert-ok':'alert-warn'}"><b>${r.ok?'Saved schedule validation passed.':'Saved schedule needs review.'}</b><br>${r.health.filled}/${r.health.required} filled (${r.health.coveragePercent}%).</div>`;h+=(r.errors||[]).map(x=>`<div class="alert alert-danger">${esc(x)}</div>`).join('');h+=(r.warnings||[]).map(x=>`<div class="alert alert-warn">${esc(x)}</div>`).join('');$('generationResult').innerHTML=h}catch(e){toast(e.message,'error')}}
 
 async function exportScheduleCsvUI(){
+  updateScheduleEndDateFromStart_();
   const start=$('genStart')?.value||'';
   const end=$('genEnd')?.value||'';
   const btn=$('exportScheduleCsvBtn');
@@ -1003,6 +1030,7 @@ async function exportScheduleCsvUI(){
   finally{if(btn){btn.disabled=false;btn.textContent='Export CSV'}}
 }
 async function generateScheduleUI(){
+  updateScheduleEndDateFromStart_();
   const payload={
     startDate:$('genStart').value,
     endDate:$('genEnd').value
@@ -1203,6 +1231,7 @@ async function generateScheduleUI(){
 }
 
 async function finalizeAndSendUI(){
+  updateScheduleEndDateFromStart_();
   const start=$('genStart')?.value||'';
   const end=$('genEnd')?.value||'';
   const btn=$('finalizeSendBtn');
