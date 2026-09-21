@@ -2669,6 +2669,265 @@ function compareLockedSnapshots_(before,after) {
 }
 
 
+function openShiftForceRuleMeta_(code) {
+  const map={
+    INACTIVE:{label:'Employee is inactive',weight:1200,risk:'CRITICAL'},
+    MISSING_SKILL:{label:'Missing required skill',weight:1000,risk:'CRITICAL'},
+    PTO:{label:'Approved PTO',weight:950,risk:'CRITICAL'},
+    ALREADY_SCHEDULED:{label:'Already scheduled that day',weight:900,risk:'CRITICAL'},
+    TIME_CONFLICT:{label:'Time conflict / overlapping shift',weight:900,risk:'CRITICAL'},
+    UNAVAILABLE:{label:'Marked unavailable',weight:750,risk:'HIGH'},
+    WEEKLY_AVAILABILITY_DAY:{label:'Recurring weekly day is unavailable',weight:725,risk:'HIGH'},
+    WEEKLY_AVAILABILITY_TIME:{label:'Outside recurring available hours',weight:700,risk:'HIGH'},
+    SEVEN_OFF:{label:'7-on/7-off employee is in OFF block',weight:650,risk:'HIGH'},
+    SEVEN_WRONG_SHIFT:{label:'7-on/7-off dedicated-shift rule',weight:650,risk:'HIGH'},
+    EVENING_NOT_ELIGIBLE:{label:'Not eligible for evening shifts',weight:600,risk:'HIGH'},
+    NIGHT_NOT_ELIGIBLE:{label:'Not eligible for night shifts',weight:600,risk:'HIGH'},
+    WEEKEND_NOT_ELIGIBLE:{label:'Not eligible for weekend shifts',weight:600,risk:'HIGH'},
+    RESIDENT_RESTRICTION:{label:'Resident assignment restriction',weight:550,risk:'HIGH'},
+    PRECEPTOR_WEEKDAY_EVENING:{label:'Preceptor weekday-evening restriction',weight:450,risk:'MODERATE'},
+    PRECEPTOR_EVENING:{label:'Preceptor evening restriction',weight:450,risk:'MODERATE'},
+    EVENING_TO_MORNING:{label:'Evening → next-day morning/day rule',weight:425,risk:'MODERATE'},
+    CONSECUTIVE_DAYS:{label:'Maximum consecutive workdays',weight:375,risk:'MODERATE'},
+    WEEKLY_DAYS:{label:'Five-workday weekly limit',weight:350,risk:'MODERATE'},
+    WEEKLY_HOURS:{label:'Weekly-hour maximum',weight:325,risk:'MODERATE'},
+    RESIDENT_WRONG_WEEKEND_GROUP:{label:'Resident weekend-group rule',weight:300,risk:'MODERATE'},
+    WRONG_WEEKEND_GROUP:{label:'Weekend-group rotation',weight:275,risk:'MODERATE'},
+    WEEKEND_ANCHOR_OFF:{label:'One-weekend-every-three-weeks rotation',weight:275,risk:'MODERATE'},
+    TWO_MONTH_HOURS:{label:'Schedule-period hour target',weight:250,risk:'MODERATE'},
+    RESIDENT_E2_WEEKLY_LIMIT:{label:'Resident E2 weekly limit',weight:200,risk:'LOW'},
+    EVENING_LIMIT:{label:'Monthly evening-shift limit',weight:175,risk:'LOW'},
+    CUSTOM_HOURS:{label:'Outside pharmacist custom work hours',weight:175,risk:'LOW'}
+  };
+
+  return map[clean_(code).toUpperCase()] || {
+    label:reasonToWarning_(code),
+    weight:300,
+    risk:'MODERATE'
+  };
+}
+
+function openShiftForceRisk_(rules) {
+  const weights=(rules||[]).map(x=>num_(x.weight,0));
+  const max=weights.length?Math.max.apply(null,weights):0;
+  if(max>=800)return 'CRITICAL';
+  if(max>=500)return 'HIGH';
+  if(max>=250)return 'MODERATE';
+  return max>0?'LOW':'SAFE';
+}
+
+function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
+  return (openRows||[]).map(row=>{
+    const d=startOfDay_(asDate_(row.Date));
+    const shiftCode=clean_(row.Shift).toUpperCase();
+    const shift=model.shiftMap[shiftCode];
+    const assignmentId=clean_(row['Assignment ID']);
+    const slotNumber=num_(row.Slot,1);
+
+    const base={
+      assignmentId:assignmentId,
+      generationId:clean_(row['Generation ID']),
+      date:d?formatDateKey_(d):dateKey_(row.Date),
+      shift:shiftCode,
+      slot:slotNumber,
+      requiredSkill:clean_(row['Required Skill']||(shift?shift.Skill:'')),
+      locked:yes_(row.Locked),
+      finalized:!!asDate_(row['Finalized At']),
+      originalReason:clean_(row.Warning),
+      candidates:[]
+    };
+
+    if(base.finalized){
+      base.actionRequired='UNFINALIZE';
+      base.actionMessage='Unfinalize this schedule period before an administrator can override this shift.';
+      return base;
+    }
+
+    if(base.locked){
+      base.actionRequired='UNLOCK';
+      base.actionMessage='Unlock this open shift before using an administrator override.';
+      return base;
+    }
+
+    if(!d||!shift){
+      base.actionRequired='FIX_SHIFT';
+      base.actionMessage='The shift definition or date is invalid, so NeoChrono cannot build an override recommendation.';
+      return base;
+    }
+
+    const manualPeriod=resolveManualSchedulePeriod_(
+      {
+        assignmentId:assignmentId,
+        generationId:clean_(row['Generation ID']),
+        date:base.date,
+        shift:shiftCode,
+        slot:slotNumber
+      },
+      allRows,
+      d,
+      model
+    );
+
+    const baseSchedule=allRows.filter(r=>
+      clean_(r['Assignment ID'])!==assignmentId &&
+      clean_(r.Status).toUpperCase()!=='UNFILLED' &&
+      clean_(r['Assigned Pharmacist']).toUpperCase()!=='UNFILLED'
+    );
+
+    const state=createState_(
+      model,
+      baseSchedule,
+      manualPeriod.start,
+      manualPeriod.end
+    );
+
+    const slot={
+      generationId:clean_(row['Generation ID'])||'MANUAL',
+      date:d,
+      dateKey:formatDateKey_(d),
+      day:dayName_(d),
+      shiftCode:shiftCode,
+      slot:slotNumber,
+      shift:shift,
+      requiredSkill:clean_(row['Required Skill']||shift.Skill),
+      weekend:yes_(row.Weekend)||isWeekendDate_(d),
+      weekendGroup:clean_(row['Weekend Group'])||(isWeekendDate_(d)?weekendGroupForDate_(d,model.settings):''),
+      slotKey:slotKey_(formatDateKey_(d),shiftCode,slotNumber)
+    };
+
+    const candidates=[];
+
+    (model.activeUsers||[]).forEach(u=>{
+      const normal=eligibility_(u,slot,model,state,true);
+      let effective=normal;
+      let coverage={
+        applies:false,
+        coverageForPharmacist:'',
+        coverageForUsername:'',
+        coverageReason:'',
+        message:''
+      };
+
+      if(
+        (normal.reasons||[]).indexOf('MISSING_SKILL')>=0 &&
+        hasOffDayCoverageSkillForSlot_(u,slot)
+      ){
+        const resolved=resolveManualOffDayCoverageContext_(u,slot,model,state);
+        coverage={
+          applies:!!resolved.applies,
+          coverageForPharmacist:clean_(resolved.coverageForPharmacist),
+          coverageForUsername:clean_(resolved.coverageForUsername),
+          coverageReason:clean_(resolved.coverageReason),
+          message:clean_(resolved.message)
+        };
+        if(resolved.applies&&resolved.eligibility){
+          effective=resolved.eligibility;
+        }
+      }
+
+      const reasonCodes=(effective.reasons||[]).slice();
+      const rules=reasonCodes.map(code=>{
+        const meta=openShiftForceRuleMeta_(code);
+        return {
+          code:code,
+          label:meta.label,
+          weight:meta.weight,
+          risk:meta.risk,
+          detail:reasonToWarning_(code)
+        };
+      });
+
+      const warnings=(effective.warnings||[]).slice();
+      if(
+        !coverage.applies &&
+        coverage.message &&
+        (normal.reasons||[]).indexOf('MISSING_SKILL')>=0
+      ){
+        warnings.push(coverage.message);
+      }
+
+      const hoursSummary=manualAssignmentHoursSummary_(
+        u,
+        shift,
+        d,
+        allRows,
+        assignmentId,
+        manualPeriod,
+        model
+      );
+
+      let overrideCost=rules.reduce((sum,x)=>sum+num_(x.weight,0),0);
+      overrideCost+=warnings.length*60;
+
+      /*
+       * A true skill match is always preferred over forcing someone who lacks
+       * the required competency. Home/preferred-shift matches break ties.
+       */
+      const hasNormalSkill=hasRequiredSkillForSlot_(u,slot,model);
+      if(!hasNormalSkill&&!coverage.applies)overrideCost+=250;
+      if(preferredShiftMatches_(u,slot))overrideCost-=20;
+
+      const normalScore=scoreCandidate_(
+        u,
+        slot,
+        model,
+        state,
+        {
+          ok:true,
+          reasons:reasonCodes,
+          warnings:warnings,
+          availabilityPreferred:effective.availabilityPreferred,
+          weeklyPreferred:effective.weeklyPreferred,
+          weeklySoftMismatch:effective.weeklySoftMismatch
+        }
+      );
+
+      candidates.push({
+        username:clean_(u.Username),
+        pharmacist:clean_(u['Pharmacist Name']),
+        preferred:preferredShiftMatches_(u,slot),
+        hasNormalSkill:hasNormalSkill,
+        coverageOnly:!!coverage.applies,
+        coverageForPharmacist:coverage.applies?coverage.coverageForPharmacist:'',
+        reasonCodes:reasonCodes,
+        rules:rules,
+        warnings:warnings,
+        risk:openShiftForceRisk_(rules),
+        overrideCost:Math.max(0,overrideCost),
+        schedulerScore:normalScore,
+        hoursSummary:hoursSummary
+      });
+    });
+
+    candidates.sort((a,b)=>
+      a.overrideCost-b.overrideCost ||
+      b.schedulerScore-a.schedulerScore ||
+      clean_(a.pharmacist).localeCompare(clean_(b.pharmacist))
+    );
+
+    base.actionRequired='OVERRIDE';
+    base.candidates=candidates.slice(0,5);
+    base.recommended=base.candidates.length?base.candidates[0]:null;
+
+    if(base.recommended){
+      const r=base.recommended;
+      if(!r.rules.length&&!r.warnings.length){
+        base.recommendation=
+          r.pharmacist+' currently passes the scheduling rules. Re-run the safe-fill analysis before forcing an override.';
+      }else{
+        base.recommendation=
+          r.pharmacist+' is the lowest-impact override currently available and would break '+
+          r.rules.length+' rule'+(r.rules.length===1?'':'s')+'.';
+      }
+    }else{
+      base.recommendation='No active pharmacist is available for an override recommendation.';
+    }
+
+    return base;
+  });
+}
+
+
 /**
  * Preview or apply safe assignments for rows that are already UNFILLED.
  *
@@ -2943,6 +3202,29 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
       previousReason:x.originalWarning
     }));
 
+    /*
+     * For shifts that cannot be filled safely, provide an administrator
+     * override recommendation instead of stopping at "blocked".
+     */
+    let overrideSuggestions=[];
+    if(!apply){
+      const unresolvedIds=new Set(
+        unresolved.map(x=>clean_(x.assignmentId)).filter(Boolean)
+      );
+
+      const overrideRows=selectedOpen.filter(r=>
+        !!asDate_(r['Finalized At']) ||
+        yes_(r.Locked) ||
+        unresolvedIds.has(clean_(r['Assignment ID']))
+      );
+
+      overrideSuggestions=buildOpenShiftForceSuggestions_(
+        overrideRows,
+        model,
+        allRows
+      );
+    }
+
     return serialize_({
       ok:true,
       mode:apply?'APPLY':'PREVIEW',
@@ -2957,6 +3239,7 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
       skippedLockedCount:skippedLocked.length,
       suggestions:suggestions,
       unresolved:unresolved,
+      overrideSuggestions:overrideSuggestions,
       message:apply
         ? plan.length+' existing UNFILLED shift(s) were safely assigned. No existing filled assignment was moved.'
         : plan.length+' of '+editable.length+' editable UNFILLED shift(s) can currently be filled without breaking scheduling rules.'
