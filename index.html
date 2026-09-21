@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260921-fillopen1"></script>
+<script src="js/legacy/main-backend.js?v=20260921-forceopen2"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1087,28 +1087,69 @@ async function openFillOpenShiftsHelper_(){
   }
 }
 
+function overrideRiskBadge_(risk){
+  const r=String(risk||'MODERATE').toUpperCase();
+  const cls=r==='SAFE'?'badge-ok':(r==='LOW'||r==='MODERATE'?'badge-warn':'badge-danger');
+  return '<span class="badge '+cls+'">'+esc(r)+'</span>';
+}
+
+function overrideHoursImpactHtml_(hours){
+  if(!hours)return '<span class="muted">No hours summary</span>';
+
+  const week=hours.week||{};
+  const period=hours.period||{};
+  const weekOver=Number(week.projected||0)>Number(week.maximum||40);
+  const daysOver=week.requiredDays!==null&&week.requiredDays!==undefined&&Number(week.projectedDays||0)>Number(week.requiredDays||5);
+  const periodOver=Number(period.projected||0)>Number(period.target||320);
+
+  return (
+    '<div class="small">'+
+      '<div><b>Week:</b> <span class="'+(weekOver?'badge-danger':'')+'">'+
+        esc(fmtHours(week.projected||0))+' / '+esc(fmtHours(week.maximum||40))+' hrs</span>'+
+        (week.requiredDays!==null&&week.requiredDays!==undefined
+          ? ' · '+esc(week.projectedDays||0)+' / '+esc(week.requiredDays||5)+' days'
+          : '')+
+      '</div>'+
+      '<div style="margin-top:3px"><b>Period:</b> '+
+        '<span class="'+(periodOver?'badge-danger':'')+'">'+
+        esc(fmtHours(period.projected||0))+' / '+esc(fmtHours(period.target||320))+' hrs</span>'+
+      '</div>'+
+      (daysOver?'<div class="badge badge-danger" style="margin-top:4px">Weekly day limit exceeded</div>':'')+
+    '</div>'
+  );
+}
+
 function renderFillOpenShiftsPreview_(r,month){
   const suggestions=r.suggestions||[];
   const unresolved=r.unresolved||[];
+  const overrides=r.overrideSuggestions||[];
+
+  State.fillOpenShiftPreviewResult=r;
+  State.openShiftOverrideSuggestions=overrides;
+
+  const safeCount=Number(r.fillableCount||0);
+  const alertClass=safeCount?'alert-ok':'alert-warn';
 
   let body=
-    '<div class="alert alert-ok">'+
-      '<b>'+esc(r.fillableCount||0)+' safe match'+(Number(r.fillableCount||0)===1?'':'es')+' found.</b><br>'+
-      'NeoChrono will only fill rows currently marked <b>UNFILLED</b>. Existing filled assignments will not be moved or replaced.'+
+    '<div class="alert '+alertClass+'">'+
+      '<b>'+esc(safeCount)+' rule-compliant match'+(safeCount===1?'':'es')+' found.</b><br>'+
+      (safeCount
+        ? 'Safe matches can be filled without moving or replacing any existing filled assignment.'
+        : 'No pharmacist can fill these shifts without breaking at least one scheduling rule. NeoChrono has ranked the lowest-impact administrator override options below.')+
     '</div>';
 
   body+=
     '<div class="grid grid-4 mt12">'+
       '<div class="card"><b>'+esc(r.openCount||0)+'</b><div class="small muted">Open shifts</div></div>'+
       '<div class="card"><b>'+esc(r.fillableCount||0)+'</b><div class="small muted">Safe to fill</div></div>'+
-      '<div class="card"><b>'+esc(r.unresolvedCount||0)+'</b><div class="small muted">Still blocked</div></div>'+
+      '<div class="card"><b>'+esc(r.unresolvedCount||0)+'</b><div class="small muted">Need override</div></div>'+
       '<div class="card"><b>'+esc(Number(r.skippedFinalizedCount||0)+Number(r.skippedLockedCount||0))+'</b><div class="small muted">Locked/finalized</div></div>'+
     '</div>';
 
   if(suggestions.length){
     body+=
-      '<div class="section-title mt12"><div><h3>Recommended assignments</h3><p>Best eligible pharmacist is shown first. Alternatives are informational only.</p></div></div>'+
-      '<div class="table-wrap" style="max-height:380px;overflow:auto">'+
+      '<div class="section-title mt12"><div><h3>Safe assignments</h3><p>These pharmacists pass the current scheduling rules.</p></div></div>'+
+      '<div class="table-wrap" style="max-height:300px;overflow:auto">'+
         '<table class="table">'+
           '<thead><tr><th>Date</th><th>Shift</th><th>Recommended pharmacist</th><th>Other eligible options</th></tr></thead>'+
           '<tbody>'+
@@ -1125,10 +1166,58 @@ function renderFillOpenShiftsPreview_(r,month){
       '</div>';
   }
 
-  if(unresolved.length){
+  if(overrides.length){
     body+=
-      '<div class="section-title mt12"><div><h3>Still unfilled</h3><p>These shifts currently have no pharmacist who can be added without breaking a scheduling rule.</p></div></div>'+
-      '<div class="table-wrap" style="max-height:300px;overflow:auto">'+
+      '<div class="section-title mt12"><div><h3>Administrator override options</h3><p>NeoChrono ranks the least disruptive option first. Review the broken rules before forcing any assignment.</p></div></div>'+
+      '<div class="alert alert-warn"><b>Important:</b> These assignments do <u>not</u> satisfy the normal scheduler rules. The automatic scheduler remains unchanged. An administrator override is saved as a manual assignment with the broken rules and override reason in the audit trail.</div>'+
+      '<div class="table-wrap" style="max-height:420px;overflow:auto">'+
+        '<table class="table">'+
+          '<thead><tr><th>Date</th><th>Shift</th><th>Lowest-impact option</th><th>Rules that would be broken</th><th>Projected impact</th><th></th></tr></thead>'+
+          '<tbody>'+
+            overrides.map((x,i)=>{
+              if(x.actionRequired!=='OVERRIDE'){
+                return '<tr>'+
+                  '<td>'+esc(fmtDate(x.date))+'</td>'+
+                  '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
+                  '<td colspan="3"><span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span> '+esc(x.actionMessage||'This shift cannot be overridden yet.')+'</td>'+
+                  '<td></td>'+
+                '</tr>';
+              }
+
+              const cand=x.recommended||{};
+              const rules=cand.rules||[];
+              const ruleText=rules.length
+                ? rules.slice(0,3).map(rule=>rule.label).join(' · ')+(rules.length>3?' +'+(rules.length-3)+' more':'')
+                : ((cand.warnings||[]).length?'Scheduler warning only':'No rule violations');
+
+              return '<tr>'+
+                '<td>'+esc(fmtDate(x.date))+'</td>'+
+                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+
+                  '<div class="small muted">Skill: '+esc(x.requiredSkill||'—')+'</div></td>'+
+                '<td>'+
+                  (cand.pharmacist
+                    ? '<b>'+esc(cand.pharmacist)+'</b><div style="margin-top:4px">'+overrideRiskBadge_(cand.risk)+'</div>'
+                    : '<span class="muted">No recommendation</span>')+
+                '</td>'+
+                '<td>'+
+                  '<div class="small">'+esc(ruleText)+'</div>'+
+                  (cand.hasNormalSkill
+                    ? '<div class="badge badge-ok" style="margin-top:5px">Has required skill</div>'
+                    : cand.coverageOnly
+                      ? '<div class="badge badge-warn" style="margin-top:5px">OFF-day coverage skill</div>'
+                      : '<div class="badge badge-danger" style="margin-top:5px">Missing required skill</div>')+
+                '</td>'+
+                '<td>'+overrideHoursImpactHtml_(cand.hoursSummary)+'</td>'+
+                '<td><button type="button" class="btn btn-warning btn-sm" onclick="reviewOpenShiftOverride_('+i+')">Review Override</button></td>'+
+              '</tr>';
+            }).join('')+
+          '</tbody>'+
+        '</table>'+
+      '</div>';
+  }else if(unresolved.length){
+    body+=
+      '<div class="section-title mt12"><div><h3>Still unfilled</h3><p>No override recommendation could be built for these rows.</p></div></div>'+
+      '<div class="table-wrap" style="max-height:260px;overflow:auto">'+
         '<table class="table">'+
           '<thead><tr><th>Date</th><th>Shift</th><th>Reason</th></tr></thead>'+
           '<tbody>'+
@@ -1145,12 +1234,12 @@ function renderFillOpenShiftsPreview_(r,month){
   }
 
   const buttons=[
-    {label:'Cancel',cls:'btn-secondary',action:'closeModal()'}
+    {label:'Close',cls:'btn-secondary',action:'closeModal()'}
   ];
 
-  if(Number(r.fillableCount||0)>0){
+  if(safeCount>0){
     buttons.push({
-      label:'Fill '+Number(r.fillableCount||0)+' Safe Shift'+(Number(r.fillableCount||0)===1?'':'s'),
+      label:'Fill '+safeCount+' Safe Shift'+(safeCount===1?'':'s'),
       cls:'btn-primary',
       action:'applyFillOpenShiftsHelper_()'
     });
@@ -1160,7 +1249,7 @@ function renderFillOpenShiftsPreview_(r,month){
     month:month,
     start:r.startDate,
     end:r.endDate,
-    fillableCount:Number(r.fillableCount||0)
+    fillableCount:safeCount
   };
 
   openModal(
@@ -1169,6 +1258,219 @@ function renderFillOpenShiftsPreview_(r,month){
     buttons
   );
 }
+
+function reviewOpenShiftOverride_(shiftIndex){
+  const list=State.openShiftOverrideSuggestions||[];
+  const item=list[Number(shiftIndex)];
+
+  if(!item)return;
+
+  if(item.actionRequired!=='OVERRIDE'){
+    openModal(
+      'Override unavailable — '+fmtDate(item.date)+' '+item.shift,
+      '<div class="alert alert-warn"><b>'+esc(item.actionRequired||'Blocked')+'</b><br>'+esc(item.actionMessage||'This shift cannot be overridden yet.')+'</div>',
+      [
+        {label:'Back',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'}
+      ]
+    );
+    return;
+  }
+
+  const candidates=item.candidates||[];
+
+  if(!candidates.length){
+    openModal(
+      'No override candidate — '+fmtDate(item.date)+' '+item.shift,
+      '<div class="alert alert-danger">No active pharmacist could be evaluated for this shift.</div>',
+      [
+        {label:'Back',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'}
+      ]
+    );
+    return;
+  }
+
+  const body=
+    '<div class="alert alert-warn">'+
+      '<b>Manual administrator override</b><br>'+
+      'This will fill an existing UNFILLED slot even though the selected pharmacist breaks one or more normal scheduling rules. The automatic scheduler rules will not be changed.'+
+    '</div>'+
+    '<div class="grid grid-3 mt12">'+
+      '<div class="card"><div class="small muted">Date</div><b>'+esc(fmtDate(item.date))+'</b></div>'+
+      '<div class="card"><div class="small muted">Shift</div><b>'+esc(item.shift)+(Number(item.slot)>1?' #'+esc(item.slot):'')+'</b></div>'+
+      '<div class="card"><div class="small muted">Required skill</div><b>'+esc(item.requiredSkill||'—')+'</b></div>'+
+    '</div>'+
+    '<div class="field mt12">'+
+      '<label>Pharmacist to force into this shift</label>'+
+      '<select id="forceCandidateSelect" class="control" onchange="renderForceCandidateDetails_('+Number(shiftIndex)+',this.selectedIndex)">'+
+        candidates.map((x,i)=>
+          '<option value="'+i+'">'+
+            esc(x.pharmacist)+' — '+esc((x.rules||[]).length)+' rule'+((x.rules||[]).length===1?'':'s')+' — '+esc(x.risk||'')+
+          '</option>'
+        ).join('')+
+      '</select>'+
+    '</div>'+
+    '<div id="forceCandidateDetails" class="mt12"></div>'+
+    '<div class="field mt12">'+
+      '<label>Administrator override reason <span style="color:var(--danger)">*</span></label>'+
+      '<textarea id="forceOverrideReason" class="control" rows="3" placeholder="Explain why coverage is necessary and why you are accepting these rule violations."></textarea>'+
+    '</div>';
+
+  openModal(
+    'Review Override — '+fmtDate(item.date)+' '+item.shift,
+    body,
+    [
+      {label:'Back',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'},
+      {label:'Override & Assign',cls:'btn-warning',action:'forceOpenShiftAssignment_('+Number(shiftIndex)+')'}
+    ]
+  );
+
+  renderForceCandidateDetails_(Number(shiftIndex),0);
+}
+
+function renderForceCandidateDetails_(shiftIndex,candidateIndex){
+  const item=(State.openShiftOverrideSuggestions||[])[Number(shiftIndex)];
+  const candidate=item&&item.candidates?item.candidates[Number(candidateIndex)]:null;
+  const box=$('forceCandidateDetails');
+
+  if(!box||!candidate)return;
+
+  const rules=candidate.rules||[];
+  const warnings=candidate.warnings||[];
+  const hours=candidate.hoursSummary||{};
+  const week=hours.week||{};
+  const period=hours.period||{};
+
+  let html=
+    '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">'+
+        '<div><div class="small muted">Recommended impact level</div><b style="font-size:16px">'+esc(candidate.pharmacist)+'</b></div>'+
+        overrideRiskBadge_(candidate.risk)+
+      '</div>';
+
+  if(candidate.hasNormalSkill){
+    html+='<div class="badge badge-ok" style="margin-top:8px">Has required skill</div>';
+  }else if(candidate.coverageOnly){
+    html+='<div class="badge badge-warn" style="margin-top:8px">Authorized OFF-day coverage skill</div>';
+  }else{
+    html+='<div class="badge badge-danger" style="margin-top:8px">Does NOT have required skill</div>';
+  }
+
+  html+='<div class="section-title" style="margin-top:14px"><div><h3>Rules this override will break</h3></div></div>';
+
+  if(rules.length){
+    html+='<div style="display:grid;gap:7px">'+
+      rules.map(rule=>
+        '<div class="alert '+(rule.risk==='CRITICAL'||rule.risk==='HIGH'?'alert-danger':'alert-warn')+'" style="margin:0">'+
+          '<b>'+esc(rule.label)+'</b><br>'+
+          '<span class="small">'+esc(rule.detail||rule.code)+'</span>'+
+        '</div>'
+      ).join('')+
+    '</div>';
+  }else{
+    html+='<div class="alert alert-ok"><b>No hard rule violations are currently detected.</b><br>If this remains true, use the safe-fill option instead of forcing an override.</div>';
+  }
+
+  if(warnings.length){
+    html+='<div class="alert alert-warn" style="margin-top:8px"><b>Additional scheduler warning'+(warnings.length===1?'':'s')+':</b><br>'+warnings.map(esc).join('<br>')+'</div>';
+  }
+
+  html+=
+    '<div class="section-title" style="margin-top:14px"><div><h3>Projected workload after override</h3></div></div>'+
+    '<div class="grid grid-3">'+
+      '<div class="card"><div class="small muted">Week hours</div><b>'+esc(fmtHours(week.projected||0))+' / '+esc(fmtHours(week.maximum||40))+'</b></div>'+
+      '<div class="card"><div class="small muted">Week days</div><b>'+esc(week.projectedDays||0)+(week.requiredDays!==null&&week.requiredDays!==undefined?' / '+esc(week.requiredDays):'')+'</b></div>'+
+      '<div class="card"><div class="small muted">Schedule-period hours</div><b>'+esc(fmtHours(period.projected||0))+' / '+esc(fmtHours(period.target||320))+'</b></div>'+
+    '</div>'+
+    '</div>';
+
+  box.innerHTML=html;
+}
+
+function returnToFillOpenShiftPreview_(){
+  const r=State.fillOpenShiftPreviewResult;
+  const p=State.fillOpenShiftPreview;
+  if(!r||!p||!p.month){
+    closeModal();
+    return;
+  }
+  renderFillOpenShiftsPreview_(r,p.month);
+}
+
+async function forceOpenShiftAssignment_(shiftIndex){
+  const item=(State.openShiftOverrideSuggestions||[])[Number(shiftIndex)];
+  if(!item||item.actionRequired!=='OVERRIDE')return;
+
+  const select=$('forceCandidateSelect');
+  const candidateIndex=select?Number(select.value||select.selectedIndex||0):0;
+  const candidate=(item.candidates||[])[candidateIndex];
+  const reason=String($('forceOverrideReason')?.value||'').trim();
+
+  if(!candidate){
+    toast('Select a pharmacist first.','error');
+    return;
+  }
+
+  if(!reason){
+    toast('Enter an administrator override reason before assigning this shift.','error');
+    $('forceOverrideReason')?.focus();
+    return;
+  }
+
+  const broken=(candidate.rules||[]).map(x=>x.label);
+  const warningText=
+    'FORCE THIS ASSIGNMENT?\n\n'+
+    candidate.pharmacist+' → '+item.shift+' on '+fmtDate(item.date)+'\n\n'+
+    (broken.length
+      ? 'Rules that will be broken:\n• '+broken.join('\n• ')
+      : 'No hard rule violations are currently detected.')+
+    '\n\nThis will be saved as a MANUAL ADMIN OVERRIDE and recorded in the audit trail.';
+
+  if(!confirm(warningText))return;
+
+  const modalFoot=document.querySelector('.modal-foot');
+  const buttons=modalFoot?[...modalFoot.querySelectorAll('button')]:[];
+  buttons.forEach(b=>b.disabled=true);
+
+  try{
+    const result=await server(
+      'saveManualAssignment',
+      State.token,
+      {
+        assignmentId:item.assignmentId,
+        generationId:item.generationId,
+        date:item.date,
+        slot:item.slot,
+        shift:item.shift,
+        username:candidate.username,
+        locked:'No',
+        override:'Yes',
+        overrideReason:reason
+      }
+    );
+
+    closeModal();
+
+    toast(
+      candidate.pharmacist+' assigned to '+item.shift+' as an administrator override',
+      'success'
+    );
+
+    await refreshData(false);
+    renderDashboard();
+
+    /*
+     * Re-run the helper immediately so the administrator can continue working
+     * through the remaining open shifts with fresh rule calculations.
+     */
+    await openFillOpenShiftsHelper_();
+
+    return result;
+  }catch(e){
+    toast(e.message,'error');
+    buttons.forEach(b=>b.disabled=false);
+  }
+}
+
 
 async function applyFillOpenShiftsHelper_(){
   const p=State.fillOpenShiftPreview;
