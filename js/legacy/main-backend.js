@@ -2669,6 +2669,304 @@ function compareLockedSnapshots_(before,after) {
 }
 
 
+/**
+ * Preview or apply safe assignments for rows that are already UNFILLED.
+ *
+ * IMPORTANT:
+ * - Existing filled assignments are never moved, swapped, deleted, or replaced.
+ * - The same eligibility_() and scoreCandidate_() functions used by the normal
+ *   scheduler are used here.
+ * - Finalized or locked UNFILLED rows are reported but not changed.
+ * - mode = PREVIEW builds a plan only.
+ * - mode = APPLY writes only the planned UNFILLED rows.
+ */
+function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
+  const ctx=requireAdmin_(token);
+  mode=clean_(mode||'PREVIEW').toUpperCase();
+  const apply=mode==='APPLY';
+
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(apply?30000:10000)){
+    throw new Error('Schedule is currently being modified by another administrator.');
+  }
+
+  try{
+    ensureUniqueScheduleAssignmentIds_();
+
+    const model=loadSchedulingModel_();
+    const allRows=readTable_(APP.SHEETS.SCHEDULE);
+
+    const start=startOfDay_(asDate_(startDate));
+    const end=startOfDay_(asDate_(endDate));
+
+    if(!start||!end)throw new Error('A valid start date and end date are required.');
+    if(end<start)throw new Error('End Date must be on or after Start Date.');
+
+    const selectedOpen=allRows.filter(r=>{
+      const d=asDate_(r.Date);
+      if(!d||!inDateRange_(d,start,end))return false;
+      return clean_(r.Status).toUpperCase()==='UNFILLED' ||
+        clean_(r['Assigned Pharmacist']).toUpperCase()==='UNFILLED';
+    });
+
+    const skippedFinalized=selectedOpen.filter(r=>!!asDate_(r['Finalized At']));
+    const skippedLocked=selectedOpen.filter(r=>!asDate_(r['Finalized At'])&&yes_(r.Locked));
+    const editable=selectedOpen.filter(r=>!asDate_(r['Finalized At'])&&!yes_(r.Locked));
+
+    /*
+     * Resolve the original generated period so the exact period-hours rule is
+     * evaluated against the same schedule window that produced these rows.
+     */
+    const generationIds=new Set(
+      editable
+        .map(r=>clean_(r['Generation ID']))
+        .filter(id=>id&&id.indexOf('MANUAL_')!==0)
+    );
+
+    const periodRows=generationIds.size
+      ? allRows.filter(r=>generationIds.has(clean_(r['Generation ID']))&&asDate_(r.Date))
+      : allRows.filter(r=>inDateRange_(asDate_(r.Date),start,end));
+
+    const periodDates=periodRows
+      .map(r=>startOfDay_(asDate_(r.Date)))
+      .filter(Boolean)
+      .sort((a,b)=>a-b);
+
+    const periodStart=periodDates.length?periodDates[0]:start;
+    const periodEnd=periodDates.length?periodDates[periodDates.length-1]:end;
+
+    /*
+     * Load every existing FILLED row into state. Weekly/monthly maps are keyed
+     * by their own date periods, while periodHours counts only periodStart/end.
+     * This lets the helper respect neighboring-day transitions and week limits.
+     */
+    const fixedRows=allRows.filter(r=>
+      clean_(r.Status).toUpperCase()!=='UNFILLED' &&
+      clean_(r['Assigned Pharmacist']).toUpperCase()!=='UNFILLED' &&
+      clean_(r.Username)
+    );
+
+    const state=createState_(model,fixedRows,periodStart,periodEnd);
+
+    const slots=editable.map(r=>{
+      const d=startOfDay_(asDate_(r.Date));
+      const code=clean_(r.Shift).toUpperCase();
+      const shift=model.shiftMap[code];
+      if(!d||!shift)return null;
+
+      const dk=formatDateKey_(d);
+      return {
+        originalRow:r,
+        generationId:clean_(r['Generation ID'])||('FILL_'+Utilities.formatDate(new Date(),getTz_(),'yyyyMMdd_HHmmss')),
+        date:d,
+        dateKey:dk,
+        day:dayName_(d),
+        shiftCode:code,
+        slot:num_(r.Slot,1),
+        shift:shift,
+        requiredSkill:clean_(r['Required Skill']||shift.Skill),
+        weekend:yes_(r.Weekend)||isWeekendDate_(d),
+        weekendGroup:clean_(r['Weekend Group'])||(isWeekendDate_(d)?weekendGroupForDate_(d,model.settings):''),
+        slotKey:slotKey_(dk,code,num_(r.Slot,1))
+      };
+    }).filter(Boolean);
+
+    /*
+     * Scarce slots first. This prevents an easy/general open shift from using
+     * the only pharmacist who could have covered a harder specialty shift.
+     */
+    slots.forEach(slot=>{
+      slot._staticCandidates=countStaticCandidates_(slot,model);
+      slot._categoryRank=shiftCategoryRank_(slot.shift);
+    });
+
+    slots.sort((a,b)=>
+      a._staticCandidates-b._staticCandidates ||
+      a._categoryRank-b._categoryRank ||
+      num_(a.shift.Priority,50)-num_(b.shift.Priority,50) ||
+      a.dateKey.localeCompare(b.dateKey) ||
+      a.shiftCode.localeCompare(b.shiftCode) ||
+      a.slot-b.slot
+    );
+
+    const plan=[];
+    const unresolved=[];
+
+    slots.forEach(slot=>{
+      let candidates=[];
+
+      model.activeUsers.forEach(u=>{
+        const e=eligibility_(u,slot,model,state,false);
+        if(!e.ok)return;
+        candidates.push({
+          user:u,
+          eligibility:e,
+          coverage:false,
+          score:scoreCandidate_(u,slot,model,state,e)
+        });
+      });
+
+      /*
+       * If no normal-skill candidate exists, use the existing generated-OFF-day
+       * coverage mechanism when that exact rule applies.
+       */
+      if(!candidates.length){
+        const owners=primaryHomeOwnersForSlot_(slot,model);
+        if(owners.length===1&&isGeneratedOffDayForHomeOwner_(owners[0],slot,state,model)){
+          model.activeUsers.forEach(u=>{
+            if(clean_(u.Username)===clean_(owners[0].Username))return;
+            if(!hasOffDayCoverageSkillForSlot_(u,slot))return;
+            const e=offDayCoverageEligibility_(u,slot,model,state);
+            if(!e.ok)return;
+            candidates.push({
+              user:u,
+              eligibility:e,
+              coverage:true,
+              coverageOwner:owners[0],
+              score:scoreCandidate_(u,slot,model,state,e)-5
+            });
+          });
+        }
+      }
+
+      candidates.sort((a,b)=>
+        b.score-a.score ||
+        clean_(a.user['Pharmacist Name']).localeCompare(clean_(b.user['Pharmacist Name']))
+      );
+
+      if(!candidates.length){
+        unresolved.push({
+          assignmentId:clean_(slot.originalRow['Assignment ID']),
+          date:slot.dateKey,
+          shift:slot.shiftCode,
+          slot:slot.slot,
+          reason:explainUnfilled_(slot,model,state)
+        });
+        return;
+      }
+
+      const pick=candidates[0];
+      const warnings=(pick.eligibility.warnings||[]).slice();
+      warnings.push('OPEN SHIFT HELPER: filled an existing UNFILLED slot without moving any filled assignment.');
+
+      const assigned=makeAssigned_(slot,pick.user,warnings,ctx.username);
+
+      /*
+       * Keep the exact row identity already present in Schedule.
+       */
+      assigned.assignmentId=clean_(slot.originalRow['Assignment ID'])||assigned.assignmentId;
+      assigned.generationId=clean_(slot.originalRow['Generation ID'])||assigned.generationId;
+      assigned.holiday=clean_(slot.originalRow.Holiday);
+      assigned.locked=false;
+      assigned.manual=false;
+      assigned.status='ASSIGNED';
+      assigned.finalizedAt=null;
+
+      if(pick.coverage&&pick.coverageOwner){
+        assigned.coverageForPharmacist=clean_(pick.coverageOwner['Pharmacist Name']);
+        assigned.coverageForUsername=clean_(pick.coverageOwner.Username);
+        assigned.coverageReason='GENERATED OFF DAY';
+        assigned.warning='OFF-DAY COVERAGE ONLY: Covering '+
+          clean_(pick.coverageOwner['Pharmacist Name'])+
+          ' on an algorithm-generated OFF day. | '+assigned.warning;
+      }
+
+      addAssignmentToState_(state,assigned,model);
+
+      plan.push({
+        assignment:assigned,
+        date:slot.dateKey,
+        shift:slot.shiftCode,
+        slot:slot.slot,
+        pharmacist:assigned.pharmacist,
+        username:assigned.username,
+        coverage:!!pick.coverage,
+        alternatives:candidates.slice(1,4).map(x=>clean_(x.user['Pharmacist Name'])),
+        originalWarning:clean_(slot.originalRow.Warning)
+      });
+    });
+
+    if(apply&&plan.length){
+      plan.forEach(item=>{
+        const obj=assignmentToScheduleObject_(item.assignment);
+        const ok=updateRowByKey_(
+          APP.SHEETS.SCHEDULE,
+          'Assignment ID',
+          item.assignment.assignmentId,
+          obj
+        );
+        if(!ok){
+          throw new Error(
+            'Could not update open shift '+item.date+' '+item.shift+
+            ' slot '+item.slot+'. The Schedule sheet changed while the helper was running.'
+          );
+        }
+      });
+
+      reconcileFilledVsUnfilledScheduleRows_();
+      SpreadsheetApp.flush();
+
+      audit_(
+        'OPEN_SHIFTS_AUTO_FILLED',
+        formatDateKey_(start),
+        '',
+        '',
+        '',
+        '',
+        String(plan.length),
+        'No',
+        '',
+        JSON.stringify({
+          start:formatDateKey_(start),
+          end:formatDateKey_(end),
+          filled:plan.map(x=>({
+            date:x.date,
+            shift:x.shift,
+            slot:x.slot,
+            pharmacist:x.pharmacist
+          })),
+          unresolved:unresolved.length,
+          skippedFinalized:skippedFinalized.length,
+          skippedLocked:skippedLocked.length
+        }),
+        ctx.username
+      );
+    }
+
+    const suggestions=plan.map(x=>({
+      date:x.date,
+      shift:x.shift,
+      slot:x.slot,
+      pharmacist:x.pharmacist,
+      coverage:x.coverage,
+      alternatives:x.alternatives,
+      previousReason:x.originalWarning
+    }));
+
+    return serialize_({
+      ok:true,
+      mode:apply?'APPLY':'PREVIEW',
+      startDate:formatDateKey_(start),
+      endDate:formatDateKey_(end),
+      openCount:selectedOpen.length,
+      editableOpenCount:editable.length,
+      fillableCount:plan.length,
+      appliedCount:apply?plan.length:0,
+      unresolvedCount:unresolved.length,
+      skippedFinalizedCount:skippedFinalized.length,
+      skippedLockedCount:skippedLocked.length,
+      suggestions:suggestions,
+      unresolved:unresolved,
+      message:apply
+        ? plan.length+' existing UNFILLED shift(s) were safely assigned. No existing filled assignment was moved.'
+        : plan.length+' of '+editable.length+' editable UNFILLED shift(s) can currently be filled without breaking scheduling rules.'
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
 function validateSavedSchedule(token,startDate,endDate) {
   requireAdmin_(token);
   const model=loadSchedulingModel_();
