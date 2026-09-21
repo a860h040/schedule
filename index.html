@@ -714,7 +714,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260919-manualoverride1"></script>
+<script src="js/legacy/main-backend.js?v=20260921-shiftsync1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1427,7 +1427,7 @@ async function savePreceptorCalendarUI(){
 async function syncPreceptorCalendarUI(){const pc=preceptorCalendarState_();try{const r=await server('syncPreceptorCalendar',State.token,Number(pc.year));toast('Preceptor calendar synced: '+Number(r.rowsAdded||0)+' row(s) added','success');pc.data=null;pc.dirty=false;await loadPreceptorCalendarUI(true)}catch(e){toast(e.message,'error')}}
 
 function renderCalendar(){const m=State.month;const d=State.data;const filt=State.calendarFilters;let html=`<div class="calendar-head"><div><div class="calendar-title">${monthTitle(m)}</div><div class="muted small">Click an assignment to review details${d.isAdmin?' or manually edit it':''}.</div></div><div class="toolbar"><button class="btn btn-secondary btn-sm" onclick="changeMonth(-1)">← Previous</button><button class="btn btn-secondary btn-sm" onclick="State.month=firstOfMonth(new Date());renderCalendar()">Today</button><button class="btn btn-secondary btn-sm" onclick="changeMonth(1)">Next →</button>${d.isAdmin?'<button class="btn btn-primary btn-sm" onclick="openAssignmentModal(null)">+ Manual assignment</button>':''}</div></div>`;
-html+=`<div class="card mb12"><div class="section-title" style="margin:0 0 10px"><div><h3>Compare pharmacists</h3><p>Select up to six pharmacists. Leave all six blank to show everyone.</p></div>${selectedCalendarEmployeeKeys().length?`<span class="badge badge-ok">${selectedCalendarEmployeeKeys().length} selected</span>`:''}</div><div class="toolbar">${employeeCompareFilters(filt.employees)}</div><div class="toolbar mt12"><label class="control" style="display:flex;align-items:center;gap:8px;width:auto;min-height:40px;padding:8px 12px;cursor:pointer"><input id="showUnfilledWithSelected" type="checkbox" ${filt.showUnfilledWithSelected?'checked':''} onchange="toggleShowUnfilledWithSelected(this.checked)"><span><b>Show unfilled shifts with selected pharmacists</b></span></label>${selectFilter('status','Status',[{value:'FILLED',label:'Filled'},{value:'UNFILLED',label:'Unfilled'}],filt.status)}${selectFilter('shift','Shift',optionList(d.shifts,'Shift'),filt.shift)}${selectFilter('type','Shift Type',['Day','Evening','Night','Training'],filt.type)}${selectFilter('skill','Skill',optionList(d.shifts,'Skill'),filt.skill)}${selectFilter('weekendGroup','Weekend Group',['A','B','C'],filt.weekendGroup)}${selectFilter('resident','Resident',['Yes','No'],filt.resident)}${selectFilter('preceptor','Preceptor',['Yes','No'],filt.preceptor)}<button class="btn btn-ghost btn-sm" onclick="clearCalendarFilters()">Clear filters</button></div>${filt.showUnfilledWithSelected&&selectedCalendarEmployeeKeys().length?'<div class="small muted mt12">Calendar is showing the selected pharmacists plus all unfilled shifts that match the other filters.</div>':''}</div>`;
+html+=`<div class="card mb12"><div class="section-title" style="margin:0 0 10px"><div><h3>Compare pharmacists</h3><p>Select up to six pharmacists. Leave all six blank to show everyone.</p></div>${selectedCalendarEmployeeKeys().length?`<span class="badge badge-ok">${selectedCalendarEmployeeKeys().length} selected</span>`:''}</div><div class="toolbar">${employeeCompareFilters(filt.employees)}</div><div class="toolbar mt12"><label class="control" style="display:flex;align-items:center;gap:8px;width:auto;min-height:40px;padding:8px 12px;cursor:pointer"><input id="showUnfilledWithSelected" type="checkbox" ${filt.showUnfilledWithSelected?'checked':''} onchange="toggleShowUnfilledWithSelected(this.checked)"><span><b>Show unfilled shifts with selected pharmacists</b></span></label>${selectFilter('status','Status',[{value:'FILLED',label:'Filled'},{value:'UNFILLED',label:'Unfilled'}],filt.status)}${selectFilter('shift','Shift',optionList(d.shifts,'Shift'),filt.shift)}${selectFilter('type','Shift Type',optionList(d.shifts,'Type'),filt.type)}${selectFilter('skill','Skill',optionList(d.shifts,'Skill'),filt.skill)}${selectFilter('weekendGroup','Weekend Group',['A','B','C'],filt.weekendGroup)}${selectFilter('resident','Resident',['Yes','No'],filt.resident)}${selectFilter('preceptor','Preceptor',['Yes','No'],filt.preceptor)}<button class="btn btn-ghost btn-sm" onclick="clearCalendarFilters()">Clear filters</button></div>${filt.showUnfilledWithSelected&&selectedCalendarEmployeeKeys().length?'<div class="small muted mt12">Calendar is showing the selected pharmacists plus all unfilled shifts that match the other filters.</div>':''}</div>`;
 html+=employeeComparisonSummary(m);
 const first=new Date(m.getFullYear(),m.getMonth(),1),start=addDays(first,-first.getDay());html+='<div class="calendar-scroll"><div class="calendar-grid">'+['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(x=>`<div class="dow">${x}</div>`).join('');for(let i=0;i<42;i++){const day=addDays(start,i),dk=dateKey(day),outside=day.getMonth()!==m.getMonth(),today=dk===dateKey(new Date());const rows=calendarRowsForDate(dk);html+=`<div class="day-cell ${outside?'outside':''} ${today?'today':''}"><div class="day-num"><span>${day.getDate()}</span>${isWeekend(day)?'<span class="badge badge-ok">Wknd</span>':''}</div>${rows.map(calItem).join('')}</div>`}html+='</div></div>';$('content').innerHTML=html;bindFilterInputs()}
 function isWeekend(d){return d.getDay()===0||d.getDay()===6}
@@ -2208,6 +2208,18 @@ function renderSkills(){
     if(!bySkill[code].some(x=>String(x.Username)===String(s.Username)))bySkill[code].push(s);
     const uk=String(s.Username==null?'':s.Username); if(!byUser[uk])byUser[uk]=[]; if(!byUser[uk].includes(code))byUser[uk].push(code);
   });
+  /*
+   * Skill coverage must also know about skills required by Shift definitions.
+   * This makes a brand-new shift/skill visible immediately, even when zero
+   * pharmacists currently possess that skill.
+   */
+  (State.data.shifts||[])
+    .filter(s=>yes(s.Active)&&String(s.Skill||'').trim())
+    .forEach(s=>{
+      const code=String(s.Skill||'').trim().toUpperCase();
+      if(!bySkill[code])bySkill[code]=[];
+    });
+
   const skillCodes=Object.keys(bySkill).sort((a,b)=>a.localeCompare(b));
   const critical=skillCodes.filter(k=>bySkill[k].length<=1).length;
   const thin=skillCodes.filter(k=>bySkill[k].length===2).length;
@@ -2282,9 +2294,96 @@ function renderShifts(){if(!State.data.isAdmin){$('content').innerHTML='<div cla
 function typeBadge(t){const x=String(t||'').toLowerCase();return `<span class="badge ${x==='evening'?'badge-evening':x==='night'?'badge-night':'badge-day'}">${esc(t)}</span>`}
 function openShiftModal(code){const s=code?State.data.shifts.find(x=>x.Shift===code):{};const fields=[['Shift','Shift Code','text'],['Meaning','Meaning','text'],['Start','Start','time'],['End','End','time'],['Hours','Hours','number'],['Credited Hours','Credited Hours','number'],['Type','Type','type'],['Skill','Required Skill','text'],['Weekend','Weekend','yn'],['Active','Active','yn'],['Priority','Priority (lower = earlier)','number']];let body='<div class="form-grid">'+fields.map(f=>shiftField(f[0],f[1],f[2],s[f[0]]??(f[0]==='Active'?'Yes':f[0]==='Priority'?50:''),!!code)).join('')+'</div>';openModal(code?'Edit Shift':'Add Shift',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save Shift',cls:'btn-primary',action:'saveShiftUI()'}])}
 function shiftField(k,l,t,v,existing){if(t==='type')return `<div class="field"><label>${esc(l)}</label><select id="shift_${keyId(k)}" class="control">${['Day','Evening','Night','Training','Other'].map(x=>`<option ${v===x?'selected':''}>${x}</option>`).join('')}</select></div>`;const h=formField('shift_'+keyId(k),l,t,v);return k==='Shift'&&existing?h.replace('class="control"','class="control" readonly'):h}
-async function saveShiftUI(){const keys=['Shift','Meaning','Start','End','Hours','Credited Hours','Type','Skill','Weekend','Active','Priority'],p={};keys.forEach(k=>p[k]=$('shift_'+keyId(k)).value);try{await server('saveShift',State.token,p);closeModal();toast('Shift saved','success');await refreshData()}catch(e){toast(e.message,'error')}}
+async function saveShiftUI(){
+  const keys=['Shift','Meaning','Start','End','Hours','Credited Hours','Type','Skill','Weekend','Active','Priority'],p={};
+  keys.forEach(k=>p[k]=$('shift_'+keyId(k)).value);
+  try{
+    const r=await server('saveShift',State.token,p);
+    closeModal();
+    toast(
+      r&&r.staffingRequirementCreated
+        ? 'Shift saved and added to Staffing with 0 daily requirements'
+        : 'Shift saved and synchronized across NeoChrono',
+      'success'
+    );
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
+}
 
-function renderStaffing(){if(!State.data.isAdmin)return;const req=State.data.requirements;const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];$('content').innerHTML=`<div class="section-title"><div><h3>Required daily staffing</h3><p>Change any count and save the row. The generator reads these values dynamically.</p></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Shift</th>${days.map(d=>`<th>${d.slice(0,3)}</th>`).join('')}<th>Active</th><th></th></tr></thead><tbody>${req.map(r=>`<tr><td><b>${esc(r.Shift)}</b></td>${days.map(d=>`<td><input id="req_${attr(r.Shift)}_${d}" type="number" min="0" value="${attr(r[d]||0)}"></td>`).join('')}<td><select id="req_${attr(r.Shift)}_Active"><option ${yes(r.Active)?'selected':''}>Yes</option><option ${!yes(r.Active)?'selected':''}>No</option></select></td><td><button class="btn btn-primary btn-sm" onclick="saveReqUI('${attr(r.Shift)}')">Save</button></td></tr>`).join('')}</tbody></table></div>`}
+function renderStaffing(){
+  if(!State.data.isAdmin)return;
+
+  const days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const requirementRows=State.data.requirements||[];
+  const byCode=Object.fromEntries(
+    requirementRows.map(r=>[String(r.Shift||'').toUpperCase(),r])
+  );
+
+  /*
+   * Shifts is the source of truth for which rows belong on the Staffing page.
+   * If an older custom shift has no requirement row yet, display it with zero
+   * counts so the administrator can configure it immediately.
+   */
+  const req=(State.data.shifts||[])
+    .filter(s=>String(s.Shift||'').trim())
+    .map(s=>{
+      const code=String(s.Shift||'').trim().toUpperCase();
+      return byCode[code]||{
+        Shift:code,
+        Sunday:0,
+        Monday:0,
+        Tuesday:0,
+        Wednesday:0,
+        Thursday:0,
+        Friday:0,
+        Saturday:0,
+        Active:yes(s.Active)?'Yes':'No'
+      };
+    })
+    .sort((a,b)=>{
+      const sa=(State.data.shifts||[]).find(x=>String(x.Shift||'').toUpperCase()===String(a.Shift||'').toUpperCase())||{};
+      const sb=(State.data.shifts||[]).find(x=>String(x.Shift||'').toUpperCase()===String(b.Shift||'').toUpperCase())||{};
+      return num(sa.Priority,50)-num(sb.Priority,50) ||
+        String(a.Shift||'').localeCompare(String(b.Shift||''));
+    });
+
+  $('content').innerHTML=`
+    <div class="section-title">
+      <div>
+        <h3>Required daily staffing</h3>
+        <p>Every shift created in the Shifts tab appears here automatically. New shifts start at 0 required positions until you set the daily staffing counts.</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Shift</th>
+            ${days.map(d=>`<th>${d.slice(0,3)}</th>`).join('')}
+            <th>Active</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${req.map(r=>`
+            <tr>
+              <td><b>${esc(r.Shift)}</b></td>
+              ${days.map(d=>`<td><input id="req_${attr(r.Shift)}_${d}" type="number" min="0" value="${attr(r[d]||0)}"></td>`).join('')}
+              <td>
+                <select id="req_${attr(r.Shift)}_Active">
+                  <option ${yes(r.Active)?'selected':''}>Yes</option>
+                  <option ${!yes(r.Active)?'selected':''}>No</option>
+                </select>
+              </td>
+              <td><button class="btn btn-primary btn-sm" onclick="saveReqUI('${attr(r.Shift)}')">Save</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
 async function saveReqUI(code){const p={Shift:code,Active:$('req_'+code+'_Active').value};['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].forEach(d=>p[d]=$('req_'+code+'_'+d).value);try{await server('saveStaffingRequirement',State.token,p);toast(code+' staffing saved','success');await refreshData(false)}catch(e){toast(e.message,'error')}}
 
 function googlePtoSourceBadge_(){
