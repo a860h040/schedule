@@ -687,6 +687,13 @@ function cleanupSessions_() {
 
 function getAppData(token) {
   const ctx = requireAuth_(token);
+
+  /*
+   * Keep Shifts and Staffing Requirements synchronized. This repairs older
+   * custom shifts that were created before automatic propagation existed.
+   */
+  ensureAllShiftStaffingRequirements_('SYSTEM');
+
   // Keep PTO auto-approval status synchronized on every app load/refresh.
   // This also upgrades legacy Pending rows created before v27.
   reconcilePtoAutoApprovals_('SYSTEM');
@@ -3156,12 +3163,111 @@ function removeSkill(token,username,skill) {
   audit_('EMPLOYEE_SKILL_CHANGED','','','','','',skill,'No','','Skill deactivated for '+username,ctx.username); return {ok:true};
 }
 
+function ensureStaffingRequirementForShift_(code,actor,shiftActive) {
+  code=clean_(code).toUpperCase();
+  if(!code)return {created:false};
+
+  const existing=findRowByKey_(APP.SHEETS.REQUIREMENTS,'Shift',code);
+  if(existing)return {created:false,row:existing};
+
+  const now=new Date();
+  const row={
+    'Shift':code,
+    'Sunday':0,
+    'Monday':0,
+    'Tuesday':0,
+    'Wednesday':0,
+    'Thursday':0,
+    'Friday':0,
+    'Saturday':0,
+    /*
+     * A new shift begins with zero required positions, so adding a Shift
+     * definition cannot unexpectedly create schedule demand. The admin can
+     * then set the desired staffing counts in the Staffing tab.
+     */
+    'Active':yesDefault_(shiftActive,true)?'Yes':'No',
+    'Updated At':now,
+    'Updated By':clean_(actor)||'SYSTEM'
+  };
+
+  appendObjectRow_(APP.SHEETS.REQUIREMENTS,row);
+  return {created:true,row:row};
+}
+
+function ensureAllShiftStaffingRequirements_(actor) {
+  const shifts=readTable_(APP.SHEETS.SHIFTS);
+  let created=0;
+
+  shifts.forEach(function(shift){
+    const code=clean_(shift.Shift).toUpperCase();
+    if(!code)return;
+    const result=ensureStaffingRequirementForShift_(
+      code,
+      actor||'SYSTEM',
+      shift.Active
+    );
+    if(result.created)created++;
+  });
+
+  return {created:created};
+}
+
 function saveShift(token,data) {
-  const ctx=requireAdmin_(token); data=data||{}; const code=clean_(data.Shift).toUpperCase(); if(!code)throw new Error('Shift code is required.');
-  const existing=findRowByKey_(APP.SHEETS.SHIFTS,'Shift',code); const values={}; APP.HEADERS.SHIFTS.forEach(h=>{if(data[h]!==undefined)values[h]=data[h];});
-  values.Shift=code;values['Updated At']=new Date();values['Updated By']=ctx.username;
-  if(existing)updateRowByKey_(APP.SHEETS.SHIFTS,'Shift',code,values); else appendObjectRow_(APP.SHEETS.SHIFTS,values);
-  audit_('SHIFT_UPDATED','', '',existing?existing.Shift:'',code,existing?JSON.stringify(existing):'',JSON.stringify(values),'No','','',ctx.username);return{ok:true};
+  const ctx=requireAdmin_(token);
+  data=data||{};
+
+  const code=clean_(data.Shift).toUpperCase();
+  if(!code)throw new Error('Shift code is required.');
+
+  const existing=findRowByKey_(APP.SHEETS.SHIFTS,'Shift',code);
+  const values={};
+
+  APP.HEADERS.SHIFTS.forEach(function(h){
+    if(data[h]!==undefined)values[h]=data[h];
+  });
+
+  values.Shift=code;
+  values['Updated At']=new Date();
+  values['Updated By']=ctx.username;
+
+  if(existing){
+    updateRowByKey_(APP.SHEETS.SHIFTS,'Shift',code,values);
+  }else{
+    appendObjectRow_(APP.SHEETS.SHIFTS,values);
+  }
+
+  /*
+   * Every Shift definition must also exist in Staffing Requirements.
+   * New rows start at zero positions for every day and therefore do not
+   * alter the generated schedule until an administrator sets staffing counts.
+   */
+  const staffing=ensureStaffingRequirementForShift_(
+    code,
+    ctx.username,
+    values.Active
+  );
+
+  audit_(
+    'SHIFT_UPDATED',
+    '',
+    '',
+    existing?existing.Shift:'',
+    code,
+    existing?JSON.stringify(existing):'',
+    JSON.stringify(values),
+    'No',
+    '',
+    staffing.created
+      ? 'Shift saved; matching Staffing Requirements row created with zero daily counts.'
+      : 'Shift saved; Staffing Requirements row already exists.',
+    ctx.username
+  );
+
+  return {
+    ok:true,
+    shift:code,
+    staffingRequirementCreated:!!staffing.created
+  };
 }
 
 function saveStaffingRequirement(token,data) {
