@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260921-shiftsync1"></script>
+<script src="js/legacy/main-backend.js?v=20260921-fillopen1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -995,7 +995,9 @@ function renderDashboard(){
     </article>
     <article class="summary-tile ${unfilled?'attention':''}">
       <div class="tile-top"><span class="tile-icon coral">!</span><span class="tile-label">Open shifts</span></div>
-      <strong>${esc(unfilled)}</strong><span>${unfilled?'Needs administrator review':'No open shifts'}</span>
+      <strong>${esc(unfilled)}</strong>
+      <span>${unfilled?'Needs administrator review':'No open shifts'}</span>
+      ${admin&&unfilled?'<button type="button" class="btn btn-secondary btn-sm" style="margin-top:10px;width:100%" onclick="openFillOpenShiftsHelper_()">Help Fill Open Shifts</button>':''}
     </article>
     <article class="summary-tile ${warnings?'attention-soft':''}">
       <div class="tile-top"><span class="tile-icon amber">◇</span><span class="tile-label">Rule warnings</span></div>
@@ -1062,6 +1064,160 @@ function renderDashboard(){
   }
   $('content').innerHTML=html;
 }
+async function openFillOpenShiftsHelper_(){
+  const month=State.month||firstOfMonth(new Date());
+  const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+  const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+
+  openModal(
+    'Help Fill Open Shifts — '+monthTitle(month),
+    '<div class="alert alert-warn"><b>Analyzing open shifts…</b><br>NeoChrono is checking skills, PTO, availability, hours, weekend rotation, consecutive days, evening-to-morning transitions, resident/preceptor rules, and existing assignments.</div>',
+    [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
+  );
+
+  try{
+    const r=await server('fillExistingUnfilledShifts',State.token,start,end,'PREVIEW');
+    renderFillOpenShiftsPreview_(r,month);
+  }catch(e){
+    openModal(
+      'Help Fill Open Shifts — '+monthTitle(month),
+      '<div class="alert alert-danger"><b>Could not analyze open shifts.</b><br>'+esc(e.message)+'</div>',
+      [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
+    );
+  }
+}
+
+function renderFillOpenShiftsPreview_(r,month){
+  const suggestions=r.suggestions||[];
+  const unresolved=r.unresolved||[];
+
+  let body=
+    '<div class="alert alert-ok">'+
+      '<b>'+esc(r.fillableCount||0)+' safe match'+(Number(r.fillableCount||0)===1?'':'es')+' found.</b><br>'+
+      'NeoChrono will only fill rows currently marked <b>UNFILLED</b>. Existing filled assignments will not be moved or replaced.'+
+    '</div>';
+
+  body+=
+    '<div class="grid grid-4 mt12">'+
+      '<div class="card"><b>'+esc(r.openCount||0)+'</b><div class="small muted">Open shifts</div></div>'+
+      '<div class="card"><b>'+esc(r.fillableCount||0)+'</b><div class="small muted">Safe to fill</div></div>'+
+      '<div class="card"><b>'+esc(r.unresolvedCount||0)+'</b><div class="small muted">Still blocked</div></div>'+
+      '<div class="card"><b>'+esc(Number(r.skippedFinalizedCount||0)+Number(r.skippedLockedCount||0))+'</b><div class="small muted">Locked/finalized</div></div>'+
+    '</div>';
+
+  if(suggestions.length){
+    body+=
+      '<div class="section-title mt12"><div><h3>Recommended assignments</h3><p>Best eligible pharmacist is shown first. Alternatives are informational only.</p></div></div>'+
+      '<div class="table-wrap" style="max-height:380px;overflow:auto">'+
+        '<table class="table">'+
+          '<thead><tr><th>Date</th><th>Shift</th><th>Recommended pharmacist</th><th>Other eligible options</th></tr></thead>'+
+          '<tbody>'+
+            suggestions.map(x=>
+              '<tr>'+
+                '<td>'+esc(fmtDate(x.date))+'</td>'+
+                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
+                '<td><b>'+esc(x.pharmacist)+'</b>'+(x.coverage?'<div class="small muted">OFF-day coverage</div>':'')+'</td>'+
+                '<td>'+esc((x.alternatives||[]).join(', ')||'—')+'</td>'+
+              '</tr>'
+            ).join('')+
+          '</tbody>'+
+        '</table>'+
+      '</div>';
+  }
+
+  if(unresolved.length){
+    body+=
+      '<div class="section-title mt12"><div><h3>Still unfilled</h3><p>These shifts currently have no pharmacist who can be added without breaking a scheduling rule.</p></div></div>'+
+      '<div class="table-wrap" style="max-height:300px;overflow:auto">'+
+        '<table class="table">'+
+          '<thead><tr><th>Date</th><th>Shift</th><th>Reason</th></tr></thead>'+
+          '<tbody>'+
+            unresolved.slice(0,100).map(x=>
+              '<tr>'+
+                '<td>'+esc(fmtDate(x.date))+'</td>'+
+                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
+                '<td>'+esc(x.reason)+'</td>'+
+              '</tr>'
+            ).join('')+
+          '</tbody>'+
+        '</table>'+
+      '</div>';
+  }
+
+  const buttons=[
+    {label:'Cancel',cls:'btn-secondary',action:'closeModal()'}
+  ];
+
+  if(Number(r.fillableCount||0)>0){
+    buttons.push({
+      label:'Fill '+Number(r.fillableCount||0)+' Safe Shift'+(Number(r.fillableCount||0)===1?'':'s'),
+      cls:'btn-primary',
+      action:'applyFillOpenShiftsHelper_()'
+    });
+  }
+
+  State.fillOpenShiftPreview={
+    month:month,
+    start:r.startDate,
+    end:r.endDate,
+    fillableCount:Number(r.fillableCount||0)
+  };
+
+  openModal(
+    'Help Fill Open Shifts — '+monthTitle(month),
+    body,
+    buttons
+  );
+}
+
+async function applyFillOpenShiftsHelper_(){
+  const p=State.fillOpenShiftPreview;
+  if(!p||!p.start||!p.end)return;
+
+  if(!confirm(
+    'Fill '+p.fillableCount+' currently UNFILLED shift'+(p.fillableCount===1?'':'s')+'?\n\n'+
+    'Existing filled assignments will NOT be moved or replaced.\n'+
+    'NeoChrono will re-check all rules before saving.'
+  ))return;
+
+  const modalFoot=document.querySelector('.modal-foot');
+  const buttons=modalFoot?[...modalFoot.querySelectorAll('button')]:[];
+  buttons.forEach(b=>b.disabled=true);
+
+  try{
+    const r=await server(
+      'fillExistingUnfilledShifts',
+      State.token,
+      p.start,
+      p.end,
+      'APPLY'
+    );
+
+    closeModal();
+
+    toast(
+      Number(r.appliedCount||0)+' open shift'+(Number(r.appliedCount||0)===1?'':'s')+' safely filled',
+      'success'
+    );
+
+    await refreshData(false);
+    renderDashboard();
+
+    if(Number(r.unresolvedCount||0)>0){
+      const gr=$('generationResult');
+      if(gr){
+        gr.innerHTML=
+          '<div class="alert alert-warn"><b>Open-shift helper completed.</b><br>'+
+          esc(r.appliedCount||0)+' shift(s) were filled without moving existing assignments. '+
+          esc(r.unresolvedCount||0)+' shift(s) still need manual review.</div>';
+      }
+    }
+  }catch(e){
+    toast(e.message,'error');
+    buttons.forEach(b=>b.disabled=false);
+  }
+}
+
 function instrumentCard(title,subtitle,pct,value,label,tone='teal'){
   const p=Math.max(0,Math.min(100,num(pct,0)));
   const colors={teal:'#0d8b84',blue:'#2c78b8',coral:'#d86159',amber:'#d49b31'};
