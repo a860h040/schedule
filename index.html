@@ -185,6 +185,14 @@
     .clinical-status.warn .clinical-status-dot{background:var(--pc-amber);box-shadow:0 0 0 4px rgba(212,155,49,.12)}
     .clinical-status.bad .clinical-status-dot{background:var(--pc-coral);box-shadow:0 0 0 4px rgba(216,97,89,.12)}
     .clinical-status b{display:block;font-size:12px;color:#23313e}.clinical-status small{display:block;color:#7a8997;font-size:10px;margin-top:2px}
+    .dashboard-head-actions{display:flex;flex-direction:column;align-items:flex-end;gap:9px}
+    .dashboard-month-nav{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--pc-line);border-radius:12px;padding:6px;box-shadow:var(--pc-shadow-soft)}
+    .dashboard-month-nav button{width:38px;height:36px;border:1px solid #dce4e9;background:#f7f9fa;border-radius:8px;color:#314657;font-size:20px;font-weight:800;line-height:1;cursor:pointer}
+    .dashboard-month-nav button:hover{background:#eef3f5}
+    .dashboard-month-label{min-width:150px;text-align:center;padding:0 8px}
+    .dashboard-month-label strong{display:block;font-size:13px;color:#21313e}
+    .dashboard-month-label span{display:block;margin-top:2px;font-size:9px;color:#84929d;text-transform:uppercase;letter-spacing:.08em;font-weight:800}
+    @media(max-width:760px){.clinical-intro{align-items:stretch;flex-direction:column}.dashboard-head-actions{align-items:stretch}.dashboard-month-nav{justify-content:space-between}.dashboard-month-label{flex:1;min-width:0}.clinical-status{min-width:0}}
 
     .summary-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
     .summary-tile{background:#fff;border:1px solid var(--pc-line);border-radius:14px;padding:16px 17px;box-shadow:var(--pc-shadow-soft);position:relative;overflow:hidden}
@@ -846,20 +854,104 @@ function renderPage(page){
   if(c)c.scrollTop=0;
 }
 
+function dashboardScheduleForMonth_(month){
+  const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+  const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+
+  return (State.data.schedule||[]).filter(r=>{
+    const dk=String(r.Date||'').slice(0,10);
+    return dk>=start&&dk<=end&&String(r.Status||'').toUpperCase()!=='CANCELLED';
+  });
+}
+
+function dashboardRequestFallsInMonth_(r,month){
+  const monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+  const monthEnd=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+  const start=dateKey(r['Start Date']||r.Date||r['End Date']);
+  const end=dateKey(r['End Date']||r.Date||r['Start Date']);
+  if(!start&&!end)return false;
+  const a=start||end,b=end||start;
+  return a<=monthEnd&&b>=monthStart;
+}
+
+function dashboardStatsForMonth_(rows){
+  const users=(State.data.users||[])
+    .filter(u=>String(u.Role||'Pharmacist').toLowerCase()!=='administrator'&&yes(u.Active));
+
+  return users.map(u=>{
+    const username=String(u.Username==null?'':u.Username);
+    const mine=rows.filter(r=>
+      r.Status!=='UNFILLED'&&
+      String(r['Assigned Pharmacist']||'').toUpperCase()!=='UNFILLED'&&
+      String(r.Username==null?'':r.Username)===username
+    );
+
+    const weeklyHours={};
+    mine.forEach(r=>{
+      const d=parseDate(r.Date);
+      if(!d||isNaN(d))return;
+      const sunday=addDays(d,-d.getDay());
+      const wk=dateKey(sunday);
+      weeklyHours[wk]=(weeklyHours[wk]||0)+num(r['Credited Hours']||r.Hours,0);
+    });
+
+    return {
+      name:u['Pharmacist Name']||username,
+      totalHours:mine.reduce((a,r)=>a+num(r['Credited Hours']||r.Hours,0),0),
+      shifts:mine.length,
+      dayShifts:mine.filter(r=>String(r['Shift Type']||'')==='Day').length,
+      eveningShifts:mine.filter(r=>String(r['Shift Type']||'')==='Evening').length,
+      nightShifts:mine.filter(r=>String(r['Shift Type']||'')==='Night').length,
+      weekendShifts:mine.filter(r=>yes(r.Weekend)).length,
+      weeklyHours:weeklyHours,
+      weeklyMax:num(u['Weekly Hour Maximum'],40),
+      weekendGroup:u['Weekend Group']||'',
+      scheduleType:u['Schedule Type']||''
+    };
+  }).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+}
+
+function dashboardChangeMonth_(n){
+  State.month=addMonths(State.month,Number(n)||0);
+  renderDashboard();
+}
+
+function dashboardCurrentMonth_(){
+  State.month=firstOfMonth(new Date());
+  renderDashboard();
+}
+
 function renderDashboard(){
-  const d=State.data,h=d.health||{},admin=d.isAdmin;
+  const d=State.data,admin=d.isAdmin;
   const now=new Date();
+  const viewMonth=State.month||firstOfMonth(now);
   const daysToSunday=(7-now.getDay())%7;
   const defaultStart=addDays(now,daysToSunday);
   const defaultEnd=addDays(defaultStart,60);
-  const required=num(h.required,0),filled=num(h.filled,0),unfilled=num(h.unfilled,0);
-  const coverage=Math.max(0,Math.min(100,num(h.coveragePercent,required?filled*100/required:100)));
-  const warnings=num(h.ruleWarnings,0);
-  const requests=d.requests||[];
+
+  /*
+   * Dashboard metrics are month-specific. The month arrows change viewMonth
+   * without changing the independent 60-day Build and Publish controls.
+   */
+  const schedule=dashboardScheduleForMonth_(viewMonth);
+  const required=schedule.length;
+  const filled=schedule.filter(r=>
+    String(r.Status||'').toUpperCase()!=='UNFILLED'&&
+    String(r['Assigned Pharmacist']||'').toUpperCase()!=='UNFILLED'
+  ).length;
+  const unfilled=Math.max(0,required-filled);
+  const coverage=required?Math.round(filled*1000/required)/10:100;
+  const warnings=schedule.filter(r=>String(r.Warning||'').trim()).length;
+
+  const requests=(d.requests||[]).filter(r=>dashboardRequestFallsInMonth_(r,viewMonth));
   const pendingPto=requests.filter(r=>String(r['Record Type']||'').toUpperCase()==='PTO'&&String(r.Status||'').toLowerCase()==='pending').length;
   const approvedPto=requests.filter(r=>String(r['Record Type']||'').toUpperCase()==='PTO'&&String(r.Status||'').toLowerCase()==='approved').length;
-  const schedule=d.schedule||[];
-  const weekendFilled=schedule.filter(r=>yes(r.Weekend)&&r.Status!=='UNFILLED').length;
+
+  const weekendFilled=schedule.filter(r=>
+    yes(r.Weekend)&&
+    String(r.Status||'').toUpperCase()!=='UNFILLED'&&
+    String(r['Assigned Pharmacist']||'').toUpperCase()!=='UNFILLED'
+  ).length;
   const weekendTotal=schedule.filter(r=>yes(r.Weekend)).length;
   const weekendPct=weekendTotal?Math.round(weekendFilled*1000/weekendTotal)/10:100;
   const filledPct=required?Math.round(filled*1000/required)/10:100;
@@ -873,18 +965,29 @@ function renderDashboard(){
     <div>
       <div class="clinical-eyebrow">PHARMACY WORKFORCE</div>
       <h1>Schedule overview</h1>
-      <p>Staffing, exceptions, PTO and publishing controls in one operational view.</p>
+      <p>Staffing, exceptions, PTO and workload for <b>${esc(monthTitle(viewMonth))}</b>.</p>
     </div>
-    <div class="clinical-status ${statusClass}">
-      <span class="clinical-status-dot"></span>
-      <div><b>${esc(scheduleStatus)}</b><small>${esc(issueCount)} item${issueCount===1?'':'s'} need attention</small></div>
+    <div class="dashboard-head-actions">
+      <div class="dashboard-month-nav" aria-label="Dashboard month navigation">
+        <button type="button" onclick="dashboardChangeMonth_(-1)" title="Previous month" aria-label="Previous month">‹</button>
+        <div class="dashboard-month-label">
+          <strong>${esc(monthTitle(viewMonth))}</strong>
+          <span>Dashboard month</span>
+        </div>
+        <button type="button" onclick="dashboardChangeMonth_(1)" title="Next month" aria-label="Next month">›</button>
+        <button type="button" onclick="dashboardCurrentMonth_()" title="Current month" aria-label="Go to current month" style="width:auto;padding:0 10px;font-size:10px">Today</button>
+      </div>
+      <div class="clinical-status ${statusClass}">
+        <span class="clinical-status-dot"></span>
+        <div><b>${esc(scheduleStatus)}</b><small>${esc(issueCount)} item${issueCount===1?'':'s'} need attention</small></div>
+      </div>
     </div>
   </section>
 
   <section class="summary-strip">
     <article class="summary-tile">
       <div class="tile-top"><span class="tile-icon blue">▦</span><span class="tile-label">Required shifts</span></div>
-      <strong>${esc(required)}</strong><span>Current schedule demand</span>
+      <strong>${esc(required)}</strong><span>${esc(monthTitle(viewMonth))} demand</span>
     </article>
     <article class="summary-tile">
       <div class="tile-top"><span class="tile-icon teal">✓</span><span class="tile-label">Filled shifts</span></div>
@@ -953,7 +1056,7 @@ function renderDashboard(){
       </aside>
     </section>`;
     html+=validationPanels(cv);
-    html+=`<div class="section-heading section-heading-spaced"><div><span class="section-kicker">WORKLOAD</span><h2>Pharmacist distribution</h2></div><span class="section-note">Saved schedule totals</span></div>${statsTable(d.stats||[])}`;
+    html+=`<div class="section-heading section-heading-spaced"><div><span class="section-kicker">WORKLOAD</span><h2>Pharmacist distribution</h2></div><span class="section-note">${esc(monthTitle(viewMonth))} totals</span></div>${statsTable(dashboardStatsForMonth_(schedule))}`;
   }else{
     html+=`<div class="section-heading section-heading-spaced"><div><span class="section-kicker">MY SCHEDULE</span><h2>Upcoming assignments</h2></div></div>${myUpcomingTable()}`;
   }
