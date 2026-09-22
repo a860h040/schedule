@@ -4322,6 +4322,104 @@ function saveEmployee(token,data) {
   return {ok:true,employeeId:id};
 }
 
+
+function deleteRowsMatching_(sheetName,predicate) {
+  const sh=getDb_().getSheetByName(sheetName);
+  if(!sh || sh.getLastRow()<2)return 0;
+  const data=sh.getDataRange().getValues();
+  const headers=(data[0]||[]).map(clean_);
+  const rows=[];
+  for(let i=1;i<data.length;i++){
+    const obj={};
+    headers.forEach((h,j)=>obj[h]=data[i][j]);
+    if(predicate(obj))rows.push(i+1);
+  }
+  rows.sort((a,b)=>b-a).forEach(r=>sh.deleteRow(r));
+  return rows.length;
+}
+
+function deleteEmployeeProfile(token,employeeId) {
+  const ctx=requireAdmin_(token);
+  const id=clean_(employeeId);
+  if(!id)throw new Error('Employee ID is required.');
+
+  const employee=findRowByKey_(APP.SHEETS.USERS,'Employee ID',id);
+  if(!employee)throw new Error('Pharmacist profile not found.');
+
+  const username=clean_(employee.Username);
+  const pharmacist=clean_(employee['Pharmacist Name']);
+  const now=new Date();
+
+  // Remove the pharmacist from any non-finalized working schedule while
+  // preserving finalized schedule history.
+  let assignmentsUnfilled=0;
+  const scheduleSheet=getDb_().getSheetByName(APP.SHEETS.SCHEDULE);
+  if(scheduleSheet && scheduleSheet.getLastRow()>=2){
+    const data=scheduleSheet.getDataRange().getValues();
+    const headers=(data[0]||[]).map(clean_);
+    const idx={};headers.forEach((h,i)=>idx[h]=i);
+    for(let i=1;i<data.length;i++){
+      if(clean_(data[i][idx.Username])!==username)continue;
+      if(idx['Finalized At']!==undefined && clean_(data[i][idx['Finalized At']]))continue;
+      if(idx['Assigned Pharmacist']!==undefined)data[i][idx['Assigned Pharmacist']]='UNFILLED';
+      if(idx.Username!==undefined)data[i][idx.Username]='';
+      if(idx.Status!==undefined)data[i][idx.Status]='UNFILLED';
+      if(idx.Warning!==undefined)data[i][idx.Warning]='Pharmacist profile deleted: '+pharmacist;
+      if(idx['Updated At']!==undefined)data[i][idx['Updated At']]=now;
+      if(idx['Updated By']!==undefined)data[i][idx['Updated By']]=ctx.username;
+      assignmentsUnfilled++;
+    }
+    if(assignmentsUnfilled){
+      scheduleSheet.getRange(2,1,data.length-1,data[0].length).setValues(data.slice(1));
+    }
+  }
+
+  const skillsRemoved=deleteRowsMatching_(APP.SHEETS.SKILLS,r=>
+    clean_(r['Employee ID'])===id || (username && clean_(r.Username)===username)
+  );
+  const availabilityRemoved=deleteRowsMatching_(APP.SHEETS.WEEKLY_AVAILABILITY,r=>
+    clean_(r['Employee ID'])===id || (username && clean_(r.Username)===username)
+  );
+
+  let preceptorRowsRemoved=0;
+  if(getDb_().getSheetByName('Preceptor Calendar')){
+    preceptorRowsRemoved=deleteRowsMatching_('Preceptor Calendar',r=>
+      clean_(r['Employee ID'])===id || (username && clean_(r.Username)===username)
+    );
+  }
+
+  deleteRowByKey_(APP.SHEETS.USERS,'Employee ID',id);
+  try{ if(typeof _PRECEPTOR_CALENDAR_RUNTIME_CACHE_!=='undefined') _PRECEPTOR_CALENDAR_RUNTIME_CACHE_=null; }catch(_e){}
+
+  audit_(
+    'EMPLOYEE_PROFILE_DELETED',
+    '',
+    pharmacist,
+    '',
+    '',
+    username,
+    id,
+    'No',
+    '',
+    'Profile deleted. Non-finalized assignments changed to UNFILLED: '+assignmentsUnfilled+
+      '; skills removed: '+skillsRemoved+
+      '; weekly availability rows removed: '+availabilityRemoved+
+      '; preceptor calendar rows removed: '+preceptorRowsRemoved+
+      '. Finalized schedule history preserved.',
+    ctx.username
+  );
+
+  return {
+    ok:true,
+    employeeId:id,
+    pharmacist:pharmacist,
+    assignmentsUnfilled:assignmentsUnfilled,
+    skillsRemoved:skillsRemoved,
+    availabilityRemoved:availabilityRemoved,
+    preceptorRowsRemoved:preceptorRowsRemoved
+  };
+}
+
 function resetEmployeePassword(token,employeeId) {
   requireAdmin_(token);
   throw new Error('Pharmacists do not have usernames or passwords. Password resets are only available for administrator accounts.');
@@ -4487,6 +4585,101 @@ function saveShift(token,data) {
     ok:true,
     shift:code,
     staffingRequirementCreated:!!staffing.created
+  };
+}
+
+
+function removeShiftType(token,shiftCode) {
+  const ctx=requireAdmin_(token);
+  const code=clean_(shiftCode).toUpperCase();
+  if(!code)throw new Error('Shift code is required.');
+
+  const shift=findRowByKey_(APP.SHEETS.SHIFTS,'Shift',code);
+  if(!shift)throw new Error('Shift '+code+' was not found.');
+
+  const requiredSkill=clean_(shift.Skill||code).toUpperCase();
+
+  // Remove the definition and its staffing demand first so future generation
+  // cannot recreate this shift.
+  deleteRowByKey_(APP.SHEETS.SHIFTS,'Shift',code);
+  deleteRowByKey_(APP.SHEETS.REQUIREMENTS,'Shift',code);
+
+  // Remove non-finalized schedule rows for this shift. Finalized history stays.
+  const scheduleRowsRemoved=deleteRowsMatching_(APP.SHEETS.SCHEDULE,r=>
+    clean_(r.Shift).toUpperCase()===code && !clean_(r['Finalized At'])
+  );
+
+  // If no remaining shift uses this required skill, remove the now-orphaned
+  // skill assignments from employees.
+  const skillStillUsed=readTable_(APP.SHEETS.SHIFTS).some(s=>
+    clean_(s.Skill||s.Shift).toUpperCase()===requiredSkill
+  );
+  let employeeSkillRowsRemoved=0;
+  if(!skillStillUsed){
+    employeeSkillRowsRemoved=deleteRowsMatching_(APP.SHEETS.SKILLS,r=>
+      clean_(r.Skill).toUpperCase()===requiredSkill
+    );
+  }
+
+  // Remove the deleted shift from pharmacist preference/coverage lists.
+  const users=readTable_(APP.SHEETS.USERS);
+  let usersCleaned=0;
+  users.forEach(u=>{
+    const id=clean_(u['Employee ID']);
+    if(!id)return;
+
+    const preferred=clean_(u['Preferred Shift Type'])
+      .split(/[,;|]/)
+      .map(x=>clean_(x))
+      .filter(Boolean)
+      .filter(x=>x.toUpperCase()!==code);
+
+    const offDay=clean_(u['Off-Day Coverage Skills'])
+      .split(/[,;|]/)
+      .map(x=>clean_(x))
+      .filter(Boolean)
+      .filter(x=>x.toUpperCase()!==requiredSkill);
+
+    const oldPreferred=clean_(u['Preferred Shift Type']);
+    const oldOffDay=clean_(u['Off-Day Coverage Skills']);
+    const newPreferred=preferred.join(', ');
+    const newOffDay=offDay.join(', ');
+
+    if(oldPreferred!==newPreferred || (!skillStillUsed && oldOffDay!==newOffDay)){
+      const updates={
+        'Preferred Shift Type':newPreferred,
+        'Updated At':new Date(),
+        'Updated By':ctx.username
+      };
+      if(!skillStillUsed)updates['Off-Day Coverage Skills']=newOffDay;
+      updateRowByKey_(APP.SHEETS.USERS,'Employee ID',id,updates);
+      usersCleaned++;
+    }
+  });
+
+  audit_(
+    'SHIFT_TYPE_REMOVED',
+    '',
+    '',
+    code,
+    '',
+    JSON.stringify(shift),
+    '',
+    'No',
+    '',
+    'Shift definition and staffing requirement removed. Non-finalized schedule rows removed: '+
+      scheduleRowsRemoved+'; orphaned employee skill rows removed: '+employeeSkillRowsRemoved+
+      '; pharmacist preference rows cleaned: '+usersCleaned+
+      '. Finalized schedule history preserved.',
+    ctx.username
+  );
+
+  return {
+    ok:true,
+    shift:code,
+    scheduleRowsRemoved:scheduleRowsRemoved,
+    employeeSkillRowsRemoved:employeeSkillRowsRemoved,
+    usersCleaned:usersCleaned
   };
 }
 
