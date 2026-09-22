@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260922-fillperf2"></script>
+<script src="js/legacy/main-backend.js?v=20260922-skillfirst1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1076,7 +1076,7 @@ async function openFillOpenShiftsHelper_(){
 
   openModal(
     'Help Fill Open Shifts — '+monthTitle(month),
-    '<div class="alert alert-warn"><b>Analyzing open shifts…</b><br>NeoChrono is checking skills, PTO, availability, hours, weekend rotation, consecutive days, evening-to-morning transitions, resident/preceptor rules, and existing assignments.</div>',
+    '<div class="alert alert-warn"><b>Analyzing open shifts…</b><br>NeoChrono first identifies only pharmacists who have the required skill for each open shift. It then compares that short list against PTO, availability, hours, weekend rotation, consecutive days, evening-to-morning transitions, resident/preceptor rules, and existing assignments.</div>',
     [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
   );
 
@@ -1187,7 +1187,7 @@ function renderFillOpenShiftsPreview_(r,month){
             : '')+
         '</div>'+
       '</div>'+
-      '<div class="alert alert-warn"><b>Faster workflow:</b> NeoChrono no longer calculates every pharmacist for every open shift when this window first opens. Select the shifts you actually want to override, then choose <b>Analyze Selected</b>.</div>'+
+      '<div class="alert alert-warn"><b>Faster workflow:</b> NeoChrono first filters by the shift's required skill, so pharmacists without that skill are never sent through the open-shift rule analysis. Select the shifts you want to override, then choose <b>Analyze Selected</b>.</div>'+
       '<div class="table-wrap" style="max-height:440px;overflow:auto">'+
         '<table class="table">'+
           '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Current reason</th><th>Status</th></tr></thead>'+
