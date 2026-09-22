@@ -2922,6 +2922,10 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
         }
       );
 
+      const sameDayConflict=
+        reasonCodes.indexOf('ALREADY_SCHEDULED')>=0 ||
+        reasonCodes.indexOf('TIME_CONFLICT')>=0;
+
       candidates.push({
         username:clean_(u.Username),
         pharmacist:clean_(u['Pharmacist Name']),
@@ -2935,11 +2939,20 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
         risk:openShiftForceRisk_(rules),
         overrideCost:Math.max(0,overrideCost),
         schedulerScore:normalScore,
-        hoursSummary:hoursSummary
+        hoursSummary:hoursSummary,
+        sameDayConflict:sameDayConflict
       });
     });
 
+    /*
+     * Recommendation rule for Help Fill Open Shifts:
+     * A pharmacist who is already working that date / has a time conflict is
+     * LAST RESORT, even if they possess the required skill. Keep them in the
+     * dropdown so the administrator can still force the assignment, but never
+     * recommend them while another skilled pharmacist is not already working.
+     */
     candidates.sort((a,b)=>
+      Number(!!a.sameDayConflict)-Number(!!b.sameDayConflict) ||
       a.overrideCost-b.overrideCost ||
       b.schedulerScore-a.schedulerScore ||
       clean_(a.pharmacist).localeCompare(clean_(b.pharmacist))
@@ -2951,9 +2964,11 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
 
     if(base.recommended){
       const r=base.recommended;
-      base.recommendation=(r.rules||[]).length
-        ? r.pharmacist+' is the lowest-impact override currently available and would break '+r.rules.length+' rule'+(r.rules.length===1?'':'s')+'.'
-        : r.pharmacist+' currently passes the scheduling rules.';
+      base.recommendation=r.sameDayConflict
+        ? r.pharmacist+' is a last-resort skilled option because every higher-ranked skilled pharmacist is already working or otherwise more restricted.'
+        : (r.rules||[]).length
+          ? r.pharmacist+' is the lowest-impact skilled override currently available and would break '+r.rules.length+' rule'+(r.rules.length===1?'':'s')+'.'
+          : r.pharmacist+' currently passes the scheduling rules.';
     }else{
       base.recommendation='No active pharmacist is available for an override recommendation.';
     }
