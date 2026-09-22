@@ -2928,6 +2928,447 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
 }
 
 
+function openShiftProjectedHoursFromState_(u,shift,date,state,model) {
+  const username=clean_(u.Username);
+  const proposed=creditedHours_(shift);
+  const weekStart=startOfDay_(asDate_(weekStartKey_(date,model.settings.weekStart)));
+  const weekEnd=addDays_(weekStart,6);
+  const weekKey=username+'|'+weekStartKey_(date,model.settings.weekStart);
+  const weekCurrent=num_(state.weeklyHours[weekKey],0);
+  const weekDaysCurrent=num_(state.weeklyDays[weekKey],0);
+  const weeklyMax=employeeWeeklyMax_(u,model);
+  const periodCurrent=num_(state.periodHours[username],0);
+  const periodTarget=num_(model.settings.periodHoursTarget,320);
+
+  function r1_(n){return Math.round(num_(n,0)*10)/10;}
+
+  return {
+    pharmacist:clean_(u['Pharmacist Name']),
+    proposedShift:clean_(shift.Shift),
+    proposedHours:r1_(proposed),
+    week:{
+      start:formatDateKey_(weekStart),
+      end:formatDateKey_(weekEnd),
+      current:r1_(weekCurrent),
+      projected:r1_(weekCurrent+proposed),
+      maximum:r1_(weeklyMax),
+      currentDays:weekDaysCurrent,
+      projectedDays:weekDaysCurrent+1,
+      requiredDays:regularFiveDayRuleApplies_(u)?model.settings.regularWorkdaysPerWeek:null
+    },
+    period:{
+      start:state.periodStart?formatDateKey_(state.periodStart):'',
+      end:state.periodEnd?formatDateKey_(state.periodEnd):'',
+      current:r1_(periodCurrent),
+      projected:r1_(periodCurrent+proposed),
+      target:r1_(periodTarget)
+    }
+  };
+}
+
+function evaluateBulkOpenShiftOverrides_(selections,model,allRows) {
+  selections=Array.isArray(selections)?selections:[];
+  if(!selections.length){
+    return {ok:false,errors:['Select at least one open shift to override.'],items:[]};
+  }
+
+  const errors=[];
+  const prepared=[];
+
+  selections.forEach((choice,index)=>{
+    const assignmentId=clean_(choice&&choice.assignmentId);
+    const username=clean_(choice&&choice.username);
+    const row=assignmentId
+      ? allRows.find(r=>clean_(r['Assignment ID'])===assignmentId)
+      : null;
+
+    if(!row){
+      errors.push('Selection '+(index+1)+': open-shift row was not found.');
+      return;
+    }
+
+    const status=clean_(row.Status).toUpperCase();
+    const assigned=clean_(row['Assigned Pharmacist']).toUpperCase();
+    if(status!=='UNFILLED'&&assigned!=='UNFILLED'){
+      errors.push(dateKey_(row.Date)+' '+clean_(row.Shift)+': this shift is no longer UNFILLED.');
+      return;
+    }
+
+    if(asDate_(row['Finalized At'])){
+      errors.push(dateKey_(row.Date)+' '+clean_(row.Shift)+': unfinalize the schedule before overriding this shift.');
+      return;
+    }
+
+    if(yes_(row.Locked)){
+      errors.push(dateKey_(row.Date)+' '+clean_(row.Shift)+': unlock this shift before overriding it.');
+      return;
+    }
+
+    const d=startOfDay_(asDate_(row.Date));
+    const shift=model.shiftMap[clean_(row.Shift).toUpperCase()] || model.shiftMap[clean_(row.Shift)];
+    const u=model.usersByUsername[username];
+
+    if(!d||!shift){
+      errors.push(dateKey_(row.Date)+' '+clean_(row.Shift)+': invalid date or shift definition.');
+      return;
+    }
+
+    if(!u||!yes_(u.Active)){
+      errors.push(dateKey_(row.Date)+' '+clean_(row.Shift)+': selected pharmacist is not an active scheduling record.');
+      return;
+    }
+
+    const manualPeriod=resolveManualSchedulePeriod_(
+      {
+        assignmentId:assignmentId,
+        generationId:clean_(row['Generation ID']),
+        date:formatDateKey_(d),
+        shift:clean_(shift.Shift),
+        slot:num_(row.Slot,1)
+      },
+      allRows,
+      d,
+      model
+    );
+
+    prepared.push({
+      inputIndex:index,
+      choice:choice,
+      row:row,
+      user:u,
+      shift:shift,
+      date:d,
+      manualPeriod:manualPeriod
+    });
+  });
+
+  if(errors.length){
+    return {ok:false,errors:errors,items:[]};
+  }
+
+  prepared.sort((a,b)=>
+    formatDateKey_(a.date).localeCompare(formatDateKey_(b.date)) ||
+    clean_(a.shift.Shift).localeCompare(clean_(b.shift.Shift)) ||
+    num_(a.row.Slot,1)-num_(b.row.Slot,1)
+  );
+
+  const periodStarts=prepared.map(x=>x.manualPeriod.start).filter(Boolean).sort((a,b)=>a-b);
+  const periodEnds=prepared.map(x=>x.manualPeriod.end).filter(Boolean).sort((a,b)=>a-b);
+  const periodStart=periodStarts.length?periodStarts[0]:prepared[0].date;
+  const periodEnd=periodEnds.length?periodEnds[periodEnds.length-1]:prepared[prepared.length-1].date;
+
+  const selectedIds=new Set(prepared.map(x=>clean_(x.row['Assignment ID'])));
+  const baseSchedule=allRows.filter(r=>
+    !selectedIds.has(clean_(r['Assignment ID'])) &&
+    clean_(r.Status).toUpperCase()!=='UNFILLED' &&
+    clean_(r['Assigned Pharmacist']).toUpperCase()!=='UNFILLED' &&
+    clean_(r.Username)
+  );
+
+  const state=createState_(model,baseSchedule,periodStart,periodEnd);
+  const items=[];
+
+  prepared.forEach(x=>{
+    const row=x.row;
+    const u=x.user;
+    const shift=x.shift;
+    const d=x.date;
+    const slotNumber=num_(row.Slot,1);
+    const shiftCode=clean_(shift.Shift).toUpperCase();
+
+    const slot={
+      generationId:clean_(row['Generation ID'])||'MANUAL',
+      date:d,
+      dateKey:formatDateKey_(d),
+      day:dayName_(d),
+      shiftCode:shiftCode,
+      slot:slotNumber,
+      shift:shift,
+      requiredSkill:clean_(row['Required Skill']||shift.Skill),
+      weekend:yes_(row.Weekend)||isWeekendDate_(d),
+      weekendGroup:clean_(row['Weekend Group'])||(isWeekendDate_(d)?weekendGroupForDate_(d,model.settings):''),
+      slotKey:slotKey_(formatDateKey_(d),shiftCode,slotNumber)
+    };
+
+    const normal=eligibility_(u,slot,model,state,true);
+    let effective=normal;
+    let coverage={
+      applies:false,
+      coverageForPharmacist:'',
+      coverageForUsername:'',
+      coverageReason:'',
+      message:''
+    };
+
+    if(
+      (normal.reasons||[]).indexOf('MISSING_SKILL')>=0 &&
+      hasOffDayCoverageSkillForSlot_(u,slot)
+    ){
+      const resolved=resolveManualOffDayCoverageContext_(u,slot,model,state);
+      coverage={
+        applies:!!resolved.applies,
+        coverageForPharmacist:clean_(resolved.coverageForPharmacist),
+        coverageForUsername:clean_(resolved.coverageForUsername),
+        coverageReason:clean_(resolved.coverageReason),
+        message:clean_(resolved.message)
+      };
+      if(resolved.applies&&resolved.eligibility){
+        effective=resolved.eligibility;
+      }
+    }
+
+    const reasonCodes=(effective.reasons||[]).slice();
+    const rules=reasonCodes.map(code=>{
+      const meta=openShiftForceRuleMeta_(code);
+      return {
+        code:code,
+        label:meta.label,
+        weight:meta.weight,
+        risk:meta.risk,
+        detail:reasonToWarning_(code)
+      };
+    });
+
+    const warnings=(effective.warnings||[]).slice();
+    if(
+      !coverage.applies &&
+      coverage.message &&
+      (normal.reasons||[]).indexOf('MISSING_SKILL')>=0
+    ){
+      warnings.push(coverage.message);
+    }
+
+    const hoursSummary=openShiftProjectedHoursFromState_(u,shift,d,state,model);
+
+    const assigned=makeAssigned_(
+      slot,
+      u,
+      warnings,
+      'BULK_OVERRIDE_PREVIEW'
+    );
+
+    assigned.assignmentId=clean_(row['Assignment ID']);
+    assigned.generationId=clean_(row['Generation ID'])||assigned.generationId;
+    assigned.coverageForPharmacist=coverage.applies?coverage.coverageForPharmacist:'';
+    assigned.coverageForUsername=coverage.applies?coverage.coverageForUsername:'';
+    assigned.coverageReason=coverage.applies?coverage.coverageReason:'';
+    assigned.holiday=clean_(row.Holiday);
+    assigned.manual=true;
+    assigned.status='MANUAL';
+
+    /*
+     * Add the hypothetical forced assignment even when it breaks rules. This
+     * makes every later selected shift see the workload and conflicts created
+     * by earlier selections in the same bulk override.
+     */
+    addAssignmentToState_(state,assigned,model);
+
+    items.push({
+      inputIndex:x.inputIndex,
+      assignmentId:clean_(row['Assignment ID']),
+      generationId:clean_(row['Generation ID']),
+      date:formatDateKey_(d),
+      shift:shiftCode,
+      slot:slotNumber,
+      requiredSkill:clean_(slot.requiredSkill),
+      username:clean_(u.Username),
+      pharmacist:clean_(u['Pharmacist Name']),
+      reasonCodes:reasonCodes,
+      rules:rules,
+      warnings:warnings,
+      risk:openShiftForceRisk_(rules),
+      hoursSummary:hoursSummary,
+      coverage:coverage,
+      originalWarning:clean_(row.Warning)
+    });
+  });
+
+  return {
+    ok:true,
+    errors:[],
+    count:items.length,
+    items:items
+  };
+}
+
+function previewBulkOpenShiftOverrides(token,selections) {
+  requireAdmin_(token);
+  const model=loadSchedulingModel_();
+  const allRows=readTable_(APP.SHEETS.SCHEDULE);
+  return serialize_(evaluateBulkOpenShiftOverrides_(selections,model,allRows));
+}
+
+function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
+  const ctx=requireAdmin_(token);
+  overrideReason=clean_(overrideReason);
+
+  if(!overrideReason){
+    throw new Error('Enter an administrator override reason before saving multiple override assignments.');
+  }
+
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(30000)){
+    throw new Error('Schedule is currently being modified by another administrator.');
+  }
+
+  try{
+    ensureUniqueScheduleAssignmentIds_();
+
+    const model=loadSchedulingModel_();
+    const allRows=readTable_(APP.SHEETS.SCHEDULE);
+    const evaluation=evaluateBulkOpenShiftOverrides_(selections,model,allRows);
+
+    if(!evaluation.ok){
+      throw new Error((evaluation.errors||[]).join(' '));
+    }
+
+    /*
+     * Validate every target before writing anything. This keeps the operation
+     * all-or-nothing for structural errors such as finalized/locked rows.
+     */
+    evaluation.items.forEach(item=>{
+      const current=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',item.assignmentId);
+      if(!current){
+        throw new Error(item.date+' '+item.shift+': the open-shift row no longer exists.');
+      }
+      if(asDate_(current['Finalized At'])){
+        throw new Error(item.date+' '+item.shift+': the schedule was finalized while you were reviewing the bulk override.');
+      }
+      if(yes_(current.Locked)){
+        throw new Error(item.date+' '+item.shift+': the shift was locked while you were reviewing the bulk override.');
+      }
+      const status=clean_(current.Status).toUpperCase();
+      const assigned=clean_(current['Assigned Pharmacist']).toUpperCase();
+      if(status!=='UNFILLED'&&assigned!=='UNFILLED'){
+        throw new Error(item.date+' '+item.shift+': the shift was already filled while you were reviewing the bulk override.');
+      }
+    });
+
+    evaluation.items.forEach(item=>{
+      const old=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',item.assignmentId);
+      const u=model.usersByUsername[item.username];
+      const shift=model.shiftMap[item.shift] || model.shiftMap[clean_(item.shift)];
+      const d=startOfDay_(asDate_(item.date));
+      const coverage=item.coverage||{};
+
+      const warningParts=[];
+      warningParts.push('ADMIN BULK OVERRIDE: '+overrideReason);
+      (item.rules||[]).forEach(rule=>warningParts.push(rule.detail||rule.label||rule.code));
+      (item.warnings||[]).forEach(w=>warningParts.push(w));
+      if(coverage.applies){
+        warningParts.unshift(
+          'OFF-DAY COVERAGE ONLY: Covering '+
+          clean_(coverage.coverageForPharmacist)+
+          ' on an algorithm-generated OFF day.'
+        );
+      }
+
+      const row={
+        'Generation ID':clean_(old['Generation ID'])||clean_(item.generationId)||'MANUAL_'+Utilities.formatDate(new Date(),getTz_(),'yyyyMMdd_HHmmss'),
+        'Assignment ID':item.assignmentId,
+        'Date':d,
+        'Day':dayName_(d),
+        'Shift':clean_(shift.Shift),
+        'Slot':num_(item.slot,1),
+        'Assigned Pharmacist':clean_(u['Pharmacist Name']),
+        'Username':clean_(u.Username),
+        'Hours':num_(shift.Hours,0),
+        'Credited Hours':creditedHours_(shift),
+        'Required Skill':clean_(shift.Skill),
+        'Coverage For Pharmacist':coverage.applies?clean_(coverage.coverageForPharmacist):'',
+        'Coverage For Username':coverage.applies?clean_(coverage.coverageForUsername):'',
+        'Coverage Reason':coverage.applies?clean_(coverage.coverageReason):'',
+        'Shift Type':clean_(shift.Type),
+        'Weekend':isWeekendDate_(d)?'Yes':'No',
+        'Weekend Group':isWeekendDate_(d)?weekendGroupForDate_(d,model.settings):'',
+        'Holiday':clean_(old.Holiday),
+        'Locked':'No',
+        'Manual':'Yes',
+        'Status':'MANUAL',
+        'Warning':warningParts.join(' | '),
+        'Updated At':new Date(),
+        'Updated By':ctx.username,
+        'Finalized At':''
+      };
+
+      const updated=updateRowByKey_(
+        APP.SHEETS.SCHEDULE,
+        'Assignment ID',
+        item.assignmentId,
+        row
+      );
+
+      if(!updated){
+        throw new Error(item.date+' '+item.shift+': could not update the selected open-shift row.');
+      }
+    });
+
+    reconcileFilledVsUnfilledScheduleRows_();
+    SpreadsheetApp.flush();
+
+    evaluation.items.forEach(item=>{
+      const verify=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',item.assignmentId);
+      if(
+        !verify ||
+        clean_(verify.Username)!==clean_(item.username) ||
+        clean_(verify.Status).toUpperCase()==='UNFILLED'
+      ){
+        throw new Error(item.date+' '+item.shift+': the bulk override could not be verified after saving.');
+      }
+
+      const details=[];
+      (item.rules||[]).forEach(rule=>details.push(rule.detail||rule.label||rule.code));
+      (item.warnings||[]).forEach(w=>details.push(w));
+
+      audit_(
+        'ASSIGNMENT_CHANGED',
+        item.date,
+        item.pharmacist,
+        item.shift,
+        item.shift,
+        'UNFILLED',
+        item.pharmacist,
+        'Yes',
+        overrideReason,
+        'BULK OVERRIDE | '+details.join(' | '),
+        ctx.username
+      );
+    });
+
+    audit_(
+      'BULK_OPEN_SHIFT_OVERRIDE',
+      evaluation.items.length?evaluation.items[0].date:'',
+      '',
+      '',
+      '',
+      '',
+      String(evaluation.items.length),
+      'Yes',
+      overrideReason,
+      JSON.stringify(evaluation.items.map(item=>({
+        date:item.date,
+        shift:item.shift,
+        slot:item.slot,
+        pharmacist:item.pharmacist,
+        rules:(item.reasonCodes||[])
+      }))),
+      ctx.username
+    );
+
+    SpreadsheetApp.flush();
+
+    return serialize_({
+      ok:true,
+      appliedCount:evaluation.items.length,
+      overrideReason:overrideReason,
+      items:evaluation.items
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
 /**
  * Preview or apply safe assignments for rows that are already UNFILLED.
  *
