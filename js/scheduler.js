@@ -251,18 +251,138 @@ function preassignPreceptorEvenings(slots,model,state,start,end){
     }
   }
 }
+function clonePlanningState(state){
+  return {
+    assignments:[...state.assignments],
+    byEmployeeDate:{...state.byEmployeeDate},
+    weeklyDays:{...state.weeklyDays},
+    weeklyHours:{...state.weeklyHours},
+    totalHours:{...state.totalHours},
+    monthlyEvenings:{...state.monthlyEvenings},
+    weeklyE2:{...state.weeklyE2},
+    weekends:{...state.weekends},
+    shiftCounts:{...state.shiftCounts}
+  };
+}
+function weekendPairDays(date){
+  const sat=weekendSaturday(date);
+  return {sat,sun:dateKey(addDays(sat,1))};
+}
+function bestWeekendPairForUser(user,sat,sun,slots,model,state){
+  const satExisting=state.byEmployeeDate[`${user._username}|${sat}`];
+  const sunExisting=state.byEmployeeDate[`${user._username}|${sun}`];
+  if(satExisting&&sunExisting)return null;
+
+  // If one day is already assigned (including a locked/manual assignment),
+  // only complete the missing half of that same weekend.
+  if(satExisting||sunExisting){
+    const missingDate=satExisting?sun:sat;
+    const ranked=slots
+      .filter(s=>s.date===missingDate&&norm(s.status)==='UNFILLED')
+      .map(s=>({s,e:shiftEligibilityFlags(user,s,model,state,{allowOffDayCoverage:true})}))
+      .filter(x=>x.e.ok)
+      .map(x=>({s:x.s,score:scoreCandidate(user,x.s,model,state)+(preferredMatches(user,x.s)?80:0)}))
+      .sort((a,b)=>b.score-a.score||a.s.shift.localeCompare(b.s.shift));
+    if(!ranked.length)return null;
+    return {
+      satSlot:satExisting?null:ranked[0].s,
+      sunSlot:sunExisting?null:ranked[0].s,
+      score:100000+ranked[0].score,
+      completion:true
+    };
+  }
+
+  const satSlots=slots.filter(s=>s.date===sat&&norm(s.status)==='UNFILLED');
+  const sunSlots=slots.filter(s=>s.date===sun&&norm(s.status)==='UNFILLED');
+  let best=null;
+
+  for(const satSlot of satSlots){
+    const satEligibility=shiftEligibilityFlags(user,satSlot,model,state,{allowOffDayCoverage:true});
+    if(!satEligibility.ok)continue;
+
+    // Evaluate Sunday after hypothetically assigning Saturday so consecutive-day,
+    // hour, and transition rules are evaluated exactly as they will be committed.
+    const temp=clonePlanningState(state);
+    applyAssignment({
+      ...satSlot,
+      assignedPharmacist:user._name,
+      username:user._username,
+      status:'ASSIGNED'
+    },temp,model);
+
+    for(const sunSlot of sunSlots){
+      const sunEligibility=shiftEligibilityFlags(user,sunSlot,model,temp,{allowOffDayCoverage:true});
+      if(!sunEligibility.ok)continue;
+      const score=
+        scoreCandidate(user,satSlot,model,state)+
+        scoreCandidate(user,sunSlot,model,temp)+
+        (preferredMatches(user,satSlot)?80:0)+
+        (preferredMatches(user,sunSlot)?80:0);
+      if(!best||score>best.score)best={satSlot,sunSlot,score,completion:false};
+    }
+  }
+  return best;
+}
+function commitWeekendPair(user,pair,model,state,reason){
+  if(!pair)return false;
+  if(pair.satSlot&&!assignUserToSlot(user,pair.satSlot,model,state,reason))return false;
+  if(pair.sunSlot&&!assignUserToSlot(user,pair.sunSlot,model,state,reason))return false;
+  return true;
+}
 function preassignWeekendResidentsAndTeams(slots,model,state){
-  const weekendDates=[...new Set(slots.filter(s=>isWeekend(s.date)).map(s=>s.date))].sort();
-  for(const dk of weekendDates){
-    const group=currentWeekendGroup(dk,model.settings);
-    const team=model.users.filter(u=>norm(u.scheduleType)!=='7ON7OFF'&&norm(u.weekendGroup)===group&&employeeWeekendIsOn(u,dk,model.settings));
-    const residents=team.filter(u=>yes(u.resident));
-    const regular=team.filter(u=>!yes(u.resident));
-    for(const u of [...residents,...regular]){
-      if(state.byEmployeeDate[`${u._username}|${dk}`])continue;
-      const daySlots=slots.filter(s=>s.date===dk&&norm(s.status)==='UNFILLED');
-      const ranked=daySlots.map(s=>({s,ok:shiftEligibilityFlags(u,s,model,state).ok,score:scoreCandidate(u,s,model,state)+(preferredMatches(u,s)?80:0)})).filter(x=>x.ok).sort((a,b)=>b.score-a.score);
-      if(ranked.length)assignUserToSlot(u,ranked[0].s,model,state,yes(u.resident)?'REQUIRED_RESIDENT_WEEKEND':'WEEKEND_TEAM');
+  const dateSet=new Set(slots.map(s=>s.date));
+  const weekendSaturdays=[...new Set(slots.filter(s=>isWeekend(s.date)).map(s=>weekendSaturday(s.date)))].sort();
+
+  for(const sat of weekendSaturdays){
+    const {sun}=weekendPairDays(sat);
+    // Do not force a pair at a generation boundary where one half is outside
+    // the selected schedule period.
+    if(!dateSet.has(sat)||!dateSet.has(sun))continue;
+
+    const group=currentWeekendGroup(sat,model.settings);
+    const team=model.users
+      .filter(u=>
+        norm(u.scheduleType)!=='7ON7OFF'&&
+        norm(u.weekendGroup)===group&&
+        employeeWeekendIsOn(u,sat,model.settings)
+      )
+      .sort((a,b)=>(yes(b.resident)?1:0)-(yes(a.resident)?1:0)||a._name.localeCompare(b._name));
+
+    for(const u of team){
+      const pair=bestWeekendPairForUser(u,sat,sun,slots,model,state);
+      if(!pair)continue;
+      commitWeekendPair(
+        u,
+        pair,
+        model,
+        state,
+        pair.completion?'WEEKEND_PAIR_COMPLETION':(yes(u.resident)?'REQUIRED_RESIDENT_WEEKEND_PAIR':'WEEKEND_TEAM_PAIR')
+      );
+    }
+  }
+}
+function fillRemainingWeekendPairs(slots,model,state){
+  if(!yes(model.settings.requiredWeekendAssignment))return;
+  const dateSet=new Set(slots.map(s=>s.date));
+  const weekendSaturdays=[...new Set(slots.filter(s=>isWeekend(s.date)).map(s=>weekendSaturday(s.date)))].sort();
+
+  for(const sat of weekendSaturdays){
+    const {sun}=weekendPairDays(sat);
+    if(!dateSet.has(sat)||!dateSet.has(sun))continue;
+
+    while(true){
+      const satOpen=slots.some(s=>s.date===sat&&norm(s.status)==='UNFILLED');
+      const sunOpen=slots.some(s=>s.date===sun&&norm(s.status)==='UNFILLED');
+      if(!satOpen&&!sunOpen)break;
+
+      let best=null;
+      for(const u of model.users.filter(x=>norm(x.scheduleType)!=='7ON7OFF')){
+        const pair=bestWeekendPairForUser(u,sat,sun,slots,model,state);
+        if(!pair)continue;
+        if(!best||pair.score>best.pair.score)best={u,pair};
+      }
+      if(!best)break;
+      if(!commitWeekendPair(best.u,best.pair,model,state,best.pair.completion?'WEEKEND_PAIR_COMPLETION':'WEEKEND_PAIR_FILL'))break;
     }
   }
 }
@@ -323,12 +443,18 @@ export function generateSchedule(db,startDate,{days,regenerate=true,actor='SYSTE
   // Pass 6: guarantee resident E2 target when a valid E2 slot exists.
   const weeks=[...new Set(datesBetween(start,end).map(d=>weekKey(d,model.settings)))];
   for(const u of model.users.filter(x=>yes(x.resident))){for(const wk of weeks){let need=Math.max(0,num(model.settings.residentE2ShiftsPerWeek,1)-num(state.weeklyE2[`${u._username}|${wk}`],0));if(!need)continue;const weekSlots=slots.filter(s=>weekKey(s.date,model.settings)===wk&&norm(s.status)==='UNFILLED'&&norm(s.shift)===norm(model.settings.residentE2ShiftCode||'E2'));for(const s of weekSlots){if(need<=0)break;if(assignUserToSlot(u,s,model,state,'RESIDENT_E2'))need--;}}}
-  // Pass 7: fill all remaining slots by qualifications, constraints, under-target hours, and fairness.
-  for(const slot of slots){if(norm(slot.status)!=='UNFILLED')continue;const u=bestCandidate(slot,model,state);if(u)assignUserToSlot(u,slot,model,state,'BEST_FIT');}
-  // Pass 8: second chance with weekend fallback if configured, by temporarily allowing wrong-group reasons only.
-  if(yes(model.settings.allowWeekendFallback)){
-    for(const slot of slots.filter(s=>norm(s.status)==='UNFILLED'&&isWeekend(s.date))){const candidates=model.users.map(u=>{const e=shiftEligibilityFlags(u,slot,model,state);const hard=e.reasons.filter(r=>!['WRONG_WEEKEND_GROUP','RESIDENT_WRONG_WEEKEND_GROUP'].includes(r));return hard.length?null:{u,score:scoreCandidate(u,slot,model,state)-30};}).filter(Boolean).sort((a,b)=>b.score-a.score);if(candidates.length)assignUserToSlot(candidates[0].u,slot,model,state,'WEEKEND_FALLBACK');}
+  // Pass 7: fill remaining NON-WEEKEND slots by qualifications, constraints,
+  // under-target hours, and fairness. Weekend assignments are handled only as
+  // Saturday+Sunday pairs when requiredWeekendAssignment is enabled.
+  for(const slot of slots){
+    if(norm(slot.status)!=='UNFILLED')continue;
+    if(yes(model.settings.requiredWeekendAssignment)&&isWeekend(slot.date))continue;
+    const u=bestCandidate(slot,model,state);
+    if(u)assignUserToSlot(u,slot,model,state,'BEST_FIT');
   }
+  // Pass 8: repair/fill weekend coverage without ever creating a one-day
+  // weekend assignment. A pharmacist is either OFF both days or works both.
+  fillRemainingWeekendPairs(slots,model,state);
   // Attach useful warnings to unfilled slots.
   for(const slot of slots.filter(s=>norm(s.status)==='UNFILLED')){const reasonCounts={};for(const u of model.users){for(const r of shiftEligibilityFlags(u,slot,model,state).reasons)reasonCounts[r]=(reasonCounts[r]||0)+1;}slot.assignedPharmacist='UNFILLED';slot.username='';slot.warning=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([r,c])=>`${r}:${c}`).join('; ');}
   const periodRows=[...locked,...slots].sort((a,b)=>a.date.localeCompare(b.date)||a.shift.localeCompare(b.shift)||a.slot-b.slot);
@@ -363,6 +489,23 @@ export function validateSchedule(db,generationId=''){
     const minDate=rows.map(r=>r.date).sort()[0],maxDate=rows.map(r=>r.date).sort().at(-1);
     for(const u of model.users.filter(x=>norm(x.scheduleType)==='7ON7OFF'&&x.rotationAnchorDate)){
       for(const dk of datesBetween(minDate,maxDate)){if(!isSevenOn(u,dk))continue;const assigned=rows.find(r=>r.date===dk&&r.username===u._username&&norm(r.status)!=='UNFILLED');if(!assigned)warnings.push({severity:'ERROR',type:'SEVEN_ON_MISSING_DAY',date:dk,pharmacist:u._name,message:`${u._name} is in a 7-on ON block but has no assignment.`});}
+    }
+    // Any regular/resident pharmacist who works one day of a complete weekend
+    // must also work the other day. This is broader than the resident-only rule.
+    const completeWeekendSats=[...new Set(rows.filter(r=>isWeekend(r.date)).map(r=>weekendSaturday(r.date)))].filter(sat=>sat>=minDate&&dateKey(addDays(sat,1))<=maxDate);
+    for(const u of model.users.filter(x=>norm(x.scheduleType)!=='7ON7OFF')){
+      for(const sat of completeWeekendSats){
+        const sun=dateKey(addDays(sat,1));
+        const hasSat=rows.some(r=>r.date===sat&&r.username===u._username&&norm(r.status)!=='UNFILLED');
+        const hasSun=rows.some(r=>r.date===sun&&r.username===u._username&&norm(r.status)!=='UNFILLED');
+        if(hasSat!==hasSun)warnings.push({
+          severity:'ERROR',
+          type:'WEEKEND_PAIR_REQUIRED',
+          date:sat,
+          pharmacist:u._name,
+          message:`${u._name} is scheduled for only one day of weekend ${sat}/${sun}; Saturday and Sunday must be worked together.`
+        });
+      }
     }
     if(yes(model.settings.residentsRequiredAssignedWeekend)){for(const u of model.users.filter(x=>yes(x.resident)&&norm(x.scheduleType)!=='7ON7OFF'&&x.weekendGroup)){for(const sat of [...new Set(rows.filter(r=>isWeekend(r.date)).map(r=>weekendSaturday(r.date)))]){if(currentWeekendGroup(sat,model.settings)!==norm(u.weekendGroup)||!employeeWeekendIsOn(u,sat,model.settings))continue;for(const dk of [sat,dateKey(addDays(sat,1))]){if(dk<minDate||dk>maxDate)continue;if(!rows.some(r=>r.date===dk&&r.username===u._username&&norm(r.status)!=='UNFILLED'))warnings.push({severity:'ERROR',type:'RESIDENT_REQUIRED_WEEKEND',date:dk,pharmacist:u._name,message:`${u._name} must work both days of the assigned weekend.`});}}}}
     const e2Code=norm(model.settings.residentE2ShiftCode||'E2'),e2Need=num(model.settings.residentE2ShiftsPerWeek,1);const weekStarts=[...new Set(rows.map(r=>weekKey(r.date,model.settings)))];for(const wk of weekStarts){const weekRows=rows.filter(r=>weekKey(r.date,model.settings)===wk),hasE2=weekRows.some(r=>norm(r.shift)===e2Code);if(!hasE2)continue;for(const u of model.users.filter(x=>yes(x.resident))){const count=weekRows.filter(r=>r.username===u._username&&norm(r.shift)===e2Code&&norm(r.status)!=='UNFILLED').length;if(count!==e2Need)warnings.push({severity:'ERROR',type:'RESIDENT_E2_EXACT',date:wk,pharmacist:u._name,message:`${u._name} has ${count} ${e2Code} shift(s) in week ${wk}; exactly ${e2Need} required.`});}}
