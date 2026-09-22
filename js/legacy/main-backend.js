@@ -3267,9 +3267,13 @@ function previewBulkOpenShiftOverrides(token,selections) {
 function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
   const ctx=requireAdmin_(token);
   overrideReason=clean_(overrideReason);
+  selections=Array.isArray(selections)?selections:[];
 
   if(!overrideReason){
     throw new Error('Enter an administrator override reason before saving multiple override assignments.');
+  }
+  if(!selections.length){
+    throw new Error('Select at least one shift to override.');
   }
 
   const lock=LockService.getScriptLock();
@@ -3278,51 +3282,121 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
   }
 
   try{
-    // Bulk override is a write operation, so verify assignment IDs before
-    // validating and saving the selected rows.
     ensureUniqueScheduleAssignmentIds_();
 
     const model=loadSchedulingModel_();
-    const allRows=readTable_(APP.SHEETS.SCHEDULE);
-    const evaluation=evaluateBulkOpenShiftOverrides_(selections,model,allRows);
-
-    if(!evaluation.ok){
-      throw new Error((evaluation.errors||[]).join(' '));
-    }
+    let allRows=readTable_(APP.SHEETS.SCHEDULE);
 
     /*
-     * Validate every target before writing anything. This keeps the operation
-     * all-or-nothing for structural errors such as finalized/locked rows.
+     * Evaluate the selections only to capture the rule warnings shown to the
+     * administrator. IMPORTANT: the result is NOT a save gate. Once the admin
+     * confirms Override, scheduling-rule violations must not block the write.
      */
-    evaluation.items.forEach(item=>{
-      const current=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',item.assignmentId);
-      if(!current){
-        throw new Error(item.date+' '+item.shift+': the open-shift row no longer exists.');
-      }
-      if(asDate_(current['Finalized At'])){
-        throw new Error(item.date+' '+item.shift+': the schedule was finalized while you were reviewing the bulk override.');
-      }
-      if(yes_(current.Locked)){
-        throw new Error(item.date+' '+item.shift+': the shift was locked while you were reviewing the bulk override.');
-      }
-      const status=clean_(current.Status).toUpperCase();
-      const assigned=clean_(current['Assigned Pharmacist']).toUpperCase();
-      if(status!=='UNFILLED'&&assigned!=='UNFILLED'){
-        throw new Error(item.date+' '+item.shift+': the shift was already filled while you were reviewing the bulk override.');
+    let evaluation={ok:false,items:[]};
+    try{
+      evaluation=evaluateBulkOpenShiftOverrides_(selections,model,allRows);
+    }catch(_evaluationError){
+      evaluation={ok:false,items:[]};
+    }
+
+    const evaluatedById={};
+    (evaluation.items||[]).forEach(item=>{
+      if(item&&item.assignmentId){
+        evaluatedById[clean_(item.assignmentId)]=item;
       }
     });
 
-    evaluation.items.forEach(item=>{
-      const old=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',item.assignmentId);
-      const u=model.usersByUsername[item.username];
-      const shift=model.shiftMap[item.shift] || model.shiftMap[clean_(item.shift)];
-      const d=startOfDay_(asDate_(item.date));
-      const coverage=item.coverage||{};
+    const selectedIds=new Set(
+      selections.map(s=>clean_(s&&s.assignmentId)).filter(Boolean)
+    );
 
-      const warningParts=[];
-      warningParts.push('ADMIN BULK OVERRIDE: '+overrideReason);
-      (item.rules||[]).forEach(rule=>warningParts.push(rule.detail||rule.label||rule.code));
-      (item.warnings||[]).forEach(w=>warningParts.push(w));
+    const applied=[];
+
+    selections.forEach((selection,index)=>{
+      selection=selection||{};
+
+      let assignmentId=clean_(selection.assignmentId);
+      let current=assignmentId
+        ? findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',assignmentId)
+        : null;
+
+      /*
+       * Fallback lookup makes the forced override resilient if an older open
+       * row received an Assignment ID during the ID-repair pass.
+       */
+      if(!current){
+        const wantedDate=dateKey_(selection.date);
+        const wantedShift=clean_(selection.shift).toUpperCase();
+        const wantedSlot=num_(selection.slot,1);
+
+        current=allRows.find(r=>
+          dateKey_(r.Date)===wantedDate &&
+          clean_(r.Shift).toUpperCase()===wantedShift &&
+          num_(r.Slot,1)===wantedSlot
+        )||null;
+
+        if(current){
+          assignmentId=clean_(current['Assignment ID']);
+        }
+      }
+
+      if(!current){
+        throw new Error(
+          'Selected shift '+(index+1)+' could not be found in the Schedule sheet.'
+        );
+      }
+
+      const username=clean_(selection.username);
+      const u=model.usersByUsername[username];
+
+      if(!u){
+        throw new Error(
+          dateKey_(current.Date)+' '+clean_(current.Shift)+
+          ': selected pharmacist record was not found.'
+        );
+      }
+
+      const shiftCode=clean_(selection.shift||current.Shift).toUpperCase();
+      const shift=model.shiftMap[shiftCode]||model.shiftMap[clean_(selection.shift||current.Shift)];
+
+      if(!shift){
+        throw new Error(
+          dateKey_(current.Date)+' '+shiftCode+
+          ': shift definition was not found.'
+        );
+      }
+
+      const d=startOfDay_(asDate_(selection.date||current.Date));
+      if(!d){
+        throw new Error(
+          clean_(current.Shift)+': selected shift date is invalid.'
+        );
+      }
+
+      const info=
+        evaluatedById[assignmentId] ||
+        evaluatedById[clean_(selection.assignmentId)] ||
+        null;
+
+      const coverage=(info&&info.coverage)||{};
+
+      const warningParts=[
+        'ADMIN FORCE OVERRIDE: '+overrideReason,
+        'FORCED REGARDLESS OF SCHEDULING RULES'
+      ];
+
+      if(info){
+        (info.rules||[]).forEach(rule=>{
+          warningParts.push(rule.detail||rule.label||rule.code);
+        });
+        (info.warnings||[]).forEach(w=>warningParts.push(w));
+      }
+
+      const previousWarning=clean_(current.Warning);
+      if(previousWarning){
+        warningParts.push('PREVIOUS OPEN-SHIFT REASON: '+previousWarning);
+      }
+
       if(coverage.applies){
         warningParts.unshift(
           'OFF-DAY COVERAGE ONLY: Covering '+
@@ -3331,13 +3405,22 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
         );
       }
 
+      /*
+       * This is the authoritative administrator override write.
+       * Locked/finalized/status/hour/weekend/etc. scheduling rules are not
+       * checked here because the administrator already reviewed and confirmed
+       * the override. The row is explicitly converted to a MANUAL assignment.
+       */
       const row={
-        'Generation ID':clean_(old['Generation ID'])||clean_(item.generationId)||'MANUAL_'+Utilities.formatDate(new Date(),getTz_(),'yyyyMMdd_HHmmss'),
-        'Assignment ID':item.assignmentId,
+        'Generation ID':
+          clean_(current['Generation ID']) ||
+          clean_(selection.generationId) ||
+          'MANUAL_'+Utilities.formatDate(new Date(),getTz_(),'yyyyMMdd_HHmmss'),
+        'Assignment ID':assignmentId,
         'Date':d,
         'Day':dayName_(d),
         'Shift':clean_(shift.Shift),
-        'Slot':num_(item.slot,1),
+        'Slot':num_(selection.slot,current.Slot||1),
         'Assigned Pharmacist':clean_(u['Pharmacist Name']),
         'Username':clean_(u.Username),
         'Hours':num_(shift.Hours,0),
@@ -3349,7 +3432,7 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
         'Shift Type':clean_(shift.Type),
         'Weekend':isWeekendDate_(d)?'Yes':'No',
         'Weekend Group':isWeekendDate_(d)?weekendGroupForDate_(d,model.settings):'',
-        'Holiday':clean_(old.Holiday),
+        'Holiday':clean_(current.Holiday),
         'Locked':'No',
         'Manual':'Yes',
         'Status':'MANUAL',
@@ -3362,30 +3445,55 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
       const updated=updateRowByKey_(
         APP.SHEETS.SCHEDULE,
         'Assignment ID',
-        item.assignmentId,
+        assignmentId,
         row
       );
 
       if(!updated){
-        throw new Error(item.date+' '+item.shift+': could not update the selected open-shift row.');
+        throw new Error(
+          dateKey_(d)+' '+clean_(shift.Shift)+
+          ': the forced override could not be written.'
+        );
       }
+
+      applied.push({
+        assignmentId:assignmentId,
+        date:formatDateKey_(d),
+        shift:clean_(shift.Shift),
+        slot:num_(selection.slot,current.Slot||1),
+        username:clean_(u.Username),
+        pharmacist:clean_(u['Pharmacist Name']),
+        reasonCodes:info?(info.reasonCodes||[]):[],
+        rules:info?(info.rules||[]):[],
+        warnings:info?(info.warnings||[]):[]
+      });
     });
 
     reconcileFilledVsUnfilledScheduleRows_();
     SpreadsheetApp.flush();
 
-    evaluation.items.forEach(item=>{
-      const verify=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',item.assignmentId);
+    applied.forEach(item=>{
+      const verify=findRowByKey_(
+        APP.SHEETS.SCHEDULE,
+        'Assignment ID',
+        item.assignmentId
+      );
+
       if(
         !verify ||
         clean_(verify.Username)!==clean_(item.username) ||
         clean_(verify.Status).toUpperCase()==='UNFILLED'
       ){
-        throw new Error(item.date+' '+item.shift+': the bulk override could not be verified after saving.');
+        throw new Error(
+          item.date+' '+item.shift+
+          ': the forced override could not be verified after saving.'
+        );
       }
 
       const details=[];
-      (item.rules||[]).forEach(rule=>details.push(rule.detail||rule.label||rule.code));
+      (item.rules||[]).forEach(rule=>{
+        details.push(rule.detail||rule.label||rule.code);
+      });
       (item.warnings||[]).forEach(w=>details.push(w));
 
       audit_(
@@ -3398,27 +3506,27 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
         item.pharmacist,
         'Yes',
         overrideReason,
-        'BULK OVERRIDE | '+details.join(' | '),
+        'FORCED BULK OVERRIDE | '+details.join(' | '),
         ctx.username
       );
     });
 
     audit_(
-      'BULK_OPEN_SHIFT_OVERRIDE',
-      evaluation.items.length?evaluation.items[0].date:'',
+      'BULK_OPEN_SHIFT_FORCE_OVERRIDE',
+      applied.length?applied[0].date:'',
       '',
       '',
       '',
       '',
-      String(evaluation.items.length),
+      String(applied.length),
       'Yes',
       overrideReason,
-      JSON.stringify(evaluation.items.map(item=>({
+      JSON.stringify(applied.map(item=>({
         date:item.date,
         shift:item.shift,
         slot:item.slot,
         pharmacist:item.pharmacist,
-        rules:(item.reasonCodes||[])
+        rules:item.reasonCodes||[]
       }))),
       ctx.username
     );
@@ -3427,9 +3535,13 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
 
     return serialize_({
       ok:true,
-      appliedCount:evaluation.items.length,
+      forced:true,
+      appliedCount:applied.length,
       overrideReason:overrideReason,
-      items:evaluation.items
+      items:applied,
+      message:
+        applied.length+
+        ' selected shift(s) were force-assigned as administrator overrides.'
     });
   } finally {
     lock.releaseLock();
