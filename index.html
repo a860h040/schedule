@@ -766,6 +766,19 @@ async function server(fn,...args){
 }
 
 
+const OPEN_SHIFT_BG_CACHE_KEY='neochronoOpenShiftAnalysisV1';
+let openShiftLastUserActivityAt=Date.now();
+
+['pointerdown','keydown','wheel','touchstart'].forEach(type=>{
+  window.addEventListener(type,()=>{
+    openShiftLastUserActivityAt=Date.now();
+  },{passive:true,capture:true});
+});
+
+window.addEventListener('scroll',()=>{
+  openShiftLastUserActivityAt=Date.now();
+},{passive:true,capture:true});
+
 async function backgroundServer_(fn,...args){
   if(!window.__neoRuntime||typeof window.__neoRuntime.invoke!=='function'){
     throw new Error('NeoChrono GitHub runtime did not load.');
@@ -773,14 +786,135 @@ async function backgroundServer_(fn,...args){
   return await window.__neoRuntime.invoke(fn,args);
 }
 
-function waitForBackgroundIdle_(){
-  return new Promise(resolve=>{
-    if(typeof window.requestIdleCallback==='function'){
-      window.requestIdleCallback(()=>resolve(),{timeout:350});
-    }else{
-      setTimeout(resolve,40);
-    }
+function openShiftBackgroundHash_(value){
+  const s=String(value||'');
+  let h=2166136261;
+  for(let i=0;i<s.length;i++){
+    h^=s.charCodeAt(i);
+    h=Math.imul(h,16777619);
+  }
+  return (h>>>0).toString(36);
+}
+
+function openShiftMaxStamp_(rows,fields){
+  let best='';
+  (rows||[]).forEach(r=>{
+    (fields||['Updated At']).forEach(field=>{
+      const v=String((r||{})[field]||'');
+      if(v>best)best=v;
+    });
   });
+  return best;
+}
+
+function openShiftBackgroundSignature_(){
+  const d=State.data||{};
+  const schedule=d.schedule||[];
+  const users=d.users||[];
+  const skills=d.skills||[];
+  const requests=d.requests||[];
+  const weekly=d.weeklyAvailability||[];
+  const shifts=d.shifts||[];
+
+  const openIds=schedule
+    .filter(r=>{
+      const status=String(r.Status||'').toUpperCase();
+      const assigned=String(r['Assigned Pharmacist']||'').toUpperCase();
+      return status==='UNFILLED'||assigned==='UNFILLED';
+    })
+    .map(r=>[
+      String(r['Assignment ID']||''),
+      String(r.Date||'').slice(0,10),
+      String(r.Shift||''),
+      String(r.Slot||''),
+      String(r['Required Skill']||''),
+      String(r.Locked||''),
+      String(r['Finalized At']||'')
+    ].join(':'))
+    .sort()
+    .join('|');
+
+  const parts=[
+    'schedule',schedule.length,openShiftMaxStamp_(schedule,['Updated At','Finalized At']),
+    'users',users.length,openShiftMaxStamp_(users,['Updated At']),
+    'skills',skills.length,openShiftMaxStamp_(skills,['Updated At']),
+    'requests',requests.length,openShiftMaxStamp_(requests,['Updated At','Reviewed At','Submitted At','Timestamp']),
+    'weekly',weekly.length,openShiftMaxStamp_(weekly,['Updated At']),
+    'shifts',shifts.length,openShiftMaxStamp_(shifts,['Updated At']),
+    'settings',openShiftBackgroundHash_(JSON.stringify(d.settings||{})),
+    'open',openShiftBackgroundHash_(openIds)
+  ];
+
+  return openShiftBackgroundHash_(parts.join('||'));
+}
+
+function readOpenShiftBackgroundCache_(signature){
+  try{
+    const saved=JSON.parse(localStorage.getItem(OPEN_SHIFT_BG_CACHE_KEY)||'null');
+    if(!saved||saved.signature!==signature)return null;
+    if(!saved.byId||typeof saved.byId!=='object')return null;
+    return saved;
+  }catch(_e){
+    return null;
+  }
+}
+
+function writeOpenShiftBackgroundCache_(bg){
+  if(!bg||!bg.signature||!bg.byId)return;
+  try{
+    localStorage.setItem(
+      OPEN_SHIFT_BG_CACHE_KEY,
+      JSON.stringify({
+        signature:bg.signature,
+        byId:bg.byId,
+        completedAt:bg.completedAt||Date.now()
+      })
+    );
+  }catch(_e){
+    // Cache failure must never affect scheduling.
+  }
+}
+
+function userIsActivelyUsingNeoChrono_(){
+  if(Date.now()-openShiftLastUserActivityAt<2500)return true;
+
+  try{
+    if(
+      navigator.scheduling &&
+      typeof navigator.scheduling.isInputPending==='function' &&
+      navigator.scheduling.isInputPending()
+    ){
+      return true;
+    }
+  }catch(_e){}
+
+  return false;
+}
+
+async function waitForBackgroundIdle_(generation){
+  while(true){
+    if(
+      !State.openShiftBackground ||
+      State.openShiftBackground.generation!==generation ||
+      !State.token
+    ){
+      return false;
+    }
+
+    if(!userIsActivelyUsingNeoChrono_()){
+      await new Promise(resolve=>{
+        if(typeof window.requestIdleCallback==='function'){
+          window.requestIdleCallback(()=>resolve(),{timeout:1200});
+        }else{
+          setTimeout(resolve,250);
+        }
+      });
+
+      if(!userIsActivelyUsingNeoChrono_())return true;
+    }
+
+    await new Promise(resolve=>setTimeout(resolve,400));
+  }
 }
 
 function localOpenShiftTargets_(){
@@ -892,45 +1026,67 @@ function refreshOpenShiftBackgroundIndicator_(){
     el.innerHTML='<b>Background analysis paused.</b><br>'+esc(m.error||'An unexpected error occurred.');
   }else{
     el.className='alert alert-warn';
-    el.innerHTML='<b>Background analysis running…</b><br>'+esc(m.monthAnalyzed)+' of '+esc(m.monthTotal)+' open shifts in '+esc(monthTitle(month))+' are ready. You can close this window and use other parts of NeoChrono.';
+    el.innerHTML='<b>Background analysis waiting for idle time…</b><br>'+esc(m.monthAnalyzed)+' of '+esc(m.monthTotal)+' open shifts in '+esc(monthTitle(month))+' are ready. NeoChrono pauses calculations while you are actively using the interface.';
   }
 }
 
 async function startOpenShiftBackgroundAnalysis_(force=false){
   if(!State.data||!State.token||!State.data.isAdmin)return;
 
+  const signature=openShiftBackgroundSignature_();
   const existing=State.openShiftBackground;
-  if(existing&&existing.status==='running'&&!force)return;
-  if(existing&&existing.status==='ready'&&!force)return;
 
-  const generation=++State.openShiftBackgroundGeneration;
+  if(
+    existing &&
+    existing.signature===signature &&
+    (existing.status==='running'||existing.status==='ready') &&
+    !force
+  ){
+    return;
+  }
+
   const targets=localOpenShiftTargets_();
   const overrideTargets=targets.filter(x=>x.actionRequired==='OVERRIDE');
+  const generation=++State.openShiftBackgroundGeneration;
+
+  const saved=readOpenShiftBackgroundCache_(signature);
+  const validTargetIds=new Set(overrideTargets.map(x=>x.assignmentId));
+  const reusable={};
+
+  if(saved&&saved.byId){
+    Object.keys(saved.byId).forEach(id=>{
+      if(validTargetIds.has(id))reusable[id]=saved.byId[id];
+    });
+  }
+
+  const pendingTargets=overrideTargets.filter(x=>!reusable[x.assignmentId]);
 
   State.openShiftBackground={
     generation:generation,
-    status:overrideTargets.length?'running':'ready',
+    signature:signature,
+    status:pendingTargets.length?'running':'ready',
     targets:targets,
-    byId:{},
+    byId:reusable,
     total:overrideTargets.length,
-    done:0,
+    done:overrideTargets.length-pendingTargets.length,
     startedAt:Date.now(),
-    completedAt:overrideTargets.length?0:Date.now(),
+    completedAt:pendingTargets.length?0:(saved&&saved.completedAt)||Date.now(),
     error:''
   };
 
   refreshOpenShiftBackgroundIndicator_();
 
-  if(!overrideTargets.length)return;
+  if(!pendingTargets.length){
+    return;
+  }
 
   /*
-   * Small batches keep the browser responsive. Each batch uses the skill-first
-   * backend, so pharmacists without the required skill are never evaluated.
+   * One shift per idle slice. The scheduling engine still runs on the browser
+   * thread, so the only reliable way to keep the UI smooth is to never start a
+   * calculation while the user is clicking, scrolling, typing, or navigating.
    */
-  const BATCH_SIZE=3;
-
   try{
-    for(let i=0;i<overrideTargets.length;i+=BATCH_SIZE){
+    for(let i=0;i<pendingTargets.length;i++){
       if(
         !State.openShiftBackground ||
         State.openShiftBackground.generation!==generation ||
@@ -939,15 +1095,15 @@ async function startOpenShiftBackgroundAnalysis_(force=false){
         return;
       }
 
-      await waitForBackgroundIdle_();
+      const idle=await waitForBackgroundIdle_(generation);
+      if(!idle)return;
 
-      const batch=overrideTargets.slice(i,i+BATCH_SIZE);
-      const ids=batch.map(x=>x.assignmentId);
+      const target=pendingTargets[i];
 
       const r=await backgroundServer_(
         'getOpenShiftOverrideSuggestions',
         State.token,
-        ids
+        [target.assignmentId]
       );
 
       if(
@@ -967,15 +1123,13 @@ async function startOpenShiftBackgroundAnalysis_(force=false){
         }
       });
 
-      State.openShiftBackground.done=Math.min(
-        State.openShiftBackground.total,
-        i+batch.length
-      );
+      State.openShiftBackground.done=
+        Object.keys(State.openShiftBackground.byId||{}).length;
 
       refreshOpenShiftBackgroundIndicator_();
 
-      // Give clicks, scrolling, navigation, and painting a chance between jobs.
-      await new Promise(resolve=>setTimeout(resolve,25));
+      // A noticeable quiet period between shifts prevents repeated UI stalls.
+      await new Promise(resolve=>setTimeout(resolve,650));
     }
 
     if(
@@ -984,6 +1138,7 @@ async function startOpenShiftBackgroundAnalysis_(force=false){
     ){
       State.openShiftBackground.status='ready';
       State.openShiftBackground.completedAt=Date.now();
+      writeOpenShiftBackgroundCache_(State.openShiftBackground);
       refreshOpenShiftBackgroundIndicator_();
       toast('Open-shift analysis is ready','success');
     }
@@ -1000,9 +1155,23 @@ async function startOpenShiftBackgroundAnalysis_(force=false){
 }
 
 function restartOpenShiftBackgroundAnalysis_(){
+  if(!State.data||!State.data.isAdmin)return;
+
+  const signature=openShiftBackgroundSignature_();
+
+  if(
+    State.openShiftBackground &&
+    State.openShiftBackground.signature===signature &&
+    (State.openShiftBackground.status==='running'||State.openShiftBackground.status==='ready')
+  ){
+    return;
+  }
+
   State.openShiftBackgroundGeneration++;
   State.openShiftBackground=null;
-  setTimeout(()=>startOpenShiftBackgroundAnalysis_(true),120);
+
+  // Trigger comes from the data change, but actual computation waits for user idle.
+  setTimeout(()=>startOpenShiftBackgroundAnalysis_(false),700);
 }
 
 $('loginForm').addEventListener('submit',async e=>{
@@ -1071,7 +1240,7 @@ async function loadApp(){
    * Trigger requested by the administrator: start Help Fill Open Shifts
    * calculations automatically after a successful login. Do not await this.
    */
-  setTimeout(()=>startOpenShiftBackgroundAnalysis_(true),150);
+  setTimeout(()=>startOpenShiftBackgroundAnalysis_(false),1000);
 }
 
 async function refreshData(keepPage=true){
