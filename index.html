@@ -732,7 +732,7 @@
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
-const State={token:'',data:null,page:'dashboard',month:firstOfMonth(new Date()),mustChange:false,availabilityEmployeeId:'',openShiftBackground:null,openShiftBackgroundGeneration:0,calendarFilters:{employees:['','','','','',''],showUnfilledWithSelected:false,status:'',shift:'',type:'',skill:'',weekendGroup:'',resident:'',preceptor:''}};
+const State={token:'',data:null,page:'dashboard',month:firstOfMonth(new Date()),mustChange:false,availabilityEmployeeId:'',calendarFilters:{employees:['','','','','',''],showUnfilledWithSelected:false,status:'',shift:'',type:'',skill:'',weekendGroup:'',resident:'',preceptor:''}};
 
 function $(id){return document.getElementById(id)}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
@@ -766,157 +766,6 @@ async function server(fn,...args){
 }
 
 
-const OPEN_SHIFT_BG_CACHE_KEY='neochronoOpenShiftAnalysisV1';
-let openShiftLastUserActivityAt=Date.now();
-
-['pointerdown','keydown','wheel','touchstart'].forEach(type=>{
-  window.addEventListener(type,()=>{
-    openShiftLastUserActivityAt=Date.now();
-  },{passive:true,capture:true});
-});
-
-window.addEventListener('scroll',()=>{
-  openShiftLastUserActivityAt=Date.now();
-},{passive:true,capture:true});
-
-async function backgroundServer_(fn,...args){
-  if(!window.__neoRuntime||typeof window.__neoRuntime.invoke!=='function'){
-    throw new Error('NeoChrono GitHub runtime did not load.');
-  }
-  return await window.__neoRuntime.invoke(fn,args);
-}
-
-function openShiftBackgroundHash_(value){
-  const s=String(value||'');
-  let h=2166136261;
-  for(let i=0;i<s.length;i++){
-    h^=s.charCodeAt(i);
-    h=Math.imul(h,16777619);
-  }
-  return (h>>>0).toString(36);
-}
-
-function openShiftMaxStamp_(rows,fields){
-  let best='';
-  (rows||[]).forEach(r=>{
-    (fields||['Updated At']).forEach(field=>{
-      const v=String((r||{})[field]||'');
-      if(v>best)best=v;
-    });
-  });
-  return best;
-}
-
-function openShiftBackgroundSignature_(){
-  const d=State.data||{};
-  const schedule=d.schedule||[];
-  const users=d.users||[];
-  const skills=d.skills||[];
-  const requests=d.requests||[];
-  const weekly=d.weeklyAvailability||[];
-  const shifts=d.shifts||[];
-
-  const openIds=schedule
-    .filter(r=>{
-      const status=String(r.Status||'').toUpperCase();
-      const assigned=String(r['Assigned Pharmacist']||'').toUpperCase();
-      return status==='UNFILLED'||assigned==='UNFILLED';
-    })
-    .map(r=>[
-      String(r['Assignment ID']||''),
-      String(r.Date||'').slice(0,10),
-      String(r.Shift||''),
-      String(r.Slot||''),
-      String(r['Required Skill']||''),
-      String(r.Locked||''),
-      String(r['Finalized At']||'')
-    ].join(':'))
-    .sort()
-    .join('|');
-
-  const parts=[
-    'schedule',schedule.length,openShiftMaxStamp_(schedule,['Updated At','Finalized At']),
-    'users',users.length,openShiftMaxStamp_(users,['Updated At']),
-    'skills',skills.length,openShiftMaxStamp_(skills,['Updated At']),
-    'requests',requests.length,openShiftMaxStamp_(requests,['Updated At','Reviewed At','Submitted At','Timestamp']),
-    'weekly',weekly.length,openShiftMaxStamp_(weekly,['Updated At']),
-    'shifts',shifts.length,openShiftMaxStamp_(shifts,['Updated At']),
-    'settings',openShiftBackgroundHash_(JSON.stringify(d.settings||{})),
-    'open',openShiftBackgroundHash_(openIds)
-  ];
-
-  return openShiftBackgroundHash_(parts.join('||'));
-}
-
-function readOpenShiftBackgroundCache_(signature){
-  try{
-    const saved=JSON.parse(localStorage.getItem(OPEN_SHIFT_BG_CACHE_KEY)||'null');
-    if(!saved||saved.signature!==signature)return null;
-    if(!saved.byId||typeof saved.byId!=='object')return null;
-    return saved;
-  }catch(_e){
-    return null;
-  }
-}
-
-function writeOpenShiftBackgroundCache_(bg){
-  if(!bg||!bg.signature||!bg.byId)return;
-  try{
-    localStorage.setItem(
-      OPEN_SHIFT_BG_CACHE_KEY,
-      JSON.stringify({
-        signature:bg.signature,
-        byId:bg.byId,
-        completedAt:bg.completedAt||Date.now()
-      })
-    );
-  }catch(_e){
-    // Cache failure must never affect scheduling.
-  }
-}
-
-function userIsActivelyUsingNeoChrono_(){
-  if(Date.now()-openShiftLastUserActivityAt<2500)return true;
-
-  try{
-    if(
-      navigator.scheduling &&
-      typeof navigator.scheduling.isInputPending==='function' &&
-      navigator.scheduling.isInputPending()
-    ){
-      return true;
-    }
-  }catch(_e){}
-
-  return false;
-}
-
-async function waitForBackgroundIdle_(generation){
-  while(true){
-    if(
-      !State.openShiftBackground ||
-      State.openShiftBackground.generation!==generation ||
-      !State.token
-    ){
-      return false;
-    }
-
-    if(!userIsActivelyUsingNeoChrono_()){
-      await new Promise(resolve=>{
-        if(typeof window.requestIdleCallback==='function'){
-          window.requestIdleCallback(()=>resolve(),{timeout:1200});
-        }else{
-          setTimeout(resolve,250);
-        }
-      });
-
-      if(!userIsActivelyUsingNeoChrono_())return true;
-    }
-
-    await new Promise(resolve=>setTimeout(resolve,400));
-  }
-}
-
 function localOpenShiftTargets_(){
   if(!State.data)return [];
 
@@ -930,8 +779,6 @@ function localOpenShiftTargets_(){
   (State.data.shifts||[]).forEach(s=>{
     shiftMap[String(s.Shift||'').toUpperCase()]=s;
   });
-
-  const today=dateKey(new Date());
 
   return rows.map(r=>{
     const code=String(r.Shift||'').toUpperCase();
@@ -952,34 +799,16 @@ function localOpenShiftTargets_(){
         ?'Unfinalize this schedule period before overriding this shift.'
         :(locked?'Unlock this open shift before overriding it.':'')
     };
-  }).filter(x=>x.assignmentId&&x.date).sort((a,b)=>{
-    const af=a.date>=today?0:1;
-    const bf=b.date>=today?0:1;
-    return af-bf||a.date.localeCompare(b.date)||a.shift.localeCompare(b.shift)||a.slot-b.slot;
-  });
+  }).filter(x=>x.assignmentId&&x.date)
+    .sort((a,b)=>a.date.localeCompare(b.date)||a.shift.localeCompare(b.shift)||a.slot-b.slot);
 }
 
-function openShiftBackgroundSnapshotForMonth_(month){
-  const bg=State.openShiftBackground||{
-    status:'idle',
-    total:0,
-    done:0,
-    byId:{},
-    targets:[]
-  };
-
+function onDemandOpenShiftSnapshotForMonth_(month){
   const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
   const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
 
-  const targets=(bg.targets||[])
-    .filter(x=>x.date>=start&&x.date<=end)
-    .map(target=>{
-      const detail=(bg.byId||{})[target.assignmentId];
-      return detail?{...target,...detail}:target;
-    });
-
-  const analyzed=targets.filter(x=>(bg.byId||{})[x.assignmentId]).length;
-  const pending=Math.max(0,targets.length-analyzed);
+  const targets=localOpenShiftTargets_()
+    .filter(x=>x.date>=start&&x.date<=end);
 
   return {
     ok:true,
@@ -994,184 +823,8 @@ function openShiftBackgroundSnapshotForMonth_(month){
     suggestions:[],
     unresolved:[],
     overrideTargets:targets,
-    overrideSuggestions:targets.filter(x=>(bg.byId||{})[x.assignmentId]),
-    background:{
-      status:bg.status||'idle',
-      total:bg.total||0,
-      done:bg.done||0,
-      monthTotal:targets.length,
-      monthAnalyzed:analyzed,
-      monthPending:pending,
-      startedAt:bg.startedAt||0,
-      completedAt:bg.completedAt||0,
-      error:bg.error||''
-    }
+    overrideSuggestions:[]
   };
-}
-
-function refreshOpenShiftBackgroundIndicator_(){
-  const bg=State.openShiftBackground;
-  const el=$('openShiftBackgroundProgress');
-  if(!bg||!el)return;
-
-  const month=State.month||firstOfMonth(new Date());
-  const snap=openShiftBackgroundSnapshotForMonth_(month);
-  const m=snap.background||{};
-
-  if(m.status==='ready'){
-    el.className='alert alert-ok';
-    el.innerHTML='<b>Background analysis ready.</b><br>'+esc(m.monthAnalyzed)+' of '+esc(m.monthTotal)+' open shifts in '+esc(monthTitle(month))+' are ready for review.';
-  }else if(m.status==='error'){
-    el.className='alert alert-danger';
-    el.innerHTML='<b>Background analysis paused.</b><br>'+esc(m.error||'An unexpected error occurred.');
-  }else{
-    el.className='alert alert-warn';
-    el.innerHTML='<b>Background analysis waiting for idle time…</b><br>'+esc(m.monthAnalyzed)+' of '+esc(m.monthTotal)+' open shifts in '+esc(monthTitle(month))+' are ready. NeoChrono pauses calculations while you are actively using the interface.';
-  }
-}
-
-async function startOpenShiftBackgroundAnalysis_(force=false){
-  if(!State.data||!State.token||!State.data.isAdmin)return;
-
-  const signature=openShiftBackgroundSignature_();
-  const existing=State.openShiftBackground;
-
-  if(
-    existing &&
-    existing.signature===signature &&
-    (existing.status==='running'||existing.status==='ready') &&
-    !force
-  ){
-    return;
-  }
-
-  const targets=localOpenShiftTargets_();
-  const overrideTargets=targets.filter(x=>x.actionRequired==='OVERRIDE');
-  const generation=++State.openShiftBackgroundGeneration;
-
-  const saved=readOpenShiftBackgroundCache_(signature);
-  const validTargetIds=new Set(overrideTargets.map(x=>x.assignmentId));
-  const reusable={};
-
-  if(saved&&saved.byId){
-    Object.keys(saved.byId).forEach(id=>{
-      if(validTargetIds.has(id))reusable[id]=saved.byId[id];
-    });
-  }
-
-  const pendingTargets=overrideTargets.filter(x=>!reusable[x.assignmentId]);
-
-  State.openShiftBackground={
-    generation:generation,
-    signature:signature,
-    status:pendingTargets.length?'running':'ready',
-    targets:targets,
-    byId:reusable,
-    total:overrideTargets.length,
-    done:overrideTargets.length-pendingTargets.length,
-    startedAt:Date.now(),
-    completedAt:pendingTargets.length?0:(saved&&saved.completedAt)||Date.now(),
-    error:''
-  };
-
-  refreshOpenShiftBackgroundIndicator_();
-
-  if(!pendingTargets.length){
-    return;
-  }
-
-  /*
-   * One shift per idle slice. The scheduling engine still runs on the browser
-   * thread, so the only reliable way to keep the UI smooth is to never start a
-   * calculation while the user is clicking, scrolling, typing, or navigating.
-   */
-  try{
-    for(let i=0;i<pendingTargets.length;i++){
-      if(
-        !State.openShiftBackground ||
-        State.openShiftBackground.generation!==generation ||
-        State.token===''
-      ){
-        return;
-      }
-
-      const idle=await waitForBackgroundIdle_(generation);
-      if(!idle)return;
-
-      const target=pendingTargets[i];
-
-      const r=await backgroundServer_(
-        'getOpenShiftOverrideSuggestions',
-        State.token,
-        [target.assignmentId]
-      );
-
-      if(
-        !State.openShiftBackground ||
-        State.openShiftBackground.generation!==generation
-      ){
-        return;
-      }
-
-      if(!r||!r.ok){
-        throw new Error((r&&r.message)||'Could not analyze open shifts.');
-      }
-
-      (r.suggestions||[]).forEach(item=>{
-        if(item&&item.assignmentId){
-          State.openShiftBackground.byId[String(item.assignmentId)]=item;
-        }
-      });
-
-      State.openShiftBackground.done=
-        Object.keys(State.openShiftBackground.byId||{}).length;
-
-      refreshOpenShiftBackgroundIndicator_();
-
-      // A noticeable quiet period between shifts prevents repeated UI stalls.
-      await new Promise(resolve=>setTimeout(resolve,650));
-    }
-
-    if(
-      State.openShiftBackground &&
-      State.openShiftBackground.generation===generation
-    ){
-      State.openShiftBackground.status='ready';
-      State.openShiftBackground.completedAt=Date.now();
-      writeOpenShiftBackgroundCache_(State.openShiftBackground);
-      refreshOpenShiftBackgroundIndicator_();
-      toast('Open-shift analysis is ready','success');
-    }
-  }catch(e){
-    if(
-      State.openShiftBackground &&
-      State.openShiftBackground.generation===generation
-    ){
-      State.openShiftBackground.status='error';
-      State.openShiftBackground.error=e&&e.message?e.message:String(e);
-      refreshOpenShiftBackgroundIndicator_();
-    }
-  }
-}
-
-function restartOpenShiftBackgroundAnalysis_(){
-  if(!State.data||!State.data.isAdmin)return;
-
-  const signature=openShiftBackgroundSignature_();
-
-  if(
-    State.openShiftBackground &&
-    State.openShiftBackground.signature===signature &&
-    (State.openShiftBackground.status==='running'||State.openShiftBackground.status==='ready')
-  ){
-    return;
-  }
-
-  State.openShiftBackgroundGeneration++;
-  State.openShiftBackground=null;
-
-  // Trigger comes from the data change, but actual computation waits for user idle.
-  setTimeout(()=>startOpenShiftBackgroundAnalysis_(false),700);
 }
 
 $('loginForm').addEventListener('submit',async e=>{
@@ -1235,27 +888,14 @@ async function loadApp(){
 
   buildNav();
   renderPage(State.page);
-
-  /*
-   * Trigger requested by the administrator: start Help Fill Open Shifts
-   * calculations automatically after a successful login. Do not await this.
-   */
-  setTimeout(()=>startOpenShiftBackgroundAnalysis_(false),1000);
 }
 
 async function refreshData(keepPage=true){
   State.data=await server('getAppData',State.token);
   if(keepPage)renderPage(State.page);
-
-  // Schedule/PTO/skill changes make prior recommendations stale.
-  if(State.data&&State.data.isAdmin){
-    restartOpenShiftBackgroundAnalysis_();
-  }
 }
 
 async function logoutApp(){
-  State.openShiftBackgroundGeneration++;
-  State.openShiftBackground=null;
   try{await server('logout',State.token)}catch(e){}
   sessionStorage.removeItem('rxSchedulerToken');
   State.token='';
@@ -1524,14 +1164,10 @@ function openFillOpenShiftsHelper_(){
   State.bulkOpenShiftSelection=[];
   State.bulkOpenShiftFinal=null;
   State.bulkOpenShiftOverrideReason='';
+  State.bulkOpenShiftDetailedSuggestions=[];
 
   const month=State.month||firstOfMonth(new Date());
-
-  if(!State.openShiftBackground){
-    startOpenShiftBackgroundAnalysis_(true);
-  }
-
-  const r=openShiftBackgroundSnapshotForMonth_(month);
+  const r=onDemandOpenShiftSnapshotForMonth_(month);
   renderFillOpenShiftsPreview_(r,month);
 }
 
@@ -1569,154 +1205,78 @@ function overrideHoursImpactHtml_(hours){
 }
 
 function renderFillOpenShiftsPreview_(r,month){
-  const suggestions=r.suggestions||[];
-  const unresolved=r.unresolved||[];
-  const bg=r.background||{};
   const overrides=(r.overrideTargets&&r.overrideTargets.length)
     ? r.overrideTargets
-    : (r.overrideSuggestions||[]);
+    : [];
 
   State.fillOpenShiftPreviewResult=r;
   State.openShiftOverrideTargets=overrides;
-  State.openShiftOverrideSuggestions=r.overrideSuggestions||[];
+  State.openShiftOverrideSuggestions=[];
   State.openShiftOverrideSelected=State.openShiftOverrideSelected||{};
 
-  const safeCount=Number(r.fillableCount||0);
-  const alertClass=safeCount?'alert-ok':'alert-warn';
   const overrideableCount=overrides.filter(x=>x&&x.actionRequired==='OVERRIDE').length;
 
   let body=
-    '<div id="openShiftBackgroundProgress" class="alert '+(bg.status==='ready'?'alert-ok':bg.status==='error'?'alert-danger':'alert-warn')+'">'+
-      (bg.status==='ready'
-        ? '<b>Background analysis ready.</b><br>'+esc(bg.monthAnalyzed||0)+' of '+esc(bg.monthTotal||0)+' open shifts in '+esc(monthTitle(month))+' are ready for review.'
-        : bg.status==='error'
-          ? '<b>Background analysis paused.</b><br>'+esc(bg.error||'An unexpected error occurred.')
-          : '<b>Background analysis running…</b><br>'+esc(bg.monthAnalyzed||0)+' of '+esc(bg.monthTotal||0)+' open shifts in '+esc(monthTitle(month))+' are ready. You can close this window and continue using NeoChrono.')+
-    '</div>';
-
-  body+=
-    '<div class="grid grid-4 mt12">'+
+    '<div class="alert alert-warn">'+
+      '<b>No calculations are running in the background.</b><br>'+
+      'Select one or more open shifts, then choose <b>Analyze Selected</b>. NeoChrono will first identify pharmacists with the required skill and only compare those pharmacists against the scheduling rules.'+
+    '</div>'+
+    '<div class="grid grid-3 mt12">'+
       '<div class="card"><b>'+esc(r.openCount||0)+'</b><div class="small muted">Open shifts</div></div>'+
-      '<div class="card"><b>'+esc(r.fillableCount||0)+'</b><div class="small muted">Safe to fill</div></div>'+
-      '<div class="card"><b>'+esc(r.unresolvedCount||0)+'</b><div class="small muted">Need override</div></div>'+
+      '<div class="card"><b>'+esc(r.editableOpenCount||0)+'</b><div class="small muted">Available to analyze</div></div>'+
       '<div class="card"><b>'+esc(Number(r.skippedFinalizedCount||0)+Number(r.skippedLockedCount||0))+'</b><div class="small muted">Locked/finalized</div></div>'+
     '</div>';
-
-  if(suggestions.length){
-    body+=
-      '<div class="section-title mt12"><div><h3>Safe assignments</h3><p>These pharmacists pass the current scheduling rules.</p></div></div>'+
-      '<div class="table-wrap" style="max-height:260px;overflow:auto">'+
-        '<table class="table">'+
-          '<thead><tr><th>Date</th><th>Shift</th><th>Recommended pharmacist</th><th>Other eligible options</th></tr></thead>'+
-          '<tbody>'+
-            suggestions.map(x=>
-              '<tr>'+
-                '<td>'+esc(fmtDate(x.date))+'</td>'+
-                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
-                '<td><b>'+esc(x.pharmacist)+'</b>'+(x.coverage?'<div class="small muted">OFF-day coverage</div>':'')+'</td>'+
-                '<td>'+esc((x.alternatives||[]).join(', ')||'—')+'</td>'+
-              '</tr>'
-            ).join('')+
-          '</tbody>'+
-        '</table>'+
-      '</div>';
-  }
 
   if(overrides.length){
     body+=
       '<div class="section-title mt12">'+
-        '<div><h3>Open shifts</h3><p>Recommendations are calculated after login in the background. Select one or multiple shifts to review or override.</p></div>'+
+        '<div><h3>Open shifts</h3><p>Select only the shifts you want NeoChrono to calculate now.</p></div>'+
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
           (overrideableCount
             ? '<label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input id="openShiftOverrideSelectAll" type="checkbox" onchange="toggleAllOpenShiftOverrides_(this.checked)"> Select all</label>'+
-              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Review Selected (0)</button>'
+              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Analyze Selected (0)</button>'
             : '')+
         '</div>'+
       '</div>'+
-      '<div class="table-wrap" style="max-height:460px;overflow:auto">'+
+      '<div class="table-wrap" style="max-height:480px;overflow:auto">'+
         '<table class="table">'+
-          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Best match</th><th>Rule impact</th><th>Status</th></tr></thead>'+
+          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Required skill</th><th>Current reason</th><th>Status</th></tr></thead>'+
           '<tbody>'+
             overrides.map((x,i)=>{
               const canOverride=x.actionRequired==='OVERRIDE';
-              const cand=x.recommended||null;
-              const rules=cand?(cand.rules||[]):[];
 
               return '<tr>'+
                 '<td>'+(canOverride?'<input class="open-shift-override-check" data-index="'+i+'" type="checkbox" onchange="toggleOpenShiftOverrideSelection_('+i+',this.checked)">':'')+'</td>'+
                 '<td>'+esc(fmtDate(x.date))+'</td>'+
-                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+
-                  '<div class="small muted">Skill: '+esc(x.requiredSkill||'—')+'</div></td>'+
+                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
+                '<td><b>'+esc(x.requiredSkill||'—')+'</b></td>'+
+                '<td class="small">'+esc(x.originalReason||'Requires pharmacist/rule analysis')+'</td>'+
                 '<td>'+
-                  (cand
-                    ? '<b>'+esc(cand.pharmacist||'—')+'</b><div style="margin-top:4px">'+overrideRiskBadge_(cand.risk)+'</div>'
-                    : canOverride
-                      ? '<span class="muted">Background analyzing…</span>'
-                      : '<span class="muted">—</span>')+
-                '</td>'+
-                '<td>'+
-                  (cand
-                    ? (rules.length
-                        ? rules.slice(0,3).map(rule=>'<span class="badge '+((rule.risk==='HIGH'||rule.risk==='CRITICAL')?'badge-danger':'badge-warn')+'" style="margin:2px 3px 2px 0">'+esc(rule.label)+'</span>').join('')+
-                          (rules.length>3?'<span class="small muted"> +'+esc(rules.length-3)+' more</span>':'')
-                        : '<span class="badge badge-ok">No hard rule violations</span>')
-                    : '<span class="small muted">'+esc(x.originalReason||'Waiting for background analysis')+'</span>')+
-                '</td>'+
-                '<td>'+
-                  (!canOverride
-                    ? '<span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span>'+
-                      (x.actionMessage?'<div class="small muted" style="margin-top:4px">'+esc(x.actionMessage)+'</div>':'')
-                    : cand
-                      ? '<span class="badge badge-ok">Ready</span>'
-                      : '<span class="badge badge-warn">Calculating</span>')+
+                  (canOverride
+                    ? '<span class="badge badge-warn">Not analyzed</span>'
+                    : '<span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span>'+
+                      (x.actionMessage?'<div class="small muted" style="margin-top:4px">'+esc(x.actionMessage)+'</div>':''))+
                 '</td>'+
               '</tr>';
             }).join('')+
           '</tbody>'+
         '</table>'+
       '</div>';
-  }else if(unresolved.length){
-    body+=
-      '<div class="section-title mt12"><div><h3>Still unfilled</h3><p>No override target rows could be built.</p></div></div>'+
-      '<div class="table-wrap" style="max-height:260px;overflow:auto">'+
-        '<table class="table">'+
-          '<thead><tr><th>Date</th><th>Shift</th><th>Reason</th></tr></thead>'+
-          '<tbody>'+
-            unresolved.slice(0,100).map(x=>
-              '<tr>'+
-                '<td>'+esc(fmtDate(x.date))+'</td>'+
-                '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
-                '<td>'+esc(x.reason)+'</td>'+
-              '</tr>'
-            ).join('')+
-          '</tbody>'+
-        '</table>'+
-      '</div>';
-  }
-
-  const buttons=[
-    {label:'Close',cls:'btn-secondary',action:'closeModal()'}
-  ];
-
-  if(safeCount>0){
-    buttons.push({
-      label:'Fill '+safeCount+' Safe Shift'+(safeCount===1?'':'s'),
-      cls:'btn-primary',
-      action:'applyFillOpenShiftsHelper_()'
-    });
+  }else{
+    body+='<div class="alert alert-ok mt12"><b>No open shifts for '+esc(monthTitle(month))+'.</b></div>';
   }
 
   State.fillOpenShiftPreview={
     month:month,
     start:r.startDate,
     end:r.endDate,
-    fillableCount:safeCount
+    fillableCount:0
   };
 
   openModal(
     'Help Fill Open Shifts — '+monthTitle(month),
     body,
-    buttons
+    [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
   );
 
   syncOpenShiftOverrideSelectionUI_();
@@ -1835,34 +1395,20 @@ async function reviewBulkOpenShiftOverrides_(){
   const indexes=selectedOpenShiftOverrideIndexes_();
 
   if(!indexes.length){
-    toast('Select at least one open shift to override.','error');
+    toast('Select at least one open shift to analyze.','error');
     return;
   }
 
   State.bulkOpenShiftSelection=indexes.slice();
 
-  const bg=State.openShiftBackground||{byId:{}};
-  const cached=[];
-  const missingIds=[];
-
-  indexes.forEach(index=>{
-    const target=bulkOverrideTargetForIndex_(index);
-    if(!target)return;
-    const detail=(bg.byId||{})[target.assignmentId];
-    if(detail)cached.push(detail);
-    else missingIds.push(target.assignmentId);
-  });
-
-  State.bulkOpenShiftDetailedSuggestions=cached.slice();
-
-  if(!missingIds.length){
-    renderBulkOpenShiftCandidatePicker_();
-    return;
-  }
+  const ids=indexes
+    .map(index=>bulkOverrideTargetForIndex_(index))
+    .filter(Boolean)
+    .map(item=>item.assignmentId);
 
   openModal(
-    'Finishing '+missingIds.length+' Shift'+(missingIds.length===1?'':'s'),
-    '<div class="alert alert-warn"><b>Background analysis is still working.</b><br>NeoChrono is finishing only the selected shift(s) that are not ready yet. You can cancel and come back later if you do not want to wait.</div>',
+    'Analyzing '+indexes.length+' Selected Shift'+(indexes.length===1?'':'s'),
+    '<div class="alert alert-warn"><b>Analyzing selected shifts now…</b><br>NeoChrono is checking only pharmacists who have the required skill for these selected shifts. No other open shifts are being calculated.</div>',
     [{label:'Cancel',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'}]
   );
 
@@ -1870,22 +1416,14 @@ async function reviewBulkOpenShiftOverrides_(){
     const r=await server(
       'getOpenShiftOverrideSuggestions',
       State.token,
-      missingIds
+      ids
     );
 
     if(!r||!r.ok){
       throw new Error((r&&r.message)||'Could not analyze the selected open shifts.');
     }
 
-    const fresh=r.suggestions||[];
-
-    fresh.forEach(item=>{
-      if(item&&item.assignmentId&&State.openShiftBackground){
-        State.openShiftBackground.byId[String(item.assignmentId)]=item;
-      }
-    });
-
-    State.bulkOpenShiftDetailedSuggestions=cached.concat(fresh);
+    State.bulkOpenShiftDetailedSuggestions=r.suggestions||[];
     renderBulkOpenShiftCandidatePicker_();
   }catch(e){
     toast(e.message,'error');
@@ -2253,13 +1791,10 @@ function renderForceCandidateDetails_(shiftIndex,candidateIndex){
 }
 
 function returnToFillOpenShiftPreview_(){
-  const r=State.fillOpenShiftPreviewResult;
   const p=State.fillOpenShiftPreview;
-  if(!r||!p||!p.month){
-    closeModal();
-    return;
-  }
-  renderFillOpenShiftsPreview_(r,p.month);
+  const month=(p&&p.month)?p.month:(State.month||firstOfMonth(new Date()));
+  const r=onDemandOpenShiftSnapshotForMonth_(month);
+  renderFillOpenShiftsPreview_(r,month);
 }
 
 async function forceOpenShiftAssignment_(shiftIndex){
