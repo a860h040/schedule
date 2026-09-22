@@ -1161,6 +1161,33 @@ function loadSchedulingModel_() {
     runtimeDeadline:0
   };
   model.activeUsers=users.filter(u=>yes_(u.Active));
+
+  // Performance index used by Help Fill Open Shifts:
+  // required skill -> only active pharmacists who possess that skill.
+  // This prevents the helper from running eligibility logic against every
+  // pharmacist for every open shift.
+  model.activeUsersBySkill={};
+  model.activeUsersByOffDaySkill={};
+
+  model.activeUsers.forEach(u=>{
+    const username=clean_(u.Username);
+    const normalSkills=skillsByUser[username]||new Set();
+
+    normalSkills.forEach(skill=>{
+      const key=clean_(skill).toUpperCase();
+      if(!key)return;
+      if(!model.activeUsersBySkill[key])model.activeUsersBySkill[key]=[];
+      model.activeUsersBySkill[key].push(u);
+    });
+
+    offDayCoverageSkillSet_(u).forEach(skill=>{
+      const key=clean_(skill).toUpperCase();
+      if(!key)return;
+      if(!model.activeUsersByOffDaySkill[key])model.activeUsersByOffDaySkill[key]=[];
+      model.activeUsersByOffDaySkill[key].push(u);
+    });
+  });
+
   model.regularUsers=model.activeUsers.filter(u=>regularFiveDayRuleApplies_(u));
   model.residents=model.activeUsers.filter(u=>yes_(u.Resident));
   model.sevenOnShiftByUser=buildSevenOnShiftMap_(model);
@@ -1195,9 +1222,8 @@ function countStaticCandidates_(slot, model) {
   const cacheKey=slot.dateKey+'|'+slot.shiftCode;
   if(model._staticCandidateCache && model._staticCandidateCache[cacheKey]!==undefined) return model._staticCandidateCache[cacheKey];
   let n=0;
-  (model.activeUsers||model.users).forEach(u => {
+  skillQualifiedUsersForSlot_(slot,model).forEach(u => {
     if (!yes_(u.Active)) return;
-    if (!hasRequiredSkillForSlot_(u,slot,model)) return;
     if (slot.weekend && !yesDefault_(u['Weekend Eligible'],true)) return;
     if (preceptorEveningBlocked_(u,slot,model)) return;
     if (isSevenOn_(u) && (!sevenOnIsOnDay_(u,slot.date) || !sevenOnSlotMatches_(u,slot,model))) return;
@@ -2291,7 +2317,7 @@ function explainUnfilled_(slot,model,state) {
     }
     return 'UNFILLED — '+clean_(owners[0]['Pharmacist Name'])+' has an algorithm-generated OFF day and no pharmacist is configured in Users -> Off-Day Coverage Skills for '+clean_(slot.shiftCode)+'.';
   }
-  const skillQualified=model.users.filter(u=>yes_(u.Active) && hasRequiredSkillForSlot_(u,slot,model));
+  const skillQualified=skillQualifiedUsersForSlot_(slot,model);
   if (!skillQualified.length) return 'UNFILLED — 0 active employees have required skill '+(slot.requiredSkill||'(none)')+'.';
   const counts={};
   skillQualified.forEach(u=>{
@@ -2815,7 +2841,9 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
 
     const candidates=[];
 
-    (model.activeUsers||[]).forEach(u=>{
+    // Override candidates are also restricted to pharmacists who actually
+    // possess the required skill before any expensive rule analysis runs.
+    skillQualifiedUsersForSlot_(slot,model).forEach(u=>{
       const normal=eligibility_(u,slot,model,state,true);
       let effective=normal;
       let coverage={
@@ -2876,7 +2904,6 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
       overrideCost+=warnings.length*60;
 
       const hasNormalSkill=hasRequiredSkillForSlot_(u,slot,model);
-      if(!hasNormalSkill&&!coverage.applies)overrideCost+=250;
       if(preferredShiftMatches_(u,slot))overrideCost-=20;
 
       const normalScore=scoreCandidate_(
@@ -3250,7 +3277,9 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
   }
 
   try{
-    ensureUniqueScheduleAssignmentIds_();
+    // Preview is read-only. Avoid scanning/writing the full Schedule sheet just
+    // to open the helper; ID repair is needed only when changes are applied.
+    if(apply)ensureUniqueScheduleAssignmentIds_();
 
     const model=loadSchedulingModel_();
     const allRows=readTable_(APP.SHEETS.SCHEDULE);
@@ -3533,7 +3562,9 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
     slots.forEach(slot=>{
       let candidates=[];
 
-      model.activeUsers.forEach(u=>{
+      // Stage 1: pull only pharmacists who have this shift's skill.
+      // Stage 2: run the full scheduling-rule comparison only on that short list.
+      skillQualifiedUsersForSlot_(slot,model).forEach(u=>{
         const e=eligibility_(u,slot,model,state,false);
         if(!e.ok)return;
         candidates.push({
@@ -3551,7 +3582,7 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
       if(!candidates.length){
         const owners=primaryHomeOwnersForSlot_(slot,model);
         if(owners.length===1&&isGeneratedOffDayForHomeOwner_(owners[0],slot,state,model)){
-          model.activeUsers.forEach(u=>{
+          offDaySkillQualifiedUsersForSlot_(slot,model).forEach(u=>{
             if(clean_(u.Username)===clean_(owners[0].Username))return;
             if(!hasOffDayCoverageSkillForSlot_(u,slot))return;
             const e=offDayCoverageEligibility_(u,slot,model,state);
@@ -4912,6 +4943,77 @@ function residentEligibilityReason_(u,shift,date,model) {
   if(type==='night'&&!yesDefault_(u['Resident Nights'],false))return 'RESIDENT_RESTRICTION';
   if(!yesDefault_(u['Resident Covers Regular'],false))return 'RESIDENT_RESTRICTION';
   return '';
+}
+
+/**
+ * Return ONLY active pharmacists who possess the required Employee Skill for
+ * this slot. This is the first stage of Help Fill Open Shifts.
+ *
+ * E2 keeps the existing resident special rule: active residents are treated as
+ * qualified for the required resident E2 duty even when a separate skill row
+ * has not been added.
+ */
+function skillQualifiedUsersForSlot_(slot,model) {
+  const active=(model&&model.activeUsers)||[];
+  if(!slot)return [];
+
+  const required=clean_(slot.requiredSkill || (slot.shift||{}).Skill).toUpperCase();
+  const shiftCode=clean_(slot.shiftCode || (slot.shift||{}).Shift).toUpperCase();
+
+  if(!required){
+    return active.slice();
+  }
+
+  const out=[];
+  const seen=new Set();
+
+  ((model.activeUsersBySkill||{})[required]||[]).forEach(u=>{
+    const username=clean_(u.Username);
+    if(!username||seen.has(username))return;
+    seen.add(username);
+    out.push(u);
+  });
+
+  if(
+    model.settings &&
+    shiftCode===clean_(model.settings.residentE2ShiftCode).toUpperCase()
+  ){
+    (model.residents||active.filter(u=>yes_(u.Resident))).forEach(u=>{
+      const username=clean_(u.Username);
+      if(!username||seen.has(username))return;
+      seen.add(username);
+      out.push(u);
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Dedicated Users -> Off-Day Coverage Skills lookup. This is only used by the
+ * existing generated-OFF-day coverage path; it never turns an ordinary
+ * pharmacist without the skill into a normal candidate.
+ */
+function offDaySkillQualifiedUsersForSlot_(slot,model) {
+  if(!slot||!model)return [];
+  const keys=[
+    clean_(slot.shiftCode || (slot.shift||{}).Shift).toUpperCase(),
+    clean_(slot.requiredSkill || (slot.shift||{}).Skill).toUpperCase()
+  ].filter(Boolean);
+
+  const out=[];
+  const seen=new Set();
+
+  keys.forEach(key=>{
+    ((model.activeUsersByOffDaySkill||{})[key]||[]).forEach(u=>{
+      const username=clean_(u.Username);
+      if(!username||seen.has(username))return;
+      seen.add(username);
+      out.push(u);
+    });
+  });
+
+  return out;
 }
 
 function hasRequiredSkillForSlot_(u,slot,model) {
