@@ -11,7 +11,11 @@
   const WORKBOOK_PATH='data/workbook.json';
   const PUBLISHED_PATH='data/published-schedule.json';
   const SESSION_SHEET_KEY='neochronoLegacySessionsV1';
-  let cache={data:null,sha:null,loadedAt:0};
+  const WORKBOOK_CACHE_KEY='neochronoWorkbookCacheV1';
+  const MEMORY_READ_TTL_MS=60000;
+  const LOCAL_FAST_TTL_MS=15*60*1000;
+  const LOCAL_FALLBACK_TTL_MS=24*60*60*1000;
+  let cache={data:null,sha:null,loadedAt:0,stale:false};
   let photoCache=new Map();
   let invokeQueue=Promise.resolve();
 
@@ -27,10 +31,14 @@
   }
   function apiUrl(c,path){return 'https://api.github.com/repos/'+encodeURIComponent(c.owner)+'/'+encodeURIComponent(c.repo)+'/contents/'+path.split('/').map(encodeURIComponent).join('/');}
   function headers(c){return {'Accept':'application/vnd.github+json','Authorization':'Bearer '+c.token,'X-GitHub-Api-Version':'2022-11-28','Content-Type':'application/json'};}
-  async function gh(url,opt,c){
+  async function gh(url,opt,c,timeoutMs){
     let res;
     const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),20000);
+    const timer=setTimeout(
+      ()=>controller.abort(),
+      Math.max(2000,Number(timeoutMs)||12000)
+    );
+
     try{
       res=await fetch(url,{
         ...(opt||{}),
@@ -40,9 +48,13 @@
       });
     }catch(fetchErr){
       if(fetchErr&&fetchErr.name==='AbortError'){
-        throw new Error('GitHub took too long to respond. Please try again.');
+        const e=new Error('GitHub took too long to respond. Please try again.');
+        e.code='GITHUB_TIMEOUT';
+        throw e;
       }
-      throw new Error('Could not connect to GitHub. Check your internet connection and the saved GitHub token, then try Setup This Device again.');
+      const e=new Error('Could not connect to GitHub. Check your internet connection and the saved GitHub token, then try Setup This Device again.');
+      e.code='GITHUB_CONNECTION';
+      throw e;
     }finally{
       clearTimeout(timer);
     }
@@ -60,24 +72,80 @@
       e.body=body;
       throw e;
     }
+
     return body;
   }
-  async function loadWorkbook(force=false){
-    const c=cfg();
-    if(cache.data&&!force&&Date.now()-cache.loadedAt<10000)return cache;
 
+  function workbookCacheSignature_(c){
+    return [
+      String(c.owner||''),
+      String(c.repo||''),
+      String(c.branch||'main'),
+      String(c.workbookPath||WORKBOOK_PATH)
+    ].join('|');
+  }
+
+  function readPersistentWorkbookCache_(c){
+    try{
+      const saved=JSON.parse(localStorage.getItem(WORKBOOK_CACHE_KEY)||'null');
+      if(!saved||saved.signature!==workbookCacheSignature_(c))return null;
+      if(!saved.data||!saved.data.sheets)return null;
+      return {
+        data:saved.data,
+        sha:saved.sha||null,
+        savedAt:Number(saved.savedAt)||0,
+        loadedAt:Date.now(),
+        stale:true
+      };
+    }catch(_e){
+      return null;
+    }
+  }
+
+  function writePersistentWorkbookCache_(c,entry){
+    try{
+      if(!entry||!entry.data||!entry.data.sheets)return;
+      localStorage.setItem(
+        WORKBOOK_CACHE_KEY,
+        JSON.stringify({
+          signature:workbookCacheSignature_(c),
+          sha:entry.sha||null,
+          savedAt:Date.now(),
+          data:entry.data
+        })
+      );
+    }catch(_e){
+      // The in-memory cache remains usable even if browser storage is full.
+    }
+  }
+
+  function decodeContentsResponse_(f){
+    let encoded=String((f&&f.content)||'').replace(/\n/g,'');
+    if(!encoded)return null;
+    return JSON.parse(b64decodeUtf8(encoded));
+  }
+
+  async function loadWorkbookExact_(c){
+    /*
+     * Exact mode is used before mutations. Keep the Contents API metadata/sha
+     * so GitHub can reject concurrent writes instead of overwriting them.
+     */
     const f=await gh(
       apiUrl(c,c.workbookPath)+'?ref='+encodeURIComponent(c.branch),
-      {},
-      c
+      {headers:{'Accept':'application/vnd.github+json'}},
+      c,
+      15000
     );
 
-    let encoded=String((f&&f.content)||'').replace(/\n/g,'');
+    let data=null;
 
-    // GitHub's Contents API omits inline "content" for larger files.
-    // When workbook.json grows beyond that threshold, load the same blob
-    // through the Git Data API instead of attempting JSON.parse('').
-    if(!encoded){
+    try{
+      data=decodeContentsResponse_(f);
+    }catch(_e){
+      data=null;
+    }
+
+    if(!data){
       const sha=String((f&&f.sha)||'').trim();
       if(!sha){
         throw new Error(
@@ -91,39 +159,175 @@
         encodeURIComponent(c.repo)+
         '/git/blobs/'+encodeURIComponent(sha);
 
-      const blob=await gh(blobUrl,{},c);
-      encoded=String((blob&&blob.content)||'').replace(/\n/g,'');
+      const blob=await gh(blobUrl,{},c,15000);
+      const encoded=String((blob&&blob.content)||'').replace(/\n/g,'');
 
       if(!encoded){
         throw new Error(
           'NeoChrono found workbook.json in GitHub but GitHub returned an empty blob.'
         );
       }
+
+      data=JSON.parse(b64decodeUtf8(encoded));
     }
 
-    let text='';
-    let data=null;
-    try{
-      text=b64decodeUtf8(encoded);
-      data=JSON.parse(text);
-    }catch(e){
-      throw new Error(
-        'NeoChrono could not parse workbook.json from GitHub. '+
-        'The stored workbook may be incomplete or invalid JSON. '+e.message
-      );
+    if(!data||!data.sheets){
+      throw new Error('NeoChrono could not parse workbook.json from GitHub.');
     }
 
-    cache={data,sha:f.sha,loadedAt:Date.now()};
-    return cache;
+    const entry={
+      data:data,
+      sha:String((f&&f.sha)||'')||null,
+      loadedAt:Date.now(),
+      stale:false
+    };
+
+    cache=entry;
+    writePersistentWorkbookCache_(c,entry);
+    return entry;
   }
+
+  async function loadWorkbookFastFromGithub_(c){
+    /*
+     * Read-only mode asks the Contents API for the raw JSON directly. For this
+     * workbook (~864 KB), that avoids the old metadata + blob two-request path.
+     */
+    const raw=await gh(
+      apiUrl(c,c.workbookPath)+'?ref='+encodeURIComponent(c.branch),
+      {headers:{'Accept':'application/vnd.github.raw+json'}},
+      c,
+      10000
+    );
+
+    let data=raw;
+
+    // Defensive compatibility if GitHub returns a normal Contents wrapper.
+    if(raw&&raw.content){
+      data=decodeContentsResponse_(raw);
+    }
+
+    if(!data||!data.sheets){
+      throw new Error('NeoChrono could not read the scheduling workbook from GitHub.');
+    }
+
+    const priorPersistent=readPersistentWorkbookCache_(c);
+    const entry={
+      data:data,
+      sha:(raw&&raw.sha)||((priorPersistent&&priorPersistent.sha)||null),
+      loadedAt:Date.now(),
+      stale:false
+    };
+
+    cache=entry;
+    writePersistentWorkbookCache_(c,entry);
+    return entry;
+  }
+
+  async function loadWorkbook(force=false,fastRead=false){
+    const c=cfg();
+
+    if(
+      cache.data &&
+      !force &&
+      Date.now()-cache.loadedAt<MEMORY_READ_TTL_MS
+    ){
+      return cache;
+    }
+
+    const persistent=readPersistentWorkbookCache_(c);
+    const persistentAge=persistent
+      ? Math.max(0,Date.now()-Number(persistent.savedAt||0))
+      : Infinity;
+
+    /*
+     * If the browser has a recent known-good workbook, read-only actions can
+     * start immediately from it. Refresh GitHub opportunistically in the
+     * background rather than blocking the login/dashboard.
+     */
+    if(
+      fastRead &&
+      !force &&
+      !cache.data &&
+      persistent &&
+      persistentAge<LOCAL_FAST_TTL_MS
+    ){
+      cache={
+        data:persistent.data,
+        sha:persistent.sha,
+        loadedAt:Date.now(),
+        stale:true
+      };
+
+      loadWorkbookFastFromGithub_(c).catch(()=>{});
+      return cache;
+    }
+
+    try{
+      return fastRead
+        ? await loadWorkbookFastFromGithub_(c)
+        : await loadWorkbookExact_(c);
+    }catch(e){
+      /*
+       * Only read-only requests may fall back to local data. Mutations always
+       * require GitHub so a slow/offline connection cannot create unsafe writes.
+       */
+      if(
+        fastRead &&
+        persistent &&
+        persistentAge<LOCAL_FALLBACK_TTL_MS
+      ){
+        cache={
+          data:persistent.data,
+          sha:persistent.sha,
+          loadedAt:Date.now(),
+          stale:true,
+          fallbackReason:e&&e.message?e.message:String(e)
+        };
+        return cache;
+      }
+      throw e;
+    }
+  }
+
   async function saveWorkbook(data,sha,message){
     const c=cfg();
-    const body={message:message||'NeoChrono data update',content:b64encodeUtf8(JSON.stringify(data,null,2)),branch:c.branch};
+
+    if(!sha){
+      const meta=await gh(
+        apiUrl(c,c.workbookPath)+'?ref='+encodeURIComponent(c.branch),
+        {headers:{'Accept':'application/vnd.github+json'}},
+        c,
+        15000
+      );
+      sha=meta&&meta.sha?meta.sha:null;
+    }
+
+    const body={
+      message:message||'NeoChrono data update',
+      content:b64encodeUtf8(JSON.stringify(data,null,2)),
+      branch:c.branch
+    };
+
     if(sha)body.sha=sha;
-    const r=await gh(apiUrl(c,c.workbookPath),{method:'PUT',body:JSON.stringify(body)},c);
-    cache={data,sha:r.content&&r.content.sha?r.content.sha:sha,loadedAt:Date.now()};
+
+    const r=await gh(
+      apiUrl(c,c.workbookPath),
+      {method:'PUT',body:JSON.stringify(body)},
+      c,
+      20000
+    );
+
+    cache={
+      data:data,
+      sha:r.content&&r.content.sha?r.content.sha:sha,
+      loadedAt:Date.now(),
+      stale:false
+    };
+
+    writePersistentWorkbookCache_(c,cache);
     return r;
   }
+
   async function savePublished(payload){
     const c=cfg();let old=null;
     try{old=await gh(apiUrl(c,c.publishedPath)+'?ref='+encodeURIComponent(c.branch),{},c)}catch(e){if(e.status!==404)throw e}
@@ -563,16 +767,49 @@
     googlePtoPollTimer_=setInterval(pollGooglePtoToGithub_,5000);
   }
 
+  function fastReadInvocation_(fn,args){
+    fn=String(fn||'');
+
+    if([
+      'login',
+      'getAppData',
+      'validateConfiguration',
+      'validateSavedSchedule',
+      'preflightScheduleGeneration',
+      'getOpenShiftOverrideSuggestions',
+      'previewBulkOpenShiftOverrides'
+    ].includes(fn)){
+      return true;
+    }
+
+    if(
+      fn==='fillExistingUnfilledShifts' &&
+      String((args||[])[3]||'').toUpperCase()==='PREVIEW'
+    ){
+      return true;
+    }
+
+    return false;
+  }
+
   window.__neoRuntime={
     cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,getEmployeePhotoDataUrl,uploadEmployeePhoto,deleteEmployeePhoto,employeePhotoPath:employeePhotoPath_,
     syncGooglePtoMatrix:syncGooglePtoMatrix_,
     currentBook:()=>currentBook(),
+    workbookCacheStatus:()=>({
+      loaded:!!cache.data,
+      stale:!!cache.stale,
+      loadedAt:cache.loadedAt||0,
+      fallbackReason:cache.fallbackReason||''
+    }),
     markDirty:()=>{if(window.__neoVBook)window.__neoVBook.dirty=true;},
     invoke(fn,args){
       const work=async()=>{
         for(let attempt=0;attempt<4;attempt++){
-          // All scheduling reads start from neochrono-data only.
-          const loaded=await loadWorkbook(true);
+          // Read-only screens reuse/cache the current workbook. Mutations still
+          // force an exact GitHub read with a SHA before they can be saved.
+          const fastRead=fastReadInvocation_(fn,args);
+          const loaded=await loadWorkbook(!fastRead,fastRead);
           const data=clone(loaded.data);
           const book=new VBook(data);window.__neoVBook=book;
 
@@ -634,7 +871,7 @@
               book.dirty &&
               JSON.stringify(book.data)!==JSON.stringify(loaded.data);
 
-            if(actualChanged){
+            if(actualChanged&&!fastRead){
               try{
                 await saveWorkbook(book.data,loaded.sha,'NeoChrono: '+fn);
               }catch(e){
@@ -651,7 +888,17 @@
                 throw e;
               }
             }else{
-              cache={data:book.data,sha:loaded.sha,loadedAt:Date.now()};
+              cache={
+                data:book.data,
+                sha:loaded.sha,
+                loadedAt:Date.now(),
+                stale:!!loaded.stale
+              };
+
+              // Keep the last-known-good read cache warm. Fast/read-only calls
+              // never trigger a GitHub write merely because a backend helper
+              // normalized data in memory.
+              try{writePersistentWorkbookCache_(cfg(),cache)}catch(_e){}
             }
 
             return result;
