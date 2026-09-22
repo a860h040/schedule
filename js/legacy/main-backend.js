@@ -3278,9 +3278,9 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
   }
 
   try{
-    // Preview is read-only. Avoid scanning/writing the full Schedule sheet just
-    // to open the helper; ID repair is needed only when changes are applied.
-    if(apply)ensureUniqueScheduleAssignmentIds_();
+    // Bulk override is a write operation, so verify assignment IDs before
+    // validating and saving the selected rows.
+    ensureUniqueScheduleAssignmentIds_();
 
     const model=loadSchedulingModel_();
     const allRows=readTable_(APP.SHEETS.SCHEDULE);
