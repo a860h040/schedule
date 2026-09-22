@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260922-fastlogin1"></script>
-<script src="js/legacy/main-backend.js?v=20260922-forceoverride4"></script>
+<script src="js/legacy/main-backend.js?v=20260922-forceoverride3"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1167,7 +1167,28 @@ function openFillOpenShiftsHelper_(){
   State.bulkOpenShiftDetailedSuggestions=[];
 
   const month=State.month||firstOfMonth(new Date());
-  const r=onDemandOpenShiftSnapshotForMonth_(month);
+  const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+  const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+
+  const targets=localOpenShiftTargets_().filter(x=>x.date>=start&&x.date<=end);
+
+  const r={
+    ok:true,
+    startDate:start,
+    endDate:end,
+    openCount:targets.length,
+    editableOpenCount:targets.filter(x=>x.actionRequired==='OVERRIDE').length,
+    fillableCount:0,
+    unresolvedCount:targets.filter(x=>x.actionRequired==='OVERRIDE').length,
+    skippedFinalizedCount:targets.filter(x=>x.actionRequired==='UNFINALIZE').length,
+    skippedLockedCount:targets.filter(x=>x.actionRequired==='UNLOCK').length,
+    suggestions:[],
+    unresolved:[],
+    overrideTargets:targets,
+    overrideSuggestions:[],
+    onDemand:true
+  };
+
   renderFillOpenShiftsPreview_(r,month);
 }
 
@@ -1398,7 +1419,7 @@ async function reviewBulkOpenShiftOverrides_(){
   const indexes=selectedOpenShiftOverrideIndexes_();
 
   if(!indexes.length){
-    toast('Select at least one open shift to analyze.','error');
+    toast('Select at least one open shift to override.','error');
     return;
   }
 
@@ -1411,7 +1432,7 @@ async function reviewBulkOpenShiftOverrides_(){
 
   openModal(
     'Analyzing '+indexes.length+' Selected Shift'+(indexes.length===1?'':'s'),
-    '<div class="alert alert-warn"><b>Analyzing selected shifts now…</b><br>NeoChrono is checking only pharmacists who have the required skill for these selected shifts. No other open shifts are being calculated.</div>',
+    '<div class="alert alert-warn"><b>Checking selected shifts only…</b><br>NeoChrono first filters by required skill, then compares only those qualified pharmacists against the scheduling rules.</div>',
     [{label:'Cancel',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'}]
   );
 
