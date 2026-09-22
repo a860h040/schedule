@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260922-fastlogin1"></script>
-<script src="js/legacy/main-backend.js?v=20260922-forceoverride3"></script>
+<script src="js/legacy/main-backend.js?v=20260922-forceoverride4"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1383,7 +1383,10 @@ function updateBulkOverrideCandidateRow_(targetIndex){
         ? '<div class="badge badge-ok" style="margin-top:5px">Has required skill</div>'
         : candidate.coverageOnly
           ? '<div class="badge badge-warn" style="margin-top:5px">OFF-day coverage skill</div>'
-          : '<div class="badge badge-danger" style="margin-top:5px">Missing required skill</div>');
+          : '<div class="badge badge-danger" style="margin-top:5px">Missing required skill</div>')+
+      (candidate.sameDayConflict
+        ? '<div class="badge badge-danger" style="margin-top:5px;margin-left:4px">Already working — last resort</div>'
+        : '');
   }
 
   if(impact){
@@ -1474,7 +1477,10 @@ function renderBulkOpenShiftCandidatePicker_(){
                 '<select id="bulkForceCandidate_'+index+'" class="control" onchange="updateBulkOverrideCandidateRow_('+index+')">'+
                   candidates.map((x,i)=>
                     '<option value="'+i+'">'+
-                      esc(x.pharmacist)+' — '+esc((x.rules||[]).length)+' rule'+((x.rules||[]).length===1?'':'s')+' — '+esc(x.risk||'')+
+                      esc(x.pharmacist)+
+                      (x.sameDayConflict?' — ALREADY WORKING / LAST RESORT':'')+
+                      ' — '+esc((x.rules||[]).length)+' rule'+((x.rules||[]).length===1?'':'s')+
+                      ' — '+esc(x.risk||'')+
                     '</option>'
                   ).join('')+
                 '</select>'+
@@ -1629,7 +1635,7 @@ async function applyBulkOpenShiftOverrides_(){
   if(!confirm(
     'OVERRIDE '+count+' SELECTED SHIFT'+(count===1?'':'S')+'?\n\n'+
     'These assignments will be saved as MANUAL ADMIN OVERRIDES.\n'+
-    'Scheduling-rule violations will NOT block the save.\n'+
+    'Once confirmed, scheduling-rule violations will NOT block the save, including hours, day limits, weekend rules, evening limits, already-scheduled warnings, and time conflicts.\n'+
     'The automatic scheduling rules themselves will NOT be changed.\n\n'+
     'Continue?'
   ))return;
