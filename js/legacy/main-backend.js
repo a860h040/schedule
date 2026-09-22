@@ -2717,10 +2717,54 @@ function openShiftForceRisk_(rules) {
 }
 
 function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
-  return (openRows||[]).map(row=>{
+  openRows=Array.isArray(openRows)?openRows:[];
+  if(!openRows.length)return [];
+
+  /*
+   * PERFORMANCE: build the schedule state ONCE for the entire selected set.
+   * The old implementation rebuilt ~1,500 saved assignments separately for
+   * every open shift and then rescanned the full schedule for every pharmacist.
+   * In the GitHub browser runtime that blocked Chrome's main thread.
+   */
+  const generationIds=new Set(
+    openRows
+      .map(r=>clean_(r['Generation ID']))
+      .filter(id=>id&&id.indexOf('MANUAL_')!==0)
+  );
+
+  const periodRows=generationIds.size
+    ? allRows.filter(r=>generationIds.has(clean_(r['Generation ID']))&&asDate_(r.Date))
+    : allRows.filter(r=>asDate_(r.Date));
+
+  const periodDates=periodRows
+    .map(r=>startOfDay_(asDate_(r.Date)))
+    .filter(Boolean)
+    .sort((a,b)=>a-b);
+
+  const openDates=openRows
+    .map(r=>startOfDay_(asDate_(r.Date)))
+    .filter(Boolean)
+    .sort((a,b)=>a-b);
+
+  const periodStart=periodDates.length
+    ? periodDates[0]
+    : (openDates[0]||startOfDay_(new Date()));
+  const periodEnd=periodDates.length
+    ? periodDates[periodDates.length-1]
+    : (openDates[openDates.length-1]||periodStart);
+
+  const fixedRows=allRows.filter(r=>
+    clean_(r.Status).toUpperCase()!=='UNFILLED' &&
+    clean_(r['Assigned Pharmacist']).toUpperCase()!=='UNFILLED' &&
+    clean_(r.Username)
+  );
+
+  const state=createState_(model,fixedRows,periodStart,periodEnd);
+
+  return openRows.map(row=>{
     const d=startOfDay_(asDate_(row.Date));
     const shiftCode=clean_(row.Shift).toUpperCase();
-    const shift=model.shiftMap[shiftCode];
+    const shift=model.shiftMap[shiftCode]||model.shiftMap[clean_(row.Shift)];
     const assignmentId=clean_(row['Assignment ID']);
     const slotNumber=num_(row.Slot,1);
 
@@ -2754,32 +2798,6 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
       base.actionMessage='The shift definition or date is invalid, so NeoChrono cannot build an override recommendation.';
       return base;
     }
-
-    const manualPeriod=resolveManualSchedulePeriod_(
-      {
-        assignmentId:assignmentId,
-        generationId:clean_(row['Generation ID']),
-        date:base.date,
-        shift:shiftCode,
-        slot:slotNumber
-      },
-      allRows,
-      d,
-      model
-    );
-
-    const baseSchedule=allRows.filter(r=>
-      clean_(r['Assignment ID'])!==assignmentId &&
-      clean_(r.Status).toUpperCase()!=='UNFILLED' &&
-      clean_(r['Assigned Pharmacist']).toUpperCase()!=='UNFILLED'
-    );
-
-    const state=createState_(
-      model,
-      baseSchedule,
-      manualPeriod.start,
-      manualPeriod.end
-    );
 
     const slot={
       generationId:clean_(row['Generation ID'])||'MANUAL',
@@ -2846,23 +2864,17 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
         warnings.push(coverage.message);
       }
 
-      const hoursSummary=manualAssignmentHoursSummary_(
+      const hoursSummary=openShiftProjectedHoursFromState_(
         u,
         shift,
         d,
-        allRows,
-        assignmentId,
-        manualPeriod,
+        state,
         model
       );
 
       let overrideCost=rules.reduce((sum,x)=>sum+num_(x.weight,0),0);
       overrideCost+=warnings.length*60;
 
-      /*
-       * A true skill match is always preferred over forcing someone who lacks
-       * the required competency. Home/preferred-shift matches break ties.
-       */
       const hasNormalSkill=hasRequiredSkillForSlot_(u,slot,model);
       if(!hasNormalSkill&&!coverage.applies)overrideCost+=250;
       if(preferredShiftMatches_(u,slot))overrideCost-=20;
@@ -2911,19 +2923,45 @@ function buildOpenShiftForceSuggestions_(openRows,model,allRows) {
 
     if(base.recommended){
       const r=base.recommended;
-      if(!r.rules.length&&!r.warnings.length){
-        base.recommendation=
-          r.pharmacist+' currently passes the scheduling rules. Re-run the safe-fill analysis before forcing an override.';
-      }else{
-        base.recommendation=
-          r.pharmacist+' is the lowest-impact override currently available and would break '+
-          r.rules.length+' rule'+(r.rules.length===1?'':'s')+'.';
-      }
+      base.recommendation=(r.rules||[]).length
+        ? r.pharmacist+' is the lowest-impact override currently available and would break '+r.rules.length+' rule'+(r.rules.length===1?'':'s')+'.'
+        : r.pharmacist+' currently passes the scheduling rules.';
     }else{
       base.recommendation='No active pharmacist is available for an override recommendation.';
     }
 
     return base;
+  });
+}
+
+function getOpenShiftOverrideSuggestions(token,assignmentIds) {
+  requireAdmin_(token);
+  const ids=new Set(
+    (Array.isArray(assignmentIds)?assignmentIds:[])
+      .map(clean_)
+      .filter(Boolean)
+  );
+
+  if(!ids.size){
+    return {ok:false,suggestions:[],message:'Select at least one open shift.'};
+  }
+
+  const allRows=readTable_(APP.SHEETS.SCHEDULE);
+  const rows=allRows.filter(r=>ids.has(clean_(r['Assignment ID'])));
+
+  const missing=[...ids].filter(id=>!rows.some(r=>clean_(r['Assignment ID'])===id));
+  if(missing.length){
+    return {
+      ok:false,
+      suggestions:[],
+      message:missing.length+' selected open shift(s) are no longer present. Refresh the helper and try again.'
+    };
+  }
+
+  const model=loadSchedulingModel_();
+  return serialize_({
+    ok:true,
+    suggestions:buildOpenShiftForceSuggestions_(rows,model,allRows)
   });
 }
 
@@ -3644,26 +3682,39 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
     }));
 
     /*
-     * For shifts that cannot be filled safely, provide an administrator
-     * override recommendation instead of stopping at "blocked".
+     * PERFORMANCE: the first Help Fill Open Shifts click returns only the open
+     * rows that need an override. Candidate/rule analysis is loaded lazily only
+     * after the administrator selects one or more rows.
      */
-    let overrideSuggestions=[];
+    let overrideTargets=[];
     if(!apply){
       const unresolvedIds=new Set(
         unresolved.map(x=>clean_(x.assignmentId)).filter(Boolean)
       );
 
-      const overrideRows=selectedOpen.filter(r=>
-        !!asDate_(r['Finalized At']) ||
-        yes_(r.Locked) ||
-        unresolvedIds.has(clean_(r['Assignment ID']))
-      );
-
-      overrideSuggestions=buildOpenShiftForceSuggestions_(
-        overrideRows,
-        model,
-        allRows
-      );
+      overrideTargets=selectedOpen
+        .filter(r=>
+          !!asDate_(r['Finalized At']) ||
+          yes_(r.Locked) ||
+          unresolvedIds.has(clean_(r['Assignment ID']))
+        )
+        .map(r=>({
+          assignmentId:clean_(r['Assignment ID']),
+          generationId:clean_(r['Generation ID']),
+          date:dateKey_(r.Date),
+          shift:clean_(r.Shift).toUpperCase(),
+          slot:num_(r.Slot,1),
+          requiredSkill:clean_(r['Required Skill']),
+          originalReason:clean_(r.Warning),
+          actionRequired:asDate_(r['Finalized At'])
+            ? 'UNFINALIZE'
+            : (yes_(r.Locked)?'UNLOCK':'OVERRIDE'),
+          actionMessage:asDate_(r['Finalized At'])
+            ? 'Unfinalize this schedule period before overriding this shift.'
+            : (yes_(r.Locked)
+                ? 'Unlock this open shift before overriding it.'
+                : '')
+        }));
     }
 
     return serialize_({
@@ -3680,7 +3731,8 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
       skippedLockedCount:skippedLocked.length,
       suggestions:suggestions,
       unresolved:unresolved,
-      overrideSuggestions:overrideSuggestions,
+      overrideSuggestions:[],
+      overrideTargets:overrideTargets,
       message:apply
         ? plan.length+' existing UNFILLED shift(s) were safely assigned. No existing filled assignment was moved.'
         : plan.length+' of '+editable.length+' editable UNFILLED shift(s) can currently be filled without breaking scheduling rules.'
