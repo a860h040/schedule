@@ -732,7 +732,7 @@
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
-const State={token:'',data:null,page:'dashboard',month:firstOfMonth(new Date()),mustChange:false,availabilityEmployeeId:'',calendarFilters:{employees:['','','','','',''],showUnfilledWithSelected:false,status:'',shift:'',type:'',skill:'',weekendGroup:'',resident:'',preceptor:''}};
+const State={token:'',data:null,page:'dashboard',month:firstOfMonth(new Date()),mustChange:false,availabilityEmployeeId:'',openShiftBackground:null,openShiftBackgroundGeneration:0,calendarFilters:{employees:['','','','','',''],showUnfilledWithSelected:false,status:'',shift:'',type:'',skill:'',weekendGroup:'',resident:'',preceptor:''}};
 
 function $(id){return document.getElementById(id)}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
@@ -763,6 +763,246 @@ async function server(fn,...args){
   }finally{
     showLoading(false);
   }
+}
+
+
+async function backgroundServer_(fn,...args){
+  if(!window.__neoRuntime||typeof window.__neoRuntime.invoke!=='function'){
+    throw new Error('NeoChrono GitHub runtime did not load.');
+  }
+  return await window.__neoRuntime.invoke(fn,args);
+}
+
+function waitForBackgroundIdle_(){
+  return new Promise(resolve=>{
+    if(typeof window.requestIdleCallback==='function'){
+      window.requestIdleCallback(()=>resolve(),{timeout:350});
+    }else{
+      setTimeout(resolve,40);
+    }
+  });
+}
+
+function localOpenShiftTargets_(){
+  if(!State.data)return [];
+
+  const rows=(State.data.schedule||[]).filter(r=>{
+    const status=String(r.Status||'').toUpperCase();
+    const assigned=String(r['Assigned Pharmacist']||'').toUpperCase();
+    return status!=='CANCELLED'&&(status==='UNFILLED'||assigned==='UNFILLED');
+  });
+
+  const shiftMap={};
+  (State.data.shifts||[]).forEach(s=>{
+    shiftMap[String(s.Shift||'').toUpperCase()]=s;
+  });
+
+  const today=dateKey(new Date());
+
+  return rows.map(r=>{
+    const code=String(r.Shift||'').toUpperCase();
+    const shift=shiftMap[code]||{};
+    const finalized=!!String(r['Finalized At']||'').trim();
+    const locked=yes(r.Locked);
+
+    return {
+      assignmentId:String(r['Assignment ID']||''),
+      generationId:String(r['Generation ID']||''),
+      date:String(r.Date||'').slice(0,10),
+      shift:code,
+      slot:Number(r.Slot||1),
+      requiredSkill:String(r['Required Skill']||shift.Skill||''),
+      originalReason:String(r.Warning||''),
+      actionRequired:finalized?'UNFINALIZE':(locked?'UNLOCK':'OVERRIDE'),
+      actionMessage:finalized
+        ?'Unfinalize this schedule period before overriding this shift.'
+        :(locked?'Unlock this open shift before overriding it.':'')
+    };
+  }).filter(x=>x.assignmentId&&x.date).sort((a,b)=>{
+    const af=a.date>=today?0:1;
+    const bf=b.date>=today?0:1;
+    return af-bf||a.date.localeCompare(b.date)||a.shift.localeCompare(b.shift)||a.slot-b.slot;
+  });
+}
+
+function openShiftBackgroundSnapshotForMonth_(month){
+  const bg=State.openShiftBackground||{
+    status:'idle',
+    total:0,
+    done:0,
+    byId:{},
+    targets:[]
+  };
+
+  const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+  const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+
+  const targets=(bg.targets||[])
+    .filter(x=>x.date>=start&&x.date<=end)
+    .map(target=>{
+      const detail=(bg.byId||{})[target.assignmentId];
+      return detail?{...target,...detail}:target;
+    });
+
+  const analyzed=targets.filter(x=>(bg.byId||{})[x.assignmentId]).length;
+  const pending=Math.max(0,targets.length-analyzed);
+
+  return {
+    ok:true,
+    startDate:start,
+    endDate:end,
+    openCount:targets.length,
+    editableOpenCount:targets.filter(x=>x.actionRequired==='OVERRIDE').length,
+    fillableCount:0,
+    unresolvedCount:targets.filter(x=>x.actionRequired==='OVERRIDE').length,
+    skippedFinalizedCount:targets.filter(x=>x.actionRequired==='UNFINALIZE').length,
+    skippedLockedCount:targets.filter(x=>x.actionRequired==='UNLOCK').length,
+    suggestions:[],
+    unresolved:[],
+    overrideTargets:targets,
+    overrideSuggestions:targets.filter(x=>(bg.byId||{})[x.assignmentId]),
+    background:{
+      status:bg.status||'idle',
+      total:bg.total||0,
+      done:bg.done||0,
+      monthTotal:targets.length,
+      monthAnalyzed:analyzed,
+      monthPending:pending,
+      startedAt:bg.startedAt||0,
+      completedAt:bg.completedAt||0,
+      error:bg.error||''
+    }
+  };
+}
+
+function refreshOpenShiftBackgroundIndicator_(){
+  const bg=State.openShiftBackground;
+  const el=$('openShiftBackgroundProgress');
+  if(!bg||!el)return;
+
+  const month=State.month||firstOfMonth(new Date());
+  const snap=openShiftBackgroundSnapshotForMonth_(month);
+  const m=snap.background||{};
+
+  if(m.status==='ready'){
+    el.className='alert alert-ok';
+    el.innerHTML='<b>Background analysis ready.</b><br>'+esc(m.monthAnalyzed)+' of '+esc(m.monthTotal)+' open shifts in '+esc(monthTitle(month))+' are ready for review.';
+  }else if(m.status==='error'){
+    el.className='alert alert-danger';
+    el.innerHTML='<b>Background analysis paused.</b><br>'+esc(m.error||'An unexpected error occurred.');
+  }else{
+    el.className='alert alert-warn';
+    el.innerHTML='<b>Background analysis running…</b><br>'+esc(m.monthAnalyzed)+' of '+esc(m.monthTotal)+' open shifts in '+esc(monthTitle(month))+' are ready. You can close this window and use other parts of NeoChrono.';
+  }
+}
+
+async function startOpenShiftBackgroundAnalysis_(force=false){
+  if(!State.data||!State.token||!State.data.isAdmin)return;
+
+  const existing=State.openShiftBackground;
+  if(existing&&existing.status==='running'&&!force)return;
+  if(existing&&existing.status==='ready'&&!force)return;
+
+  const generation=++State.openShiftBackgroundGeneration;
+  const targets=localOpenShiftTargets_();
+  const overrideTargets=targets.filter(x=>x.actionRequired==='OVERRIDE');
+
+  State.openShiftBackground={
+    generation:generation,
+    status:overrideTargets.length?'running':'ready',
+    targets:targets,
+    byId:{},
+    total:overrideTargets.length,
+    done:0,
+    startedAt:Date.now(),
+    completedAt:overrideTargets.length?0:Date.now(),
+    error:''
+  };
+
+  refreshOpenShiftBackgroundIndicator_();
+
+  if(!overrideTargets.length)return;
+
+  /*
+   * Small batches keep the browser responsive. Each batch uses the skill-first
+   * backend, so pharmacists without the required skill are never evaluated.
+   */
+  const BATCH_SIZE=3;
+
+  try{
+    for(let i=0;i<overrideTargets.length;i+=BATCH_SIZE){
+      if(
+        !State.openShiftBackground ||
+        State.openShiftBackground.generation!==generation ||
+        State.token===''
+      ){
+        return;
+      }
+
+      await waitForBackgroundIdle_();
+
+      const batch=overrideTargets.slice(i,i+BATCH_SIZE);
+      const ids=batch.map(x=>x.assignmentId);
+
+      const r=await backgroundServer_(
+        'getOpenShiftOverrideSuggestions',
+        State.token,
+        ids
+      );
+
+      if(
+        !State.openShiftBackground ||
+        State.openShiftBackground.generation!==generation
+      ){
+        return;
+      }
+
+      if(!r||!r.ok){
+        throw new Error((r&&r.message)||'Could not analyze open shifts.');
+      }
+
+      (r.suggestions||[]).forEach(item=>{
+        if(item&&item.assignmentId){
+          State.openShiftBackground.byId[String(item.assignmentId)]=item;
+        }
+      });
+
+      State.openShiftBackground.done=Math.min(
+        State.openShiftBackground.total,
+        i+batch.length
+      );
+
+      refreshOpenShiftBackgroundIndicator_();
+
+      // Give clicks, scrolling, navigation, and painting a chance between jobs.
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+
+    if(
+      State.openShiftBackground &&
+      State.openShiftBackground.generation===generation
+    ){
+      State.openShiftBackground.status='ready';
+      State.openShiftBackground.completedAt=Date.now();
+      refreshOpenShiftBackgroundIndicator_();
+      toast('Open-shift analysis is ready','success');
+    }
+  }catch(e){
+    if(
+      State.openShiftBackground &&
+      State.openShiftBackground.generation===generation
+    ){
+      State.openShiftBackground.status='error';
+      State.openShiftBackground.error=e&&e.message?e.message:String(e);
+      refreshOpenShiftBackgroundIndicator_();
+    }
+  }
+}
+
+function restartOpenShiftBackgroundAnalysis_(){
+  State.openShiftBackgroundGeneration++;
+  State.openShiftBackground=null;
+  setTimeout(()=>startOpenShiftBackgroundAnalysis_(true),120);
 }
 
 $('loginForm').addEventListener('submit',async e=>{
@@ -806,9 +1046,55 @@ $('loginForm').addEventListener('submit',async e=>{
 
 window.addEventListener('load',async()=>{const t=sessionStorage.getItem('rxSchedulerToken');if(t){State.token=t;try{await loadApp()}catch(e){sessionStorage.removeItem('rxSchedulerToken');State.token=''}}});
 
-async function loadApp(){State.data=await server('getAppData',State.token);if(String(State.data.version||'')!==EXPECTED_BACKEND_VERSION)throw new Error('Frontend/backend version mismatch. Expected '+EXPECTED_BACKEND_VERSION+' but received '+String(State.data.version||'unknown')+'. Redeploy both files together.');$('loginView').classList.add('hidden');$('appView').classList.remove('hidden');$('versionText').textContent='v'+State.data.version;$('sideUserName').textContent=State.data.user['Pharmacist Name']||State.data.user.Username;$('sideUserRole').textContent=State.data.user.Role||'';const db=State.data.database||{};$('sideDbName').innerHTML=db.url?'<a href=\"'+attr(db.url)+'\" target=\"_blank\" style=\"color:#9fb4c0;text-decoration:underline\">Sheet: '+esc(db.name||db.id||'database')+'</a>':('Sheet: '+esc(db.name||db.id||'unknown'));buildNav();renderPage(State.page)}
-async function refreshData(keepPage=true){State.data=await server('getAppData',State.token);if(keepPage)renderPage(State.page)}
-async function logoutApp(){try{await server('logout',State.token)}catch(e){}sessionStorage.removeItem('rxSchedulerToken');State.token='';State.data=null;$('appView').classList.add('hidden');$('loginView').classList.remove('hidden');$('loginPassword').value=''}
+async function loadApp(){
+  State.data=await server('getAppData',State.token);
+
+  if(String(State.data.version||'')!==EXPECTED_BACKEND_VERSION){
+    throw new Error('Frontend/backend version mismatch. Expected '+EXPECTED_BACKEND_VERSION+' but received '+String(State.data.version||'unknown')+'. Redeploy both files together.');
+  }
+
+  $('loginView').classList.add('hidden');
+  $('appView').classList.remove('hidden');
+  $('versionText').textContent='v'+State.data.version;
+  $('sideUserName').textContent=State.data.user['Pharmacist Name']||State.data.user.Username;
+  $('sideUserRole').textContent=State.data.user.Role||'';
+
+  const db=State.data.database||{};
+  $('sideDbName').innerHTML=db.url
+    ?'<a href="'+attr(db.url)+'" target="_blank" style="color:#9fb4c0;text-decoration:underline">Sheet: '+esc(db.name||db.id||'database')+'</a>'
+    :('Sheet: '+esc(db.name||db.id||'unknown'));
+
+  buildNav();
+  renderPage(State.page);
+
+  /*
+   * Trigger requested by the administrator: start Help Fill Open Shifts
+   * calculations automatically after a successful login. Do not await this.
+   */
+  setTimeout(()=>startOpenShiftBackgroundAnalysis_(true),150);
+}
+
+async function refreshData(keepPage=true){
+  State.data=await server('getAppData',State.token);
+  if(keepPage)renderPage(State.page);
+
+  // Schedule/PTO/skill changes make prior recommendations stale.
+  if(State.data&&State.data.isAdmin){
+    restartOpenShiftBackgroundAnalysis_();
+  }
+}
+
+async function logoutApp(){
+  State.openShiftBackgroundGeneration++;
+  State.openShiftBackground=null;
+  try{await server('logout',State.token)}catch(e){}
+  sessionStorage.removeItem('rxSchedulerToken');
+  State.token='';
+  State.data=null;
+  $('appView').classList.add('hidden');
+  $('loginView').classList.remove('hidden');
+  $('loginPassword').value='';
+}
 
 function buildNav(){
   let h='<div class="section">Schedule</div>'+navBtn('dashboard','▦','Dashboard')+navBtn('calendar','▣','Calendar')+navBtn('paperschedule','▤','Paper Schedule')+navBtn('weeklyavailability','◷','Weekly Availability');
@@ -1064,33 +1350,22 @@ function renderDashboard(){
   }
   $('content').innerHTML=html;
 }
-async function openFillOpenShiftsHelper_(){
+function openFillOpenShiftsHelper_(){
   State.openShiftOverrideSelected={};
   State.bulkOpenShiftSelection=[];
   State.bulkOpenShiftFinal=null;
   State.bulkOpenShiftOverrideReason='';
 
   const month=State.month||firstOfMonth(new Date());
-  const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
-  const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
 
-  openModal(
-    'Help Fill Open Shifts — '+monthTitle(month),
-    '<div class="alert alert-warn"><b>Analyzing open shifts…</b><br>NeoChrono first identifies only pharmacists who have the required skill for each open shift. It then compares that short list against PTO, availability, hours, weekend rotation, consecutive days, evening-to-morning transitions, resident/preceptor rules, and existing assignments.</div>',
-    [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
-  );
-
-  try{
-    const r=await server('fillExistingUnfilledShifts',State.token,start,end,'PREVIEW');
-    renderFillOpenShiftsPreview_(r,month);
-  }catch(e){
-    openModal(
-      'Help Fill Open Shifts — '+monthTitle(month),
-      '<div class="alert alert-danger"><b>Could not analyze open shifts.</b><br>'+esc(e.message)+'</div>',
-      [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
-    );
+  if(!State.openShiftBackground){
+    startOpenShiftBackgroundAnalysis_(true);
   }
+
+  const r=openShiftBackgroundSnapshotForMonth_(month);
+  renderFillOpenShiftsPreview_(r,month);
 }
+
 
 function overrideRiskBadge_(risk){
   const r=String(risk||'MODERATE').toUpperCase();
@@ -1127,6 +1402,7 @@ function overrideHoursImpactHtml_(hours){
 function renderFillOpenShiftsPreview_(r,month){
   const suggestions=r.suggestions||[];
   const unresolved=r.unresolved||[];
+  const bg=r.background||{};
   const overrides=(r.overrideTargets&&r.overrideTargets.length)
     ? r.overrideTargets
     : (r.overrideSuggestions||[]);
@@ -1141,11 +1417,12 @@ function renderFillOpenShiftsPreview_(r,month){
   const overrideableCount=overrides.filter(x=>x&&x.actionRequired==='OVERRIDE').length;
 
   let body=
-    '<div class="alert '+alertClass+'">'+
-      '<b>'+esc(safeCount)+' rule-compliant match'+(safeCount===1?'':'es')+' found.</b><br>'+
-      (safeCount
-        ? 'Safe matches can be filled without moving or replacing any existing filled assignment.'
-        : 'These open shifts need administrator review. Select only the shifts you want NeoChrono to analyze for an override.')+
+    '<div id="openShiftBackgroundProgress" class="alert '+(bg.status==='ready'?'alert-ok':bg.status==='error'?'alert-danger':'alert-warn')+'">'+
+      (bg.status==='ready'
+        ? '<b>Background analysis ready.</b><br>'+esc(bg.monthAnalyzed||0)+' of '+esc(bg.monthTotal||0)+' open shifts in '+esc(monthTitle(month))+' are ready for review.'
+        : bg.status==='error'
+          ? '<b>Background analysis paused.</b><br>'+esc(bg.error||'An unexpected error occurred.')
+          : '<b>Background analysis running…</b><br>'+esc(bg.monthAnalyzed||0)+' of '+esc(bg.monthTotal||0)+' open shifts in '+esc(monthTitle(month))+' are ready. You can close this window and continue using NeoChrono.')+
     '</div>';
 
   body+=
@@ -1179,32 +1456,50 @@ function renderFillOpenShiftsPreview_(r,month){
   if(overrides.length){
     body+=
       '<div class="section-title mt12">'+
-        '<div><h3>Open shifts needing override</h3><p>Select one or multiple shifts first. Candidate/rule analysis runs only for your selection, which keeps this page fast.</p></div>'+
+        '<div><h3>Open shifts</h3><p>Recommendations are calculated after login in the background. Select one or multiple shifts to review or override.</p></div>'+
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
           (overrideableCount
             ? '<label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input id="openShiftOverrideSelectAll" type="checkbox" onchange="toggleAllOpenShiftOverrides_(this.checked)"> Select all</label>'+
-              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Analyze Selected (0)</button>'
+              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Review Selected (0)</button>'
             : '')+
         '</div>'+
       '</div>'+
-      '<div class="alert alert-warn"><b>Faster workflow:</b> NeoChrono first filters by the shift\'s required skill, so pharmacists without that skill are never sent through the open-shift rule analysis. Select the shifts you want to override, then choose <b>Analyze Selected</b>.</div>'+
-      '<div class="table-wrap" style="max-height:440px;overflow:auto">'+
+      '<div class="table-wrap" style="max-height:460px;overflow:auto">'+
         '<table class="table">'+
-          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Current reason</th><th>Status</th></tr></thead>'+
+          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Best match</th><th>Rule impact</th><th>Status</th></tr></thead>'+
           '<tbody>'+
             overrides.map((x,i)=>{
               const canOverride=x.actionRequired==='OVERRIDE';
+              const cand=x.recommended||null;
+              const rules=cand?(cand.rules||[]):[];
+
               return '<tr>'+
                 '<td>'+(canOverride?'<input class="open-shift-override-check" data-index="'+i+'" type="checkbox" onchange="toggleOpenShiftOverrideSelection_('+i+',this.checked)">':'')+'</td>'+
                 '<td>'+esc(fmtDate(x.date))+'</td>'+
                 '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+
                   '<div class="small muted">Skill: '+esc(x.requiredSkill||'—')+'</div></td>'+
-                '<td class="small">'+esc(x.originalReason||'Requires administrator override analysis')+'</td>'+
                 '<td>'+
-                  (canOverride
-                    ? '<span class="badge badge-warn">Ready to analyze</span>'
-                    : '<span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span>'+
-                      (x.actionMessage?'<div class="small muted" style="margin-top:4px">'+esc(x.actionMessage)+'</div>':''))+
+                  (cand
+                    ? '<b>'+esc(cand.pharmacist||'—')+'</b><div style="margin-top:4px">'+overrideRiskBadge_(cand.risk)+'</div>'
+                    : canOverride
+                      ? '<span class="muted">Background analyzing…</span>'
+                      : '<span class="muted">—</span>')+
+                '</td>'+
+                '<td>'+
+                  (cand
+                    ? (rules.length
+                        ? rules.slice(0,3).map(rule=>'<span class="badge '+((rule.risk==='HIGH'||rule.risk==='CRITICAL')?'badge-danger':'badge-warn')+'" style="margin:2px 3px 2px 0">'+esc(rule.label)+'</span>').join('')+
+                          (rules.length>3?'<span class="small muted"> +'+esc(rules.length-3)+' more</span>':'')
+                        : '<span class="badge badge-ok">No hard rule violations</span>')
+                    : '<span class="small muted">'+esc(x.originalReason||'Waiting for background analysis')+'</span>')+
+                '</td>'+
+                '<td>'+
+                  (!canOverride
+                    ? '<span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span>'+
+                      (x.actionMessage?'<div class="small muted" style="margin-top:4px">'+esc(x.actionMessage)+'</div>':'')
+                    : cand
+                      ? '<span class="badge badge-ok">Ready</span>'
+                      : '<span class="badge badge-warn">Calculating</span>')+
                 '</td>'+
               '</tr>';
             }).join('')+
@@ -1377,14 +1672,28 @@ async function reviewBulkOpenShiftOverrides_(){
 
   State.bulkOpenShiftSelection=indexes.slice();
 
-  const ids=indexes
-    .map(index=>bulkOverrideTargetForIndex_(index))
-    .filter(Boolean)
-    .map(item=>item.assignmentId);
+  const bg=State.openShiftBackground||{byId:{}};
+  const cached=[];
+  const missingIds=[];
+
+  indexes.forEach(index=>{
+    const target=bulkOverrideTargetForIndex_(index);
+    if(!target)return;
+    const detail=(bg.byId||{})[target.assignmentId];
+    if(detail)cached.push(detail);
+    else missingIds.push(target.assignmentId);
+  });
+
+  State.bulkOpenShiftDetailedSuggestions=cached.slice();
+
+  if(!missingIds.length){
+    renderBulkOpenShiftCandidatePicker_();
+    return;
+  }
 
   openModal(
-    'Analyzing '+indexes.length+' Selected Shift'+(indexes.length===1?'':'s'),
-    '<div class="alert alert-warn"><b>Checking pharmacist options…</b><br>NeoChrono is analyzing only the shifts you selected. This can take a moment for a large selection, but the initial Help Fill Open Shifts window no longer performs this work.</div>',
+    'Finishing '+missingIds.length+' Shift'+(missingIds.length===1?'':'s'),
+    '<div class="alert alert-warn"><b>Background analysis is still working.</b><br>NeoChrono is finishing only the selected shift(s) that are not ready yet. You can cancel and come back later if you do not want to wait.</div>',
     [{label:'Cancel',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'}]
   );
 
@@ -1392,20 +1701,29 @@ async function reviewBulkOpenShiftOverrides_(){
     const r=await server(
       'getOpenShiftOverrideSuggestions',
       State.token,
-      ids
+      missingIds
     );
 
     if(!r||!r.ok){
       throw new Error((r&&r.message)||'Could not analyze the selected open shifts.');
     }
 
-    State.bulkOpenShiftDetailedSuggestions=r.suggestions||[];
+    const fresh=r.suggestions||[];
+
+    fresh.forEach(item=>{
+      if(item&&item.assignmentId&&State.openShiftBackground){
+        State.openShiftBackground.byId[String(item.assignmentId)]=item;
+      }
+    });
+
+    State.bulkOpenShiftDetailedSuggestions=cached.concat(fresh);
     renderBulkOpenShiftCandidatePicker_();
   }catch(e){
     toast(e.message,'error');
     returnToFillOpenShiftPreview_();
   }
 }
+
 
 function renderBulkOpenShiftCandidatePicker_(){
   const indexes=State.bulkOpenShiftSelection||[];
