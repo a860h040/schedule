@@ -3303,28 +3303,17 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
     let allRows=readTable_(APP.SHEETS.SCHEDULE);
 
     /*
-     * Evaluate the selections only to capture the rule warnings shown to the
-     * administrator. IMPORTANT: the result is NOT a save gate. Once the admin
-     * confirms Override, scheduling-rule violations must not block the write.
+     * FORCE OVERRIDE MODE:
+     * The administrator already reviewed the impact before reaching Confirm.
+     * Do NOT run eligibility/rule evaluation again here. Re-evaluating at save
+     * time can only introduce another blocker and defeats the meaning of an
+     * explicit administrator override.
+     *
+     * Only structural requirements remain: the target row, pharmacist record,
+     * date, and shift definition must exist so a valid Schedule row can be
+     * written. Hours/weekend/PTO/consecutive-day/transition/etc. rules are
+     * warnings, never save gates.
      */
-    let evaluation={ok:false,items:[]};
-    try{
-      evaluation=evaluateBulkOpenShiftOverrides_(selections,model,allRows);
-    }catch(_evaluationError){
-      evaluation={ok:false,items:[]};
-    }
-
-    const evaluatedById={};
-    (evaluation.items||[]).forEach(item=>{
-      if(item&&item.assignmentId){
-        evaluatedById[clean_(item.assignmentId)]=item;
-      }
-    });
-
-    const selectedIds=new Set(
-      selections.map(s=>clean_(s&&s.assignmentId)).filter(Boolean)
-    );
-
     const applied=[];
 
     selections.forEach((selection,index)=>{
@@ -3388,12 +3377,8 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
         );
       }
 
-      const info=
-        evaluatedById[assignmentId] ||
-        evaluatedById[clean_(selection.assignmentId)] ||
-        null;
-
-      const coverage=(info&&info.coverage)||{};
+      const info=null;
+      const coverage={};
 
       const warningParts=[
         'ADMIN FORCE OVERRIDE: '+overrideReason,
@@ -3478,8 +3463,8 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
         slot:num_(selection.slot,current.Slot||1),
         username:clean_(u.Username),
         pharmacist:clean_(u['Pharmacist Name']),
-        reasonCodes:info?(info.reasonCodes||[]):[],
-        rules:info?(info.rules||[]):[],
+        reasonCodes:[],
+        rules:[],
         warnings:info?(info.warnings||[]):[]
       });
     });
