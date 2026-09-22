@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260921-forceopen2"></script>
+<script src="js/legacy/main-backend.js?v=20260922-bulkoverride1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1065,6 +1065,11 @@ function renderDashboard(){
   $('content').innerHTML=html;
 }
 async function openFillOpenShiftsHelper_(){
+  State.openShiftOverrideSelected={};
+  State.bulkOpenShiftSelection=[];
+  State.bulkOpenShiftFinal=null;
+  State.bulkOpenShiftOverrideReason='';
+
   const month=State.month||firstOfMonth(new Date());
   const start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
   const end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
@@ -1126,9 +1131,11 @@ function renderFillOpenShiftsPreview_(r,month){
 
   State.fillOpenShiftPreviewResult=r;
   State.openShiftOverrideSuggestions=overrides;
+  State.openShiftOverrideSelected=State.openShiftOverrideSelected||{};
 
   const safeCount=Number(r.fillableCount||0);
   const alertClass=safeCount?'alert-ok':'alert-warn';
+  const overrideableCount=overrides.filter(x=>x&&x.actionRequired==='OVERRIDE'&&x.recommended).length;
 
   let body=
     '<div class="alert '+alertClass+'">'+
@@ -1168,15 +1175,24 @@ function renderFillOpenShiftsPreview_(r,month){
 
   if(overrides.length){
     body+=
-      '<div class="section-title mt12"><div><h3>Administrator override options</h3><p>NeoChrono ranks the least disruptive option first. Review the broken rules before forcing any assignment.</p></div></div>'+
-      '<div class="alert alert-warn"><b>Important:</b> These assignments do <u>not</u> satisfy the normal scheduler rules. The automatic scheduler remains unchanged. An administrator override is saved as a manual assignment with the broken rules and override reason in the audit trail.</div>'+
-      '<div class="table-wrap" style="max-height:420px;overflow:auto">'+
+      '<div class="section-title mt12">'+
+        '<div><h3>Administrator override options</h3><p>Select one or several open shifts. NeoChrono will evaluate the selected overrides together before anything is saved.</p></div>'+
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+          (overrideableCount
+            ? '<label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input id="openShiftOverrideSelectAll" type="checkbox" onchange="toggleAllOpenShiftOverrides_(this.checked)"> Select all</label>'+
+              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Override Selected (0)</button>'
+            : '')+
+        '</div>'+
+      '</div>'+
+      '<div class="alert alert-warn"><b>Important:</b> These assignments do <u>not</u> satisfy the normal scheduler rules. The automatic scheduler remains unchanged. Bulk override re-checks the selected shifts together so later selections include workload/conflicts created by earlier selections.</div>'+
+      '<div class="table-wrap" style="max-height:440px;overflow:auto">'+
         '<table class="table">'+
-          '<thead><tr><th>Date</th><th>Shift</th><th>Lowest-impact option</th><th>Rules that would be broken</th><th>Projected impact</th><th></th></tr></thead>'+
+          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Lowest-impact option</th><th>Rules that would be broken</th><th>Projected impact</th><th></th></tr></thead>'+
           '<tbody>'+
             overrides.map((x,i)=>{
               if(x.actionRequired!=='OVERRIDE'){
                 return '<tr>'+
+                  '<td></td>'+
                   '<td>'+esc(fmtDate(x.date))+'</td>'+
                   '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
                   '<td colspan="3"><span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span> '+esc(x.actionMessage||'This shift cannot be overridden yet.')+'</td>'+
@@ -1191,6 +1207,7 @@ function renderFillOpenShiftsPreview_(r,month){
                 : ((cand.warnings||[]).length?'Scheduler warning only':'No rule violations');
 
               return '<tr>'+
+                '<td><input class="open-shift-override-check" data-index="'+i+'" type="checkbox" onchange="toggleOpenShiftOverrideSelection_('+i+',this.checked)"></td>'+
                 '<td>'+esc(fmtDate(x.date))+'</td>'+
                 '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+
                   '<div class="small muted">Skill: '+esc(x.requiredSkill||'—')+'</div></td>'+
@@ -1208,7 +1225,7 @@ function renderFillOpenShiftsPreview_(r,month){
                       : '<div class="badge badge-danger" style="margin-top:5px">Missing required skill</div>')+
                 '</td>'+
                 '<td>'+overrideHoursImpactHtml_(cand.hoursSummary)+'</td>'+
-                '<td><button type="button" class="btn btn-warning btn-sm" onclick="reviewOpenShiftOverride_('+i+')">Review Override</button></td>'+
+                '<td><button type="button" class="btn btn-warning btn-sm" onclick="reviewOpenShiftOverride_('+i+')">Review One</button></td>'+
               '</tr>';
             }).join('')+
           '</tbody>'+
@@ -1257,7 +1274,321 @@ function renderFillOpenShiftsPreview_(r,month){
     body,
     buttons
   );
+
+  syncOpenShiftOverrideSelectionUI_();
 }
+
+function selectedOpenShiftOverrideIndexes_(){
+  const selected=State.openShiftOverrideSelected||{};
+  return Object.keys(selected)
+    .filter(k=>selected[k])
+    .map(k=>Number(k))
+    .filter(i=>Number.isInteger(i))
+    .filter(i=>{
+      const item=(State.openShiftOverrideSuggestions||[])[i];
+      return item&&item.actionRequired==='OVERRIDE'&&item.recommended;
+    })
+    .sort((a,b)=>a-b);
+}
+
+function toggleOpenShiftOverrideSelection_(index,checked){
+  State.openShiftOverrideSelected=State.openShiftOverrideSelected||{};
+  if(checked)State.openShiftOverrideSelected[String(index)]=true;
+  else delete State.openShiftOverrideSelected[String(index)];
+  syncOpenShiftOverrideSelectionUI_();
+}
+
+function toggleAllOpenShiftOverrides_(checked){
+  State.openShiftOverrideSelected={};
+
+  if(checked){
+    (State.openShiftOverrideSuggestions||[]).forEach((item,index)=>{
+      if(item&&item.actionRequired==='OVERRIDE'&&item.recommended){
+        State.openShiftOverrideSelected[String(index)]=true;
+      }
+    });
+  }
+
+  syncOpenShiftOverrideSelectionUI_();
+}
+
+function syncOpenShiftOverrideSelectionUI_(){
+  const selected=new Set(selectedOpenShiftOverrideIndexes_());
+
+  document.querySelectorAll('.open-shift-override-check').forEach(el=>{
+    const index=Number(el.dataset.index);
+    el.checked=selected.has(index);
+  });
+
+  const overrideable=(State.openShiftOverrideSuggestions||[])
+    .map((item,index)=>({item,index}))
+    .filter(x=>x.item&&x.item.actionRequired==='OVERRIDE'&&x.item.recommended)
+    .map(x=>x.index);
+
+  const all=$('openShiftOverrideSelectAll');
+  if(all){
+    all.checked=overrideable.length>0&&selected.size===overrideable.length;
+    all.indeterminate=selected.size>0&&selected.size<overrideable.length;
+  }
+
+  const btn=$('bulkOverrideSelectedBtn');
+  if(btn){
+    btn.disabled=selected.size===0;
+    btn.textContent='Override Selected ('+selected.size+')';
+  }
+}
+
+function bulkOverrideCandidateForIndex_(shiftIndex){
+  const item=(State.openShiftOverrideSuggestions||[])[Number(shiftIndex)];
+  if(!item)return null;
+
+  const select=$('bulkForceCandidate_'+Number(shiftIndex));
+  const candidateIndex=select?Number(select.value||0):0;
+  return (item.candidates||[])[candidateIndex]||null;
+}
+
+function updateBulkOverrideCandidateRow_(shiftIndex){
+  const candidate=bulkOverrideCandidateForIndex_(shiftIndex);
+  const summary=$('bulkForceSummary_'+Number(shiftIndex));
+  const impact=$('bulkForceImpact_'+Number(shiftIndex));
+
+  if(!candidate)return;
+
+  if(summary){
+    const rules=candidate.rules||[];
+    summary.innerHTML=
+      '<div>'+overrideRiskBadge_(candidate.risk)+'</div>'+
+      '<div class="small" style="margin-top:5px">'+
+        esc(rules.length?rules.map(x=>x.label).join(' · '):'No hard rule violations currently detected')+
+      '</div>'+
+      (candidate.hasNormalSkill
+        ? '<div class="badge badge-ok" style="margin-top:5px">Has required skill</div>'
+        : candidate.coverageOnly
+          ? '<div class="badge badge-warn" style="margin-top:5px">OFF-day coverage skill</div>'
+          : '<div class="badge badge-danger" style="margin-top:5px">Missing required skill</div>');
+  }
+
+  if(impact){
+    impact.innerHTML=overrideHoursImpactHtml_(candidate.hoursSummary);
+  }
+}
+
+function reviewBulkOpenShiftOverrides_(){
+  const indexes=selectedOpenShiftOverrideIndexes_();
+  if(!indexes.length){
+    toast('Select at least one open shift to override.','error');
+    return;
+  }
+
+  State.bulkOpenShiftSelection=indexes.slice();
+
+  const savedReason=String(State.bulkOpenShiftOverrideReason||'');
+
+  const body=
+    '<div class="alert alert-warn">'+
+      '<b>Bulk administrator override</b><br>'+
+      'Choose the pharmacist for each selected open shift. The next step will re-check all selected assignments together before anything is saved.'+
+    '</div>'+
+    '<div class="table-wrap mt12" style="max-height:430px;overflow:auto">'+
+      '<table class="table">'+
+        '<thead><tr><th>Date</th><th>Shift</th><th>Pharmacist</th><th>Current rule impact</th><th>Projected workload</th></tr></thead>'+
+        '<tbody>'+
+          indexes.map(index=>{
+            const item=(State.openShiftOverrideSuggestions||[])[index];
+            const candidates=item.candidates||[];
+
+            return '<tr>'+
+              '<td>'+esc(fmtDate(item.date))+'</td>'+
+              '<td><b>'+esc(item.shift)+'</b>'+(Number(item.slot)>1?' #'+esc(item.slot):'')+
+                '<div class="small muted">Skill: '+esc(item.requiredSkill||'—')+'</div></td>'+
+              '<td>'+
+                '<select id="bulkForceCandidate_'+index+'" class="control" onchange="updateBulkOverrideCandidateRow_('+index+')">'+
+                  candidates.map((x,i)=>
+                    '<option value="'+i+'">'+
+                      esc(x.pharmacist)+' — '+esc((x.rules||[]).length)+' rule'+((x.rules||[]).length===1?'':'s')+' — '+esc(x.risk||'')+
+                    '</option>'
+                  ).join('')+
+                '</select>'+
+              '</td>'+
+              '<td id="bulkForceSummary_'+index+'"></td>'+
+              '<td id="bulkForceImpact_'+index+'"></td>'+
+            '</tr>';
+          }).join('')+
+        '</tbody>'+
+      '</table>'+
+    '</div>'+
+    '<div class="field mt12">'+
+      '<label>Administrator override reason <span style="color:var(--danger)">*</span></label>'+
+      '<textarea id="bulkForceOverrideReason" class="control" rows="3" placeholder="One reason will be saved with every selected override.">'+esc(savedReason)+'</textarea>'+
+    '</div>';
+
+  openModal(
+    'Override '+indexes.length+' Selected Shift'+(indexes.length===1?'':'s'),
+    body,
+    [
+      {label:'Back',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'},
+      {label:'Review Combined Impact',cls:'btn-warning',action:'previewBulkOpenShiftOverrides_()'}
+    ]
+  );
+
+  indexes.forEach(index=>updateBulkOverrideCandidateRow_(index));
+}
+
+async function previewBulkOpenShiftOverrides_(){
+  const indexes=State.bulkOpenShiftSelection||[];
+  const reason=String($('bulkForceOverrideReason')?.value||'').trim();
+
+  if(!indexes.length){
+    toast('No shifts are selected.','error');
+    return;
+  }
+
+  if(!reason){
+    toast('Enter an administrator override reason before continuing.','error');
+    $('bulkForceOverrideReason')?.focus();
+    return;
+  }
+
+  const selections=[];
+
+  for(const index of indexes){
+    const item=(State.openShiftOverrideSuggestions||[])[Number(index)];
+    const candidate=bulkOverrideCandidateForIndex_(index);
+
+    if(!item||!candidate){
+      toast('One of the selected shifts does not have a pharmacist selected.','error');
+      return;
+    }
+
+    selections.push({
+      assignmentId:item.assignmentId,
+      generationId:item.generationId,
+      date:item.date,
+      shift:item.shift,
+      slot:item.slot,
+      username:candidate.username
+    });
+  }
+
+  State.bulkOpenShiftOverrideReason=reason;
+
+  const modalFoot=document.querySelector('.modal-foot');
+  const buttons=modalFoot?[...modalFoot.querySelectorAll('button')]:[];
+  buttons.forEach(b=>b.disabled=true);
+
+  try{
+    const r=await server(
+      'previewBulkOpenShiftOverrides',
+      State.token,
+      selections
+    );
+
+    if(!r||!r.ok){
+      throw new Error(((r&&r.errors)||['Bulk override preview failed.']).join(' '));
+    }
+
+    State.bulkOpenShiftFinal={
+      selections:selections,
+      reason:reason,
+      preview:r
+    };
+
+    const items=r.items||[];
+    const highCount=items.filter(x=>x.risk==='HIGH'||x.risk==='CRITICAL').length;
+
+    let body=
+      '<div class="alert '+(highCount?'alert-danger':'alert-warn')+'">'+
+        '<b>Final combined impact review</b><br>'+
+        'NeoChrono evaluated these '+items.length+' overrides together, in date/shift order. This includes new hour, day, and same-day conflicts created by earlier selected overrides.'+
+        (highCount?'<br><b>'+highCount+' selection'+(highCount===1?' has':'s have')+' HIGH/CRITICAL impact.</b>':'')+
+      '</div>'+
+      '<div class="table-wrap mt12" style="max-height:450px;overflow:auto">'+
+        '<table class="table">'+
+          '<thead><tr><th>Date</th><th>Shift</th><th>Pharmacist</th><th>Final rules broken</th><th>Final projected workload</th></tr></thead>'+
+          '<tbody>'+
+            items.map(item=>{
+              const rules=item.rules||[];
+              return '<tr>'+
+                '<td>'+esc(fmtDate(item.date))+'</td>'+
+                '<td><b>'+esc(item.shift)+'</b>'+(Number(item.slot)>1?' #'+esc(item.slot):'')+'</td>'+
+                '<td><b>'+esc(item.pharmacist)+'</b><div style="margin-top:4px">'+overrideRiskBadge_(item.risk)+'</div></td>'+
+                '<td>'+
+                  (rules.length
+                    ? rules.map(rule=>
+                        '<div class="badge '+((rule.risk==='HIGH'||rule.risk==='CRITICAL')?'badge-danger':'badge-warn')+'" style="margin:2px 3px 2px 0">'+esc(rule.label)+'</div>'
+                      ).join('')
+                    : '<span class="badge badge-ok">No hard rule violations</span>')+
+                  ((item.warnings||[]).length
+                    ? '<div class="small muted" style="margin-top:5px">'+esc((item.warnings||[]).join(' · '))+'</div>'
+                    : '')+
+                '</td>'+
+                '<td>'+overrideHoursImpactHtml_(item.hoursSummary)+'</td>'+
+              '</tr>';
+            }).join('')+
+          '</tbody>'+
+        '</table>'+
+      '</div>'+
+      '<div class="alert alert-warn mt12"><b>Override reason:</b> '+esc(reason)+'</div>';
+
+    openModal(
+      'Confirm '+items.length+' Bulk Override'+(items.length===1?'':'s'),
+      body,
+      [
+        {label:'Back',cls:'btn-secondary',action:'reviewBulkOpenShiftOverrides_()'},
+        {label:'Confirm & Override '+items.length,cls:'btn-warning',action:'applyBulkOpenShiftOverrides_()'}
+      ]
+    );
+  }catch(e){
+    toast(e.message,'error');
+    buttons.forEach(b=>b.disabled=false);
+  }
+}
+
+async function applyBulkOpenShiftOverrides_(){
+  const payload=State.bulkOpenShiftFinal;
+  if(!payload||!payload.selections||!payload.selections.length){
+    toast('The bulk override review expired. Please review the selected shifts again.','error');
+    return;
+  }
+
+  const count=payload.selections.length;
+
+  if(!confirm(
+    'OVERRIDE '+count+' SELECTED SHIFT'+(count===1?'':'S')+'?\n\n'+
+    'These assignments will be saved as MANUAL ADMIN OVERRIDES.\n'+
+    'The automatic scheduling rules will NOT be changed.\n\n'+
+    'Continue?'
+  ))return;
+
+  const modalFoot=document.querySelector('.modal-foot');
+  const buttons=modalFoot?[...modalFoot.querySelectorAll('button')]:[];
+  buttons.forEach(b=>b.disabled=true);
+
+  try{
+    const r=await server(
+      'saveBulkOpenShiftOverrides',
+      State.token,
+      payload.selections,
+      payload.reason
+    );
+
+    closeModal();
+
+    toast(
+      Number(r.appliedCount||0)+' selected open shift'+(Number(r.appliedCount||0)===1?'':'s')+' overridden and assigned',
+      'success'
+    );
+
+    await refreshData(false);
+    renderDashboard();
+
+    await openFillOpenShiftsHelper_();
+  }catch(e){
+    toast(e.message,'error');
+    buttons.forEach(b=>b.disabled=false);
+  }
+}
+
 
 function reviewOpenShiftOverride_(shiftIndex){
   const list=State.openShiftOverrideSuggestions||[];
