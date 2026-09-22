@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260922-fastlogin1"></script>
-<script src="js/legacy/main-backend.js?v=20260922-forceoverride3"></script>
+<script src="js/legacy/main-backend.js?v=20260922-deletecontrols1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -2755,7 +2755,11 @@ function openEmployeeModal(id){
     ['Pharmacist Name','Name','text'],['Active','Active','yn'],['Employment Type','Employment Type','employment'],['Schedule Type','Schedule Type','schedule'],['Weekend Group','Weekend Group','group'],['Weekend Rotation Anchor Date','Weekend Rotation Anchor Date (auto)','readonlydate'],['Weekly Hour Maximum','Weekly Hour Maximum','number'],['Target Weekly Hours','Target Weekly Hours','number'],['Maximum Evening Shifts Per Month','Max Evening Shifts / Month','number'],['Preceptor','Preceptor','yn'],['Resident','Resident','yn'],['Preferred Start Time','Preferred Start Time','time'],['Preferred End Time','Preferred End Time','time'],['Custom Hours Enabled','Custom Hours Enabled','yn'],['Custom Hours Mode','Custom Hours Mode','hardsoft'],['Off-Day Coverage Skills','Off-Day Coverage Skills (comma-separated)','text'],['Weekend Eligible','Weekend Eligible','yn'],['Evening Eligible','Evening Eligible','yn'],['Night Eligible','Night Eligible','yn'],['Resident Covers Regular','Resident Covers Regular','yn'],['Resident Weekends','Resident Weekends','yn'],['Resident Evenings','Resident Evenings','yn'],['Resident Nights','Resident Nights','yn'],['Rotation Anchor Date','7-on/7-off Anchor Date','date'],['SevenOn Weekly Handling','7-on/7-off Weekly Handling','text'],['Notes','Notes','textarea']
   ];
   const body=`<input type="hidden" id="empId" value="${attr(u['Employee ID']||'')}">${employeePhotoEditorHtml_(u)}<div class="alert alert-ok mb12"><b>No pharmacist login is created.</b> Username and password are not required for pharmacists.<br><span class="small">Weekend Rotation Anchor Date is filled automatically from Weekend Group A/B/C when you save.</span><br><span class="small"><b>Off-Day Coverage Skills</b> are coverage-only. Example: IM,CARD,CC1. They do not make this pharmacist eligible for those shifts on normal days.</span></div><div class="form-grid">${fields.map(f=>formField('emp_'+keyId(f[0]),f[1],f[2],u[f[0]]??defaultEmpValue(f[0]))).join('')}</div>`;
-  openModal(id?'Edit Pharmacist':'Add Pharmacist',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save Pharmacist',cls:'btn-primary',action:'saveEmployeeUI()'}]);
+  const buttons=[];
+  if(id)buttons.push({label:'Delete Pharmacist Profile',cls:'btn-danger',action:'deleteEmployeeProfileUI()'});
+  buttons.push({label:'Cancel',cls:'btn-secondary',action:'closeModal()'});
+  buttons.push({label:'Save Pharmacist',cls:'btn-primary',action:'saveEmployeeUI()'});
+  openModal(id?'Edit Pharmacist':'Add Pharmacist',body,buttons);
   if(id)setTimeout(()=>loadEmployeePhotoEditor_(id),0);
 }
 function defaultEmpValue(k){const d={'Active':'Yes','Role':'Pharmacist','Employment Type':'Regular','Schedule Type':'Regular','Weekly Hour Maximum':'40','Target Weekly Hours':'40','Maximum Evening Shifts Per Month':'7','Preceptor':'No','Resident':'No','Custom Hours Enabled':'No','Custom Hours Mode':'SOFT','Weekend Eligible':'Yes','Evening Eligible':'Yes','Night Eligible':'Yes','Resident Covers Regular':'No','Resident Weekends':'No','Resident Evenings':'No','Resident Nights':'No','SevenOn Weekly Handling':'ENFORCE_MAX'};return d[k]||''}
@@ -2766,6 +2770,32 @@ async function saveEmployeeUI(){
   const p={'Employee ID':$('empId').value};
   headers.forEach(h=>p[h]=$('emp_'+keyId(h)).value);
   try{await server('saveEmployee',State.token,p);closeModal();toast('Pharmacist saved','success');await refreshData()}catch(e){toast(e.message,'error')}
+}
+
+async function deleteEmployeeProfileUI(){
+  const employeeId=String(($('empId')&&$('empId').value)||'').trim();
+  if(!employeeId){toast('Save the pharmacist before deleting the profile.','error');return;}
+  const u=(State.data.users||[]).find(x=>String(x['Employee ID']||'')===employeeId);
+  const name=(u&&u['Pharmacist Name'])||'this pharmacist';
+  if(!confirm(
+    'Delete '+name+'\'s pharmacist profile?\n\n'+
+    'This removes the profile from future scheduling. Non-finalized assignments for this pharmacist will become UNFILLED. Finalized schedule history will be kept.'
+  ))return;
+  try{
+    const result=await server('deleteEmployeeProfile',State.token,employeeId);
+    try{
+      if(window.__neoRuntime&&typeof window.__neoRuntime.deleteEmployeePhoto==='function'){
+        await window.__neoRuntime.deleteEmployeePhoto(employeeId);
+      }
+    }catch(_photoError){}
+    closeModal();
+    toast(
+      'Pharmacist profile deleted'+
+      (result&&result.assignmentsUnfilled?'; '+result.assignmentsUnfilled+' draft assignment(s) changed to UNFILLED':''),
+      'success'
+    );
+    await refreshData();
+  }catch(e){toast(e.message,'error')}
 }
 
 function openEmployeeAvailability(employeeId){State.availabilityEmployeeId=employeeId;renderPage('weeklyavailability')}
@@ -3282,7 +3312,7 @@ async function removeSkillUI(u,s){if(!confirm('Remove skill '+s+'?'))return;try{
 
 function renderShifts(){if(!State.data.isAdmin){$('content').innerHTML='<div class="alert alert-danger">Administrator access is required to view Shift Definitions.</div>';return}$('content').innerHTML=`<div class="section-title"><div><h3>Shift definitions</h3><p>Hours are actual duration; Credited Hours controls weekly-hour calculations.</p></div><button class="btn btn-primary" onclick="openShiftModal(null)">+ Add shift</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Shift</th><th>Meaning</th><th>Start</th><th>End</th><th>Hours</th><th>Credited</th><th>Type</th><th>Skill</th><th>Weekend</th><th>Active</th><th>Priority</th><th></th></tr></thead><tbody>${State.data.shifts.map(s=>`<tr><td><b>${esc(s.Shift)}</b></td><td>${esc(s.Meaning)}</td><td>${esc(s.Start)}</td><td>${esc(s.End)}</td><td>${esc(s.Hours)}</td><td>${esc(s['Credited Hours'])}</td><td>${typeBadge(s.Type)}</td><td>${esc(s.Skill)}</td><td>${badgeYN(s.Weekend)}</td><td>${badgeYN(s.Active)}</td><td>${esc(s.Priority)}</td><td><button class="btn btn-secondary btn-sm" onclick="openShiftModal('${attr(s.Shift)}')">Edit</button></td></tr>`).join('')}</tbody></table></div>`}
 function typeBadge(t){const x=String(t||'').toLowerCase();return `<span class="badge ${x==='evening'?'badge-evening':x==='night'?'badge-night':'badge-day'}">${esc(t)}</span>`}
-function openShiftModal(code){const s=code?State.data.shifts.find(x=>x.Shift===code):{};const fields=[['Shift','Shift Code','text'],['Meaning','Meaning','text'],['Start','Start','time'],['End','End','time'],['Hours','Hours','number'],['Credited Hours','Credited Hours','number'],['Type','Type','type'],['Skill','Required Skill','text'],['Weekend','Weekend','yn'],['Active','Active','yn'],['Priority','Priority (lower = earlier)','number']];let body='<div class="form-grid">'+fields.map(f=>shiftField(f[0],f[1],f[2],s[f[0]]??(f[0]==='Active'?'Yes':f[0]==='Priority'?50:''),!!code)).join('')+'</div>';openModal(code?'Edit Shift':'Add Shift',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save Shift',cls:'btn-primary',action:'saveShiftUI()'}])}
+function openShiftModal(code){const s=code?State.data.shifts.find(x=>x.Shift===code):{};const fields=[['Shift','Shift Code','text'],['Meaning','Meaning','text'],['Start','Start','time'],['End','End','time'],['Hours','Hours','number'],['Credited Hours','Credited Hours','number'],['Type','Type','type'],['Skill','Required Skill','text'],['Weekend','Weekend','yn'],['Active','Active','yn'],['Priority','Priority (lower = earlier)','number']];let body='<div class="form-grid">'+fields.map(f=>shiftField(f[0],f[1],f[2],s[f[0]]??(f[0]==='Active'?'Yes':f[0]==='Priority'?50:''),!!code)).join('')+'</div>';const buttons=[];if(code)buttons.push({label:'Remove Shift Type',cls:'btn-danger',action:'removeShiftTypeUI()'});buttons.push({label:'Cancel',cls:'btn-secondary',action:'closeModal()'});buttons.push({label:'Save Shift',cls:'btn-primary',action:'saveShiftUI()'});openModal(code?'Edit Shift':'Add Shift',body,buttons)}
 function shiftField(k,l,t,v,existing){if(t==='type')return `<div class="field"><label>${esc(l)}</label><select id="shift_${keyId(k)}" class="control">${['Day','Evening','Night','Training','Other'].map(x=>`<option ${v===x?'selected':''}>${x}</option>`).join('')}</select></div>`;const h=formField('shift_'+keyId(k),l,t,v);return k==='Shift'&&existing?h.replace('class="control"','class="control" readonly'):h}
 async function saveShiftUI(){
   const keys=['Shift','Meaning','Start','End','Hours','Credited Hours','Type','Skill','Weekend','Active','Priority'],p={};
@@ -3294,6 +3324,27 @@ async function saveShiftUI(){
       r&&r.staffingRequirementCreated
         ? 'Shift saved and added to Staffing with 0 daily requirements'
         : 'Shift saved and synchronized across NeoChrono',
+      'success'
+    );
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
+}
+
+async function removeShiftTypeUI(){
+  const code=String(($('shift_Shift')&&$('shift_Shift').value)||'').trim().toUpperCase();
+  if(!code){toast('Shift code is missing.','error');return;}
+  if(!confirm(
+    'Remove shift type '+code+'?\n\n'+
+    'This removes the shift from Shift Definitions and Staffing Requirements. Non-finalized schedule rows using this shift will be removed. Finalized schedule history will be kept.'
+  ))return;
+  try{
+    const result=await server('removeShiftType',State.token,code);
+    closeModal();
+    toast(
+      'Shift type '+code+' removed'+
+      (result&&result.scheduleRowsRemoved?'; '+result.scheduleRowsRemoved+' draft schedule row(s) removed':''),
       'success'
     );
     await refreshData();
