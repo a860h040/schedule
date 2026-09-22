@@ -2303,7 +2303,8 @@ function refreshUnfilledReasons_(results,model,state) {
 function explainUnfilled_(slot,model,state) {
   const owners=primaryHomeOwnersForSlot_(slot,model);
   if(owners.length===1 && isGeneratedOffDayForHomeOwner_(owners[0],slot,state,model)) {
-    const backups=model.users.filter(u=>yes_(u.Active)&&clean_(u.Username)!==clean_(owners[0].Username)&&hasOffDayCoverageSkillForSlot_(u,slot));
+    const backups=offDaySkillQualifiedUsersForSlot_(slot,model)
+      .filter(u=>clean_(u.Username)!==clean_(owners[0].Username)&&hasOffDayCoverageSkillForSlot_(u,slot));
     if(backups.length){
       const blocked={};
       backups.forEach(u=>{
@@ -3458,7 +3459,9 @@ function fillExistingUnfilledShifts(token,startDate,endDate,mode) {
   }
 
   try{
-    ensureUniqueScheduleAssignmentIds_();
+    // Opening Help Fill Open Shifts is read-only. Do not run the full Schedule
+    // ID migration unless the helper is actually applying changes.
+    if(apply)ensureUniqueScheduleAssignmentIds_();
 
     const model=loadSchedulingModel_();
     const allRows=readTable_(APP.SHEETS.SCHEDULE);
@@ -5021,8 +5024,21 @@ function hasRequiredSkillForSlot_(u,slot,model) {
   // E2 is part of the resident staffing pattern, so residents are considered
   // qualified for E2 even when the separate skill row has not yet been added.
   if (isResidentMandatoryE2_(u,slot,model)) return true;
+
   const skills=model.skillsByUser[clean_(u.Username)];
-  return !!(skills && skills.has(slot.requiredSkill));
+  if(!skills||!skills.size)return false;
+
+  const required=clean_(slot.requiredSkill).toUpperCase();
+
+  // Fast path for standardized skill codes.
+  if(skills.has(slot.requiredSkill)||skills.has(required))return true;
+
+  // Compatibility path for older rows with mixed capitalization.
+  for(const skill of skills){
+    if(clean_(skill).toUpperCase()===required)return true;
+  }
+
+  return false;
 }
 
 function isResidentMandatoryE2_(u,slot,model) {
