@@ -722,7 +722,7 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
 <script src="js/github-legacy-runtime.js?v=20260919-githubflow2"></script>
-<script src="js/legacy/main-backend.js?v=20260922-bulkoverride1"></script>
+<script src="js/legacy/main-backend.js?v=20260922-fillperf2"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -1127,22 +1127,25 @@ function overrideHoursImpactHtml_(hours){
 function renderFillOpenShiftsPreview_(r,month){
   const suggestions=r.suggestions||[];
   const unresolved=r.unresolved||[];
-  const overrides=r.overrideSuggestions||[];
+  const overrides=(r.overrideTargets&&r.overrideTargets.length)
+    ? r.overrideTargets
+    : (r.overrideSuggestions||[]);
 
   State.fillOpenShiftPreviewResult=r;
-  State.openShiftOverrideSuggestions=overrides;
+  State.openShiftOverrideTargets=overrides;
+  State.openShiftOverrideSuggestions=r.overrideSuggestions||[];
   State.openShiftOverrideSelected=State.openShiftOverrideSelected||{};
 
   const safeCount=Number(r.fillableCount||0);
   const alertClass=safeCount?'alert-ok':'alert-warn';
-  const overrideableCount=overrides.filter(x=>x&&x.actionRequired==='OVERRIDE'&&x.recommended).length;
+  const overrideableCount=overrides.filter(x=>x&&x.actionRequired==='OVERRIDE').length;
 
   let body=
     '<div class="alert '+alertClass+'">'+
       '<b>'+esc(safeCount)+' rule-compliant match'+(safeCount===1?'':'es')+' found.</b><br>'+
       (safeCount
         ? 'Safe matches can be filled without moving or replacing any existing filled assignment.'
-        : 'No pharmacist can fill these shifts without breaking at least one scheduling rule. NeoChrono has ranked the lowest-impact administrator override options below.')+
+        : 'These open shifts need administrator review. Select only the shifts you want NeoChrono to analyze for an override.')+
     '</div>';
 
   body+=
@@ -1156,7 +1159,7 @@ function renderFillOpenShiftsPreview_(r,month){
   if(suggestions.length){
     body+=
       '<div class="section-title mt12"><div><h3>Safe assignments</h3><p>These pharmacists pass the current scheduling rules.</p></div></div>'+
-      '<div class="table-wrap" style="max-height:300px;overflow:auto">'+
+      '<div class="table-wrap" style="max-height:260px;overflow:auto">'+
         '<table class="table">'+
           '<thead><tr><th>Date</th><th>Shift</th><th>Recommended pharmacist</th><th>Other eligible options</th></tr></thead>'+
           '<tbody>'+
@@ -1176,56 +1179,33 @@ function renderFillOpenShiftsPreview_(r,month){
   if(overrides.length){
     body+=
       '<div class="section-title mt12">'+
-        '<div><h3>Administrator override options</h3><p>Select one or several open shifts. NeoChrono will evaluate the selected overrides together before anything is saved.</p></div>'+
+        '<div><h3>Open shifts needing override</h3><p>Select one or multiple shifts first. Candidate/rule analysis runs only for your selection, which keeps this page fast.</p></div>'+
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
           (overrideableCount
             ? '<label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input id="openShiftOverrideSelectAll" type="checkbox" onchange="toggleAllOpenShiftOverrides_(this.checked)"> Select all</label>'+
-              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Override Selected (0)</button>'
+              '<button id="bulkOverrideSelectedBtn" type="button" class="btn btn-warning btn-sm" disabled onclick="reviewBulkOpenShiftOverrides_()">Analyze Selected (0)</button>'
             : '')+
         '</div>'+
       '</div>'+
-      '<div class="alert alert-warn"><b>Important:</b> These assignments do <u>not</u> satisfy the normal scheduler rules. The automatic scheduler remains unchanged. Bulk override re-checks the selected shifts together so later selections include workload/conflicts created by earlier selections.</div>'+
+      '<div class="alert alert-warn"><b>Faster workflow:</b> NeoChrono no longer calculates every pharmacist for every open shift when this window first opens. Select the shifts you actually want to override, then choose <b>Analyze Selected</b>.</div>'+
       '<div class="table-wrap" style="max-height:440px;overflow:auto">'+
         '<table class="table">'+
-          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Lowest-impact option</th><th>Rules that would be broken</th><th>Projected impact</th><th></th></tr></thead>'+
+          '<thead><tr><th style="width:42px">Select</th><th>Date</th><th>Shift</th><th>Current reason</th><th>Status</th></tr></thead>'+
           '<tbody>'+
             overrides.map((x,i)=>{
-              if(x.actionRequired!=='OVERRIDE'){
-                return '<tr>'+
-                  '<td></td>'+
-                  '<td>'+esc(fmtDate(x.date))+'</td>'+
-                  '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+'</td>'+
-                  '<td colspan="3"><span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span> '+esc(x.actionMessage||'This shift cannot be overridden yet.')+'</td>'+
-                  '<td></td>'+
-                '</tr>';
-              }
-
-              const cand=x.recommended||{};
-              const rules=cand.rules||[];
-              const ruleText=rules.length
-                ? rules.slice(0,3).map(rule=>rule.label).join(' · ')+(rules.length>3?' +'+(rules.length-3)+' more':'')
-                : ((cand.warnings||[]).length?'Scheduler warning only':'No rule violations');
-
+              const canOverride=x.actionRequired==='OVERRIDE';
               return '<tr>'+
-                '<td><input class="open-shift-override-check" data-index="'+i+'" type="checkbox" onchange="toggleOpenShiftOverrideSelection_('+i+',this.checked)"></td>'+
+                '<td>'+(canOverride?'<input class="open-shift-override-check" data-index="'+i+'" type="checkbox" onchange="toggleOpenShiftOverrideSelection_('+i+',this.checked)">':'')+'</td>'+
                 '<td>'+esc(fmtDate(x.date))+'</td>'+
                 '<td><b>'+esc(x.shift)+'</b>'+(Number(x.slot)>1?' #'+esc(x.slot):'')+
                   '<div class="small muted">Skill: '+esc(x.requiredSkill||'—')+'</div></td>'+
+                '<td class="small">'+esc(x.originalReason||'Requires administrator override analysis')+'</td>'+
                 '<td>'+
-                  (cand.pharmacist
-                    ? '<b>'+esc(cand.pharmacist)+'</b><div style="margin-top:4px">'+overrideRiskBadge_(cand.risk)+'</div>'
-                    : '<span class="muted">No recommendation</span>')+
+                  (canOverride
+                    ? '<span class="badge badge-warn">Ready to analyze</span>'
+                    : '<span class="badge badge-danger">'+esc(x.actionRequired||'BLOCKED')+'</span>'+
+                      (x.actionMessage?'<div class="small muted" style="margin-top:4px">'+esc(x.actionMessage)+'</div>':''))+
                 '</td>'+
-                '<td>'+
-                  '<div class="small">'+esc(ruleText)+'</div>'+
-                  (cand.hasNormalSkill
-                    ? '<div class="badge badge-ok" style="margin-top:5px">Has required skill</div>'
-                    : cand.coverageOnly
-                      ? '<div class="badge badge-warn" style="margin-top:5px">OFF-day coverage skill</div>'
-                      : '<div class="badge badge-danger" style="margin-top:5px">Missing required skill</div>')+
-                '</td>'+
-                '<td>'+overrideHoursImpactHtml_(cand.hoursSummary)+'</td>'+
-                '<td><button type="button" class="btn btn-warning btn-sm" onclick="reviewOpenShiftOverride_('+i+')">Review One</button></td>'+
               '</tr>';
             }).join('')+
           '</tbody>'+
@@ -1233,7 +1213,7 @@ function renderFillOpenShiftsPreview_(r,month){
       '</div>';
   }else if(unresolved.length){
     body+=
-      '<div class="section-title mt12"><div><h3>Still unfilled</h3><p>No override recommendation could be built for these rows.</p></div></div>'+
+      '<div class="section-title mt12"><div><h3>Still unfilled</h3><p>No override target rows could be built.</p></div></div>'+
       '<div class="table-wrap" style="max-height:260px;overflow:auto">'+
         '<table class="table">'+
           '<thead><tr><th>Date</th><th>Shift</th><th>Reason</th></tr></thead>'+
@@ -1280,13 +1260,15 @@ function renderFillOpenShiftsPreview_(r,month){
 
 function selectedOpenShiftOverrideIndexes_(){
   const selected=State.openShiftOverrideSelected||{};
+  const targets=State.openShiftOverrideTargets||[];
+
   return Object.keys(selected)
     .filter(k=>selected[k])
     .map(k=>Number(k))
     .filter(i=>Number.isInteger(i))
     .filter(i=>{
-      const item=(State.openShiftOverrideSuggestions||[])[i];
-      return item&&item.actionRequired==='OVERRIDE'&&item.recommended;
+      const item=targets[i];
+      return item&&item.actionRequired==='OVERRIDE';
     })
     .sort((a,b)=>a-b);
 }
@@ -1302,8 +1284,8 @@ function toggleAllOpenShiftOverrides_(checked){
   State.openShiftOverrideSelected={};
 
   if(checked){
-    (State.openShiftOverrideSuggestions||[]).forEach((item,index)=>{
-      if(item&&item.actionRequired==='OVERRIDE'&&item.recommended){
+    (State.openShiftOverrideTargets||[]).forEach((item,index)=>{
+      if(item&&item.actionRequired==='OVERRIDE'){
         State.openShiftOverrideSelected[String(index)]=true;
       }
     });
@@ -1320,9 +1302,9 @@ function syncOpenShiftOverrideSelectionUI_(){
     el.checked=selected.has(index);
   });
 
-  const overrideable=(State.openShiftOverrideSuggestions||[])
+  const overrideable=(State.openShiftOverrideTargets||[])
     .map((item,index)=>({item,index}))
-    .filter(x=>x.item&&x.item.actionRequired==='OVERRIDE'&&x.item.recommended)
+    .filter(x=>x.item&&x.item.actionRequired==='OVERRIDE')
     .map(x=>x.index);
 
   const all=$('openShiftOverrideSelectAll');
@@ -1334,23 +1316,35 @@ function syncOpenShiftOverrideSelectionUI_(){
   const btn=$('bulkOverrideSelectedBtn');
   if(btn){
     btn.disabled=selected.size===0;
-    btn.textContent='Override Selected ('+selected.size+')';
+    btn.textContent='Analyze Selected ('+selected.size+')';
   }
 }
 
-function bulkOverrideCandidateForIndex_(shiftIndex){
-  const item=(State.openShiftOverrideSuggestions||[])[Number(shiftIndex)];
+function bulkOverrideTargetForIndex_(targetIndex){
+  return (State.openShiftOverrideTargets||[])[Number(targetIndex)]||null;
+}
+
+function bulkOverrideDetailedItem_(targetIndex){
+  const target=bulkOverrideTargetForIndex_(targetIndex);
+  if(!target)return null;
+
+  return (State.bulkOpenShiftDetailedSuggestions||[])
+    .find(x=>String(x.assignmentId||'')===String(target.assignmentId||''))||null;
+}
+
+function bulkOverrideCandidateForIndex_(targetIndex){
+  const item=bulkOverrideDetailedItem_(targetIndex);
   if(!item)return null;
 
-  const select=$('bulkForceCandidate_'+Number(shiftIndex));
+  const select=$('bulkForceCandidate_'+Number(targetIndex));
   const candidateIndex=select?Number(select.value||0):0;
   return (item.candidates||[])[candidateIndex]||null;
 }
 
-function updateBulkOverrideCandidateRow_(shiftIndex){
-  const candidate=bulkOverrideCandidateForIndex_(shiftIndex);
-  const summary=$('bulkForceSummary_'+Number(shiftIndex));
-  const impact=$('bulkForceImpact_'+Number(shiftIndex));
+function updateBulkOverrideCandidateRow_(targetIndex){
+  const candidate=bulkOverrideCandidateForIndex_(targetIndex);
+  const summary=$('bulkForceSummary_'+Number(targetIndex));
+  const impact=$('bulkForceImpact_'+Number(targetIndex));
 
   if(!candidate)return;
 
@@ -1373,8 +1367,9 @@ function updateBulkOverrideCandidateRow_(shiftIndex){
   }
 }
 
-function reviewBulkOpenShiftOverrides_(){
+async function reviewBulkOpenShiftOverrides_(){
   const indexes=selectedOpenShiftOverrideIndexes_();
+
   if(!indexes.length){
     toast('Select at least one open shift to override.','error');
     return;
@@ -1382,7 +1377,55 @@ function reviewBulkOpenShiftOverrides_(){
 
   State.bulkOpenShiftSelection=indexes.slice();
 
+  const ids=indexes
+    .map(index=>bulkOverrideTargetForIndex_(index))
+    .filter(Boolean)
+    .map(item=>item.assignmentId);
+
+  openModal(
+    'Analyzing '+indexes.length+' Selected Shift'+(indexes.length===1?'':'s'),
+    '<div class="alert alert-warn"><b>Checking pharmacist options…</b><br>NeoChrono is analyzing only the shifts you selected. This can take a moment for a large selection, but the initial Help Fill Open Shifts window no longer performs this work.</div>',
+    [{label:'Cancel',cls:'btn-secondary',action:'returnToFillOpenShiftPreview_()'}]
+  );
+
+  try{
+    const r=await server(
+      'getOpenShiftOverrideSuggestions',
+      State.token,
+      ids
+    );
+
+    if(!r||!r.ok){
+      throw new Error((r&&r.message)||'Could not analyze the selected open shifts.');
+    }
+
+    State.bulkOpenShiftDetailedSuggestions=r.suggestions||[];
+    renderBulkOpenShiftCandidatePicker_();
+  }catch(e){
+    toast(e.message,'error');
+    returnToFillOpenShiftPreview_();
+  }
+}
+
+function renderBulkOpenShiftCandidatePicker_(){
+  const indexes=State.bulkOpenShiftSelection||[];
   const savedReason=String(State.bulkOpenShiftOverrideReason||'');
+
+  if(!indexes.length){
+    returnToFillOpenShiftPreview_();
+    return;
+  }
+
+  const invalid=indexes.filter(index=>{
+    const item=bulkOverrideDetailedItem_(index);
+    return !item||item.actionRequired!=='OVERRIDE'||!(item.candidates||[]).length;
+  });
+
+  if(invalid.length){
+    toast('One or more selected shifts can no longer be overridden. Refreshing the list.','error');
+    returnToFillOpenShiftPreview_();
+    return;
+  }
 
   const body=
     '<div class="alert alert-warn">'+
@@ -1394,13 +1437,14 @@ function reviewBulkOpenShiftOverrides_(){
         '<thead><tr><th>Date</th><th>Shift</th><th>Pharmacist</th><th>Current rule impact</th><th>Projected workload</th></tr></thead>'+
         '<tbody>'+
           indexes.map(index=>{
-            const item=(State.openShiftOverrideSuggestions||[])[index];
+            const target=bulkOverrideTargetForIndex_(index);
+            const item=bulkOverrideDetailedItem_(index);
             const candidates=item.candidates||[];
 
             return '<tr>'+
-              '<td>'+esc(fmtDate(item.date))+'</td>'+
-              '<td><b>'+esc(item.shift)+'</b>'+(Number(item.slot)>1?' #'+esc(item.slot):'')+
-                '<div class="small muted">Skill: '+esc(item.requiredSkill||'—')+'</div></td>'+
+              '<td>'+esc(fmtDate(target.date))+'</td>'+
+              '<td><b>'+esc(target.shift)+'</b>'+(Number(target.slot)>1?' #'+esc(target.slot):'')+
+                '<div class="small muted">Skill: '+esc(target.requiredSkill||'—')+'</div></td>'+
               '<td>'+
                 '<select id="bulkForceCandidate_'+index+'" class="control" onchange="updateBulkOverrideCandidateRow_('+index+')">'+
                   candidates.map((x,i)=>
@@ -1434,6 +1478,10 @@ function reviewBulkOpenShiftOverrides_(){
   indexes.forEach(index=>updateBulkOverrideCandidateRow_(index));
 }
 
+function returnToBulkOverridePicker_(){
+  renderBulkOpenShiftCandidatePicker_();
+}
+
 async function previewBulkOpenShiftOverrides_(){
   const indexes=State.bulkOpenShiftSelection||[];
   const reason=String($('bulkForceOverrideReason')?.value||'').trim();
@@ -1452,20 +1500,20 @@ async function previewBulkOpenShiftOverrides_(){
   const selections=[];
 
   for(const index of indexes){
-    const item=(State.openShiftOverrideSuggestions||[])[Number(index)];
+    const target=bulkOverrideTargetForIndex_(index);
     const candidate=bulkOverrideCandidateForIndex_(index);
 
-    if(!item||!candidate){
+    if(!target||!candidate){
       toast('One of the selected shifts does not have a pharmacist selected.','error');
       return;
     }
 
     selections.push({
-      assignmentId:item.assignmentId,
-      generationId:item.generationId,
-      date:item.date,
-      shift:item.shift,
-      slot:item.slot,
+      assignmentId:target.assignmentId,
+      generationId:target.generationId,
+      date:target.date,
+      shift:target.shift,
+      slot:target.slot,
       username:candidate.username
     });
   }
@@ -1534,7 +1582,7 @@ async function previewBulkOpenShiftOverrides_(){
       'Confirm '+items.length+' Bulk Override'+(items.length===1?'':'s'),
       body,
       [
-        {label:'Back',cls:'btn-secondary',action:'reviewBulkOpenShiftOverrides_()'},
+        {label:'Back',cls:'btn-secondary',action:'returnToBulkOverridePicker_()'},
         {label:'Confirm & Override '+items.length,cls:'btn-warning',action:'applyBulkOpenShiftOverrides_()'}
       ]
     );
