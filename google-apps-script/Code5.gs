@@ -1496,15 +1496,16 @@ function neoChronoReconcilePtoAutoApprovals_(sheet, updatedBy) {
         changed = true;
         promoted++;
       }
-    } else if (status === 'approved' && systemAuto) {
-      row.Status = 'Pending';
-      row['Reviewed By'] = '';
-      row['Reviewed At'] = '';
-      row['Updated At'] = now;
-      row['Updated By'] = updatedBy || 'SYSTEM';
-      changed = true;
-      demoted++;
     }
+
+    /*
+     * Approval is sticky.
+     * Once a PTO request reaches Approved status (whether automatically or by
+     * an administrator), queue reconciliation must NEVER move it back to
+     * Pending. Only an explicit administrator Reject/Delete action may remove
+     * an approval. This also means approving request #3+ never steals approval
+     * from an already-approved request.
+     */
 
     if (changed) {
       neoChronoWritePtoObject_(
