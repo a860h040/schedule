@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pharmacy Workforce — Scheduling</title>
-  <link rel="stylesheet" href="css/paper-schedule.css?v=20260919-groups1">
+  <link rel="stylesheet" href="css/paper-schedule.css?v=20260923-preschedule1">
   <link rel="stylesheet" href="css/monthly-schedule.css?v=20260919-monthly1">
   <style>
     :root{
@@ -722,17 +722,17 @@
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260923-pharmacistname1"></script>
 <script src="js/github-legacy-runtime.js?v=20260923-pharmacistname1"></script>
-<script src="js/legacy/main-backend.js?v=20260922-deletecontrols1"></script>
+<script src="js/legacy/main-backend.js?v=20260923-preschedule1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
 <script src="js/legacy/delete-schedule.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/patches.js?v=20260919-pharmgroups2"></script>
-<script src="js/paper-schedule.js?v=20260919-groups2"></script>
+<script src="js/paper-schedule.js?v=20260923-preschedule1"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
-const State={token:'',data:null,page:'dashboard',month:firstOfMonth(new Date()),mustChange:false,availabilityEmployeeId:'',calendarFilters:{employees:['','','','','',''],showUnfilledWithSelected:false,status:'',shift:'',type:'',skill:'',weekendGroup:'',resident:'',preceptor:''}};
+const State={token:'',data:null,page:'dashboard',month:firstOfMonth(new Date()),mustChange:false,availabilityEmployeeId:'',calendarFilters:{employees:['','','','','',''],showUnfilledWithSelected:false,status:'',shift:'',type:'',skill:'',weekendGroup:'',pharmacistType:'',resident:'',preceptor:''}};
 
 function $(id){return document.getElementById(id)}
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
@@ -2052,12 +2052,12 @@ async function generateScheduleUI(){
 
     if(pre.requiresOverwriteConfirmation){
       const details=[
-        'The selected range already contains '+Number(pre.overlapCount||0)+' schedule row(s)',
+        'The selected range contains '+Number(pre.replaceableCount||pre.overlapCount||0)+' generated/unprotected schedule row(s)',
         'across '+Number(pre.overlapDateCount||0)+' date(s).'
       ];
 
-      if(Number(pre.lockedOverlapCount||0)>0){
-        details.push(Number(pre.lockedOverlapCount||0)+' locked row(s) are included.');
+      if(Number(pre.protectedCount||0)>0){
+        details.push(Number(pre.protectedCount||0)+' manual/locked pre-assignment(s) will remain protected and will be counted by the algorithm.');
       }
 
       if(Number(pre.finalizedOverlapCount||0)>0){
@@ -2067,8 +2067,8 @@ async function generateScheduleUI(){
       const ok=confirm(
         'OVERWRITE EXISTING SCHEDULE?\n\n'+
         details.join('\n')+
-        '\n\nIf you continue, NeoChrono will DELETE and REPLACE every schedule row inside '+
-        payload.startDate+' through '+payload.endDate+'.\n\n'+
+        '\n\nIf you continue, NeoChrono will regenerate only the generated/unprotected rows inside '+
+        payload.startDate+' through '+payload.endDate+'. Manual and locked assignments will NOT be overwritten.\n\n'+
         'Schedule rows outside this date range will not be changed.\n\n'+
         'Continue and overwrite these dates?'
       );
@@ -2119,7 +2119,7 @@ async function generateScheduleUI(){
         '<div class="alert alert-warn"><b>Generating selected date range...</b><br>'+
         'Part '+(i+1)+' of '+chunks.length+': '+
         esc(part.startDate)+' through '+esc(part.endDate)+'.'+
-        (overwriteConfirmed?'<br><b>Confirmed overwrite:</b> existing rows in the selected dates are being replaced.':'')+
+        (overwriteConfirmed?'<br><b>Confirmed regeneration:</b> generated/unprotected rows are being replaced; manual/locked rows remain fixed.':'')+
         '</div>';
 
       const r=await server(
@@ -2171,7 +2171,7 @@ async function generateScheduleUI(){
       totalFilled+'/'+totalRequired+' filled ('+
       (totalRequired?Math.round(totalFilled*1000/totalRequired)/10:100)+'%).<br>'+
       'Selected range: '+esc(payload.startDate)+' through '+esc(payload.endDate)+'.'+
-      (overwriteConfirmed?'<br>Existing schedule rows in this date range were replaced after confirmation.':'')+
+      (overwriteConfirmed?'<br>Generated/unprotected rows in this date range were regenerated; manual/locked rows were preserved.':'')+
       '</div>';
 
     const finalErrors=finalCheck.errors||[];
@@ -2205,7 +2205,7 @@ async function generateScheduleUI(){
 
     $('generationResult').innerHTML=h;
     toast(
-      overwriteConfirmed?'Schedule overwritten for selected dates':'Schedule generation completed',
+      overwriteConfirmed?'Schedule regenerated around protected assignments':'Schedule generation completed',
       feasible?'success':''
     );
 
@@ -3440,9 +3440,9 @@ window.addEventListener('neochrono:pto-synced',()=>{
   }catch(_e){}
 });
 
-function renderRequests(){const rows=(State.data.requests||[]).slice().sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));$('content').innerHTML=`<div class="section-title"><div><h3>PTO / Date Availability</h3><p>PTO is first-come, first-served PER REQUESTED OFF DATE. Each calendar day has its own independent queue: request #1 and #2 for that day are automatically approved; request #3 and above for that same day remain Pending for administrator review.</p><div style="margin-top:6px">${googlePtoSourceBadge_()}</div></div><button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add PTO / Availability</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Type / ID</th><th>Pharmacist</th><th>Date(s)</th><th>Available</th><th>Status</th><th>Comment</th><th>Updated</th><th>Review</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td><td>${esc(r.Pharmacist)}</td><td>${requestDates(r)}</td><td>${esc(r.Available)}</td><td>${statusBadge(r.Status)}${String(r['Reviewed By']||'').toUpperCase()==='SYSTEM AUTO-APPROVAL'?'<div class="small muted">Auto-approved</div>':''}</td><td>${esc(r.Comment)}</td><td>${esc(r['Updated At']||r['Submitted At'])}</td><td>${String(r.Status||'').toLowerCase()==='pending'?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button><button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button></div>`:'—'}</td></tr>`).join('')}</tbody></table></div>`}
+function renderRequests(){const rows=(State.data.requests||[]).slice().sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));$('content').innerHTML=`<div class="section-title"><div><h3>PTO / Time Off / Date Availability</h3><p>PTO is first-come, first-served PER REQUESTED OFF DATE. Each calendar day has its own independent queue: request #1 and #2 for that day are automatically approved; request #3 and above for that same day remain Pending for administrator review.</p><div style="margin-top:6px">${googlePtoSourceBadge_()}</div></div><button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add PTO / Availability</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Type / ID</th><th>Pharmacist</th><th>Date(s)</th><th>Available</th><th>Status</th><th>Comment</th><th>Updated</th><th>Review</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td><td>${esc(r.Pharmacist)}</td><td>${requestDates(r)}</td><td>${esc(r.Available)}</td><td>${statusBadge(r.Status)}${String(r['Reviewed By']||'').toUpperCase()==='SYSTEM AUTO-APPROVAL'?'<div class="small muted">Auto-approved</div>':''}</td><td>${esc(r.Comment)}</td><td>${esc(r['Updated At']||r['Submitted At'])}</td><td>${String(r.Status||'').toLowerCase()==='pending'?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button><button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button></div>`:'—'}</td></tr>`).join('')}</tbody></table></div>`}
 
-function openEmployeeRequestModal(){const body=`<div class="form-grid"><div class="field"><label>Pharmacist</label><select id="arUser" class="control">${userOptions().map(o=>`<option value="${attr(o.value)}">${esc(o.label)}</option>`).join('')}</select></div><div class="field"><label>Record Type</label><select id="arType" class="control" onchange="updateRequestStatusUI()"><option>PTO</option><option>UNAVAILABLE</option><option>AVAILABILITY</option><option>PREFERRED</option></select></div><div class="field"><label>Single Date (optional)</label><input id="arDate" type="date" class="control"></div><div class="field"><label>Start Date</label><input id="arStart" type="date" class="control"></div><div class="field"><label>End Date</label><input id="arEnd" type="date" class="control"></div><div class="field"><label>Available</label><select id="arAvail" class="control"><option value=""></option><option>Yes</option><option>No</option></select></div><div class="field" id="arStatusWrap"><label>Status</label><select id="arStatus" class="control"><option>Approved</option><option>Pending</option><option>Rejected</option></select></div><div class="field span-2" id="arPtoRule"><div class="small muted" style="padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#f8fafc"><b>PTO approval is automatic.</b> First 2 requests for each covered date are approved. The 3rd request and above are saved as Pending for administrator review.</div></div><div class="field span-2"><label>Comment</label><textarea id="arComment" class="control"></textarea></div></div>`;openModal('Add Pharmacist PTO / Availability',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save',cls:'btn-primary',action:'saveEmployeeRequestUI()'}]);setTimeout(updateRequestStatusUI,0)}
+function openEmployeeRequestModal(){const body=`<div class="form-grid"><div class="field"><label>Pharmacist</label><select id="arUser" class="control">${userOptions().map(o=>`<option value="${attr(o.value)}">${esc(o.label)}</option>`).join('')}</select></div><div class="field"><label>Record Type</label><select id="arType" class="control" onchange="updateRequestStatusUI()"><option>PTO</option><option value="REGULAR OFF">Regular Off</option><option>UNAVAILABLE</option><option>AVAILABILITY</option><option>PREFERRED</option></select></div><div class="field"><label>Single Date (optional)</label><input id="arDate" type="date" class="control"></div><div class="field"><label>Start Date</label><input id="arStart" type="date" class="control"></div><div class="field"><label>End Date</label><input id="arEnd" type="date" class="control"></div><div class="field"><label>Available</label><select id="arAvail" class="control"><option value=""></option><option>Yes</option><option>No</option></select></div><div class="field" id="arStatusWrap"><label>Status</label><select id="arStatus" class="control"><option>Approved</option><option>Pending</option><option>Rejected</option></select></div><div class="field span-2" id="arPtoRule"><div class="small muted" style="padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#f8fafc"><b>PTO approval is automatic.</b> First 2 requests for each covered date are approved. The 3rd request and above are saved as Pending for administrator review.</div></div><div class="field span-2"><label>Comment</label><textarea id="arComment" class="control"></textarea></div></div>`;openModal('Add Pharmacist PTO / Availability',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save',cls:'btn-primary',action:'saveEmployeeRequestUI()'}]);setTimeout(updateRequestStatusUI,0)}
 
 function updateRequestStatusUI(){const isPto=$('arType')&&$('arType').value==='PTO';if($('arStatusWrap'))$('arStatusWrap').style.display=isPto?'none':'';if($('arPtoRule'))$('arPtoRule').style.display=isPto?'':'none'}
 
@@ -3579,8 +3579,8 @@ async function renderFairness(){
 function scheduleTable(rows){return `<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Shift</th><th>Pharmacist</th><th>Coverage for</th><th>Coverage reason</th><th>Type</th><th>Hours</th><th>Status</th><th>Warning</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${fmtDate(r.Date)}</td><td><b>${esc(r.Shift)}</b></td><td>${esc(r['Assigned Pharmacist'])}</td><td>${esc(r['Coverage For Pharmacist']||'')}</td><td>${esc(r['Coverage Reason']||'')}</td><td>${typeBadge(r['Shift Type'])}</td><td>${esc(r['Credited Hours'])}</td><td>${statusBadge2(r.Status)}</td><td>${esc(r.Warning)}</td></tr>`).join('')}</tbody></table></div>`}
 function statusBadge2(s){const x=String(s||'').toUpperCase();return `<span class="badge ${x==='UNFILLED'?'badge-danger':x==='LOCKED'?'badge-lock':x==='MANUAL'?'badge-manual':'badge-ok'}">${esc(s)}</span>`}
 
-function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1){const admin=State.data.isAdmin;const schedule=State.data.schedule||[];let r=null;if(id){const idMatches=schedule.filter(x=>String(x['Assignment ID']||'')===String(id));if(locatorDate&&locatorShift){r=idMatches.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||schedule.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||idMatches[0]||null}else r=idMatches[0]||null}if(!admin){if(!r)return;const sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{};openModal('Assignment Details',`<div class="grid grid-2"><div><label>Date</label><b>${fmtDate(r.Date)}</b></div><div><label>Shift</label><b>${esc(r.Shift)}</b></div><div><label>Pharmacist</label><b>${esc(r['Assigned Pharmacist'])}</b></div><div><label>Type</label>${typeBadge(r['Shift Type'])}</div><div><label>Shift Time</label><b>${esc([sh.Start,sh.End].filter(Boolean).join(' – '))}</b></div><div><label>Credited Hours</label><b>${esc(r['Credited Hours'])}</b></div>${r['Coverage For Pharmacist']?`<div><label>Coverage for</label><b>${esc(r['Coverage For Pharmacist'])}</b></div><div><label>Coverage reason</label><b>${esc(r['Coverage Reason']||'')}</b></div>`:''}</div>${r.Warning?`<div class="alert alert-warn mt12">${esc(r.Warning)}</div>`:''}`,[{label:'Close',cls:'btn-secondary',action:'closeModal()'}]);return}
-const users=State.data.users.filter(u=>yes(u.Active));const shifts=State.data.shifts.filter(s=>yes(s.Active));const body=`<input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}"><input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}"><div class="form-grid"><div class="field"><label>Date</label><input id="asDate" type="date" class="control" value="${attr(r?r.Date:dateKey(new Date()))}"></div><div class="field"><label>Slot</label><input id="asSlot" type="number" min="1" class="control" value="${attr(r?r.Slot:1)}"></div><div class="field"><label>Shift</label><select id="asShift" class="control">${shifts.map(s=>`<option value="${attr(s.Shift)}" ${r&&r.Shift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}</select></div><div class="field"><label>Pharmacist</label><select id="asUser" class="control">${users.map(u=>`<option value="${attr(u.Username)}" ${r&&r.Username===u.Username?'selected':''}>${esc(u['Pharmacist Name'])}</option>`).join('')}</select></div><div class="field"><label>Lock after save</label><select id="asLocked" class="control"><option ${r&&yes(r.Locked)?'selected':''}>Yes</option><option ${!r||!yes(r.Locked)?'selected':''}>No</option></select></div>${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}<div class="field span-2 hidden" id="overrideBox"><div class="alert alert-warn" id="overrideWarnings"></div><label class="mt12">Override reason</label><textarea id="overrideReason" class="control" placeholder="Explain why this rule violation is acceptable."></textarea></div></div>`;
+function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,prefillUsername=''){const admin=State.data.isAdmin;const schedule=State.data.schedule||[];let r=null;if(id){const idMatches=schedule.filter(x=>String(x['Assignment ID']||'')===String(id));if(locatorDate&&locatorShift){r=idMatches.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||schedule.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||idMatches[0]||null}else r=idMatches[0]||null}if(!admin){if(!r)return;const sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{};openModal('Assignment Details',`<div class="grid grid-2"><div><label>Date</label><b>${fmtDate(r.Date)}</b></div><div><label>Shift</label><b>${esc(r.Shift)}</b></div><div><label>Pharmacist</label><b>${esc(r['Assigned Pharmacist'])}</b></div><div><label>Type</label>${typeBadge(r['Shift Type'])}</div><div><label>Shift Time</label><b>${esc([sh.Start,sh.End].filter(Boolean).join(' – '))}</b></div><div><label>Credited Hours</label><b>${esc(r['Credited Hours'])}</b></div>${r['Coverage For Pharmacist']?`<div><label>Coverage for</label><b>${esc(r['Coverage For Pharmacist'])}</b></div><div><label>Coverage reason</label><b>${esc(r['Coverage Reason']||'')}</b></div>`:''}</div>${r.Warning?`<div class="alert alert-warn mt12">${esc(r.Warning)}</div>`:''}`,[{label:'Close',cls:'btn-secondary',action:'closeModal()'}]);return}
+const users=State.data.users.filter(u=>yes(u.Active));const shifts=State.data.shifts.filter(s=>yes(s.Active));const initialDate=r?r.Date:(locatorDate||dateKey(new Date()));const initialSlot=r?r.Slot:(locatorSlot||1);const initialShift=r?r.Shift:(locatorShift||'');const initialUsername=r?r.Username:(prefillUsername||'');const body=`<input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}"><input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}"><div class="form-grid"><div class="field"><label>Date</label><input id="asDate" type="date" class="control" value="${attr(initialDate)}"></div><div class="field"><label>Slot</label><input id="asSlot" type="number" min="1" class="control" value="${attr(initialSlot)}"></div><div class="field"><label>Shift</label><select id="asShift" class="control">${shifts.map(s=>`<option value="${attr(s.Shift)}" ${initialShift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}</select></div><div class="field"><label>Pharmacist</label><select id="asUser" class="control">${users.map(u=>`<option value="${attr(u.Username)}" ${String(initialUsername)===String(u.Username)?'selected':''}>${esc(u['Pharmacist Name'])}</option>`).join('')}</select></div><div class="field"><label>Lock after save</label><select id="asLocked" class="control"><option ${r&&yes(r.Locked)?'selected':''}>Yes</option><option ${!r||!yes(r.Locked)?'selected':''}>No</option></select></div>${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}<div class="field span-2 hidden" id="overrideBox"><div class="alert alert-warn" id="overrideWarnings"></div><label class="mt12">Override reason</label><textarea id="overrideReason" class="control" placeholder="Explain why this rule violation is acceptable."></textarea></div></div>`;
 const buttons=[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'}];if(r){buttons.push({label:yes(r.Locked)?'Unlock':'Lock',cls:'btn-ghost',action:`toggleLockUI('${attr(r['Assignment ID'])}',${!yes(r.Locked)})`});buttons.push({label:'Remove',cls:'btn-danger',action:`removeAssignmentUI('${attr(r['Assignment ID'])}')`})}buttons.push({label:'Save',cls:'btn-primary',action:'saveAssignmentUI(false)',id:'normalSave'});openModal(r?'Edit Assignment':'Manual Assignment',body,buttons)}
 
 function manualHoursWarningHtml(h){
