@@ -824,8 +824,31 @@
             // PTO writes go to Google first. Google returns the authoritative
             // sheet snapshot, which is then committed into neochrono-data.
             if(window.__neoGooglePtoSource&&String(fn)==='saveEmployeeRequest'){
-              const payload=(args||[])[1]||{};
+              const payload={...((args||[])[1]||{})};
               if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
+                // Always resolve the selected pharmacist from the authoritative Users
+                // sheet before sending the PTO row to Google. This prevents blank
+                // Pharmacist cells when the UI only supplies Username.
+                const usersMatrix=data&&data.sheets&&data.sheets.Users&&Array.isArray(data.sheets.Users.values)
+                  ? data.sheets.Users.values
+                  : [];
+                if(usersMatrix.length){
+                  const headers=(usersMatrix[0]||[]).map(x=>String(x??'').trim());
+                  const userIdx=headers.indexOf('Username');
+                  const idIdx=headers.indexOf('Employee ID');
+                  const nameIdx=headers.indexOf('Pharmacist Name');
+                  const wantedUser=String(payload.Username||'').trim().toLowerCase();
+                  const wantedId=String(payload['Employee ID']||'').trim();
+                  const row=usersMatrix.slice(1).find(r=>
+                    (wantedUser&&userIdx>=0&&String(r[userIdx]??'').trim().toLowerCase()===wantedUser) ||
+                    (wantedId&&idIdx>=0&&String(r[idIdx]??'').trim()===wantedId)
+                  );
+                  if(row&&nameIdx>=0){
+                    payload.Pharmacist=String(row[nameIdx]??'').trim()||String(payload.Pharmacist||'').trim();
+                    if(!payload.Username&&userIdx>=0)payload.Username=String(row[userIdx]??'').trim();
+                    if(!payload['Employee ID']&&idIdx>=0)payload['Employee ID']=String(row[idIdx]??'').trim();
+                  }
+                }
                 const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
                 await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO save from Google Sheet');
                 const result={...googleResult};
@@ -835,8 +858,30 @@
             }
 
             if(window.__neoGooglePtoSource&&String(fn)==='submitRequest'){
-              const payload=(args||[])[1]||{};
+              const payload={...((args||[])[1]||{})};
               if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
+                // Compatibility path: if Username/Employee ID is present, resolve
+                // the Pharmacist name from Users before writing the Google row.
+                const usersMatrix=data&&data.sheets&&data.sheets.Users&&Array.isArray(data.sheets.Users.values)
+                  ? data.sheets.Users.values
+                  : [];
+                if(usersMatrix.length){
+                  const headers=(usersMatrix[0]||[]).map(x=>String(x??'').trim());
+                  const userIdx=headers.indexOf('Username');
+                  const idIdx=headers.indexOf('Employee ID');
+                  const nameIdx=headers.indexOf('Pharmacist Name');
+                  const wantedUser=String(payload.Username||'').trim().toLowerCase();
+                  const wantedId=String(payload['Employee ID']||'').trim();
+                  const row=usersMatrix.slice(1).find(r=>
+                    (wantedUser&&userIdx>=0&&String(r[userIdx]??'').trim().toLowerCase()===wantedUser) ||
+                    (wantedId&&idIdx>=0&&String(r[idIdx]??'').trim()===wantedId)
+                  );
+                  if(row&&nameIdx>=0){
+                    payload.Pharmacist=String(row[nameIdx]??'').trim()||String(payload.Pharmacist||'').trim();
+                    if(!payload.Username&&userIdx>=0)payload.Username=String(row[userIdx]??'').trim();
+                    if(!payload['Employee ID']&&idIdx>=0)payload['Employee ID']=String(row[idIdx]??'').trim();
+                  }
+                }
                 const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
                 await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO submission from Google Sheet');
                 const result={...googleResult};
