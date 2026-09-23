@@ -6,6 +6,8 @@
   --paper-holiday:#fff200;
   --paper-off:#ffffff;
   --paper-pto:#e2f0d9;
+  --paper-regular-off:#ddebf7;
+  --paper-locked:#1f4e78;
   --paper-evening:#fce4d6;
   --paper-night:#fff2cc;
   --paper-coverage:#b7dee8;
@@ -189,6 +191,48 @@ body:has(.paper-page-shell) .content{
   white-space:nowrap;
 }
 
+/* Compact pre-scheduling totals. The horizontal strip keeps the Excel grid
+ * from being pushed down by a long pharmacist list. */
+.paper-assignment-totals{
+  margin:4px 0 3px;
+  border:1px solid #9ca3af;
+  background:#fff;
+  font-size:9px;
+  color:#334155;
+}
+.paper-assignment-totals summary{
+  cursor:pointer;
+  padding:3px 6px;
+  font-weight:800;
+  background:#f8fafc;
+}
+.paper-total-grid{
+  display:flex;
+  flex-wrap:nowrap;
+  gap:4px;
+  overflow-x:auto;
+  padding:4px 5px 5px;
+}
+.paper-total-item{
+  flex:0 0 168px;
+  min-width:0;
+  border:1px solid #d1d5db;
+  background:#fff;
+  padding:3px 5px;
+}
+.paper-total-item b,
+.paper-total-item span{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.paper-total-item span{
+  margin-top:1px;
+  color:#64748b;
+  font-size:8px;
+}
+
 /* Small legend so the grid gets most of the screen. */
 .paper-legend{
   display:flex;
@@ -212,6 +256,10 @@ body:has(.paper-page-shell) .content{
   height:11px;
   border:1px solid #555;
   display:inline-block;
+}
+.paper-legend .paper-locked-swatch{
+  background:var(--paper-manual);
+  box-shadow:inset 0 0 0 2px var(--paper-locked);
 }
 
 /*
@@ -338,12 +386,15 @@ body:has(.paper-page-shell) .content{
   position:relative;
   font-size:clamp(7px,.55vw,9.5px);
 }
-.paper-table td.paper-cell.has-assignment{
+.paper-table td.paper-cell.has-assignment,
+.paper-table td.paper-cell.paper-assignable{
   cursor:pointer;
 }
-.paper-table td.paper-cell.has-assignment:hover{
+.paper-table td.paper-cell.has-assignment:hover,
+.paper-table td.paper-cell.paper-assignable:hover{
   outline:2px solid #1f4e78;
   outline-offset:-2px;
+  background:#eef6ff;
 }
 .paper-table td.weekend{
   background:#fff7ef;
@@ -357,6 +408,11 @@ body:has(.paper-page-shell) .content{
   background:var(--paper-pto);
   font-weight:900;
   color:#385723;
+}
+.paper-table td.paper-regular-off{
+  background:var(--paper-regular-off);
+  font-weight:900;
+  color:#1f4e78;
 }
 .paper-table td.paper-evening{
   background:var(--paper-evening);
@@ -372,6 +428,24 @@ body:has(.paper-page-shell) .content{
   background:var(--paper-manual);
   outline:1px dashed #1f4e78;
   outline-offset:-2px;
+}
+.paper-table td.paper-locked{
+  background:var(--paper-manual);
+  outline:2px solid var(--paper-locked);
+  outline-offset:-2px;
+  font-weight:900;
+}
+.paper-table td.paper-locked::after{
+  content:'';
+  position:absolute;
+  right:1px;
+  top:1px;
+  width:4px;
+  height:4px;
+  background:var(--paper-locked);
+}
+.paper-table td.paper-conflict{
+  box-shadow:inset 0 0 0 2px #c00000;
 }
 .paper-table td.paper-unfilled{
   background:#ffe6e6;
@@ -444,6 +518,7 @@ body:has(.paper-page-shell) .content{
   body.printing-paper-schedule .topbar,
   body.printing-paper-schedule .paper-page-head,
   body.printing-paper-schedule .paper-filter-card,
+  body.printing-paper-schedule .paper-assignment-totals,
   body.printing-paper-schedule .paper-legend,
   body.printing-paper-schedule .paper-note,
   body.printing-paper-schedule .toast-wrap,
