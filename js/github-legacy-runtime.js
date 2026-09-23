@@ -638,6 +638,33 @@
     });
   }
 
+  function googleTimeOffType_(value){
+    const type=String(value||'')
+      .trim()
+      .toUpperCase()
+      .replace(/[\-_]+/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+
+    if(type==='PTO')return 'PTO';
+    if(type==='REGULAR OFF'||type==='REGULAR OFF REQUEST'||type==='REGULAROFF')return 'REGULAR OFF';
+    return '';
+  }
+
+  function requestIdentity_(row){
+    const id=String(row&&row['Record ID']||'').trim();
+    if(id)return 'ID:'+id;
+
+    return [
+      googleTimeOffType_(row&&row['Record Type']),
+      String(row&&row.Username||'').trim().toLowerCase(),
+      String(row&&row.Pharmacist||'').trim().toLowerCase(),
+      String(row&&row.Date||'').slice(0,10),
+      String(row&&row['Start Date']||'').slice(0,10),
+      String(row&&row['End Date']||'').slice(0,10)
+    ].join('|');
+  }
+
   function mergeGooglePtoIntoGithub_(localMatrix,googleMatrix){
     const fallbackHeaders=[
       'Record Type','Record ID','Pharmacist','Username','Date','Start Date','End Date',
@@ -653,11 +680,25 @@
     const local=requestMatrixToObjects_(localMatrix||[]);
     const google=requestMatrixToObjects_(googleMatrix||[]);
 
-    // Google is authoritative for PTO rows only.
-    // Preserve any non-PTO availability/date-rule records already in GitHub.
+    /*
+     * Google is authoritative for PTO and is also allowed to supply Regular Off
+     * records entered directly in the shared Time-Off sheet.
+     *
+     * Keep GitHub-only Regular Off records that were created by older versions
+     * of NeoChrono, but replace a local row when the same request also exists in
+     * Google. Other availability/date-rule records remain GitHub-owned.
+     */
+    const googleTimeOff=google.filter(x=>!!googleTimeOffType_(x['Record Type']));
+    const googleIdentities=new Set(googleTimeOff.map(requestIdentity_));
+
     const rows=[
-      ...google.filter(x=>String(x['Record Type']||'').trim().toUpperCase()==='PTO'),
-      ...local.filter(x=>String(x['Record Type']||'').trim().toUpperCase()!=='PTO')
+      ...googleTimeOff,
+      ...local.filter(x=>{
+        const type=googleTimeOffType_(x['Record Type']);
+        if(type==='PTO')return false;
+        if(type==='REGULAR OFF')return !googleIdentities.has(requestIdentity_(x));
+        return true;
+      })
     ];
 
     return [
@@ -697,7 +738,7 @@
       data.sheets[GOOGLE_PTO_SHEET]={values:merged};
       data.meta=data.meta||{};
       data.meta.googlePtoSyncedAt=new Date().toISOString();
-      data.meta.googlePtoSource='Google Sheet -> neochrono-data';
+      data.meta.googlePtoSource='Google Sheet -> neochrono-data (PTO + Regular Off)';
 
       try{
         const result=await saveWorkbook(
