@@ -850,6 +850,15 @@ function validateConfiguration_() {
 /** ---------------------- SCHEDULE GENERATION ---------------------- */
 
 
+function isProtectedPreScheduleRow_(r) {
+  const status=clean_(r&&r.Status).toUpperCase();
+  const filled=status!=='UNFILLED' &&
+    clean_(r&&r.Username) &&
+    clean_(r&&r['Assigned Pharmacist']).toUpperCase()!=='UNFILLED';
+  if(!filled)return false;
+  return yes_(r.Locked) || yes_(r.Manual) || status==='MANUAL' || status==='LOCKED';
+}
+
 function preflightScheduleGeneration(token, options) {
   requireAdmin_(token);
   options=options||{};
@@ -878,12 +887,19 @@ function preflightScheduleGeneration(token, options) {
   const overlap=existing.filter(r=>inDateRange_(asDate_(r.Date),start,end));
   const finalized=overlap.filter(r=>asDate_(r['Finalized At']));
   const locked=overlap.filter(r=>yes_(r.Locked));
+  const protectedRows=overlap.filter(isProtectedPreScheduleRow_);
+  const replaceableRows=overlap.filter(r=>!isProtectedPreScheduleRow_(r));
   const overlapDates=[...new Set(overlap.map(r=>formatDateKey_(startOfDay_(asDate_(r.Date)))).filter(Boolean))].sort();
 
-  if(overlap.length){
+  if(replaceableRows.length){
     periodWarnings.unshift(
-      'OVERWRITE WARNING: '+overlap.length+' existing schedule row(s) on '+overlapDates.length+
-      ' date(s) fall inside the selected range and will be replaced if the administrator confirms.'
+      'REGENERATION WARNING: '+replaceableRows.length+' existing generated/unprotected schedule row(s) on '+overlapDates.length+
+      ' date(s) fall inside the selected range and will be replaced if the administrator confirms. Manual and locked assignments are protected.'
+    );
+  }
+  if(protectedRows.length){
+    periodWarnings.unshift(
+      protectedRows.length+' manual/locked pre-scheduling assignment(s) are protected and will be used as fixed constraints during generation.'
     );
   }
 
@@ -900,7 +916,10 @@ function preflightScheduleGeneration(token, options) {
     overlapDateCount:overlapDates.length,
     finalizedOverlapCount:finalized.length,
     lockedOverlapCount:locked.length,
-    requiresOverwriteConfirmation:overlap.length>0,
+    protectedCount:protectedRows.length,
+    manualProtectedCount:protectedRows.filter(r=>yes_(r.Manual)||['MANUAL','LOCKED'].includes(clean_(r.Status).toUpperCase())).length,
+    replaceableCount:replaceableRows.length,
+    requiresOverwriteConfirmation:replaceableRows.length>0,
     warnings:periodWarnings
   });
 }
@@ -932,25 +951,26 @@ function generateSchedule(token, options) {
     const mode = 'OVERWRITE';
     const existing = readTable_(APP.SHEETS.SCHEDULE);
     const overlap = existing.filter(r => inDateRange_(asDate_(r.Date),start,end));
+    const preserved = overlap.filter(isProtectedPreScheduleRow_);
+    const replaceable = overlap.filter(r=>!isProtectedPreScheduleRow_(r));
 
-    // Never silently replace an existing schedule. The browser preflight must
-    // obtain explicit administrator confirmation and pass overwriteConfirmed.
-    if (overlap.length && !yes_(options.overwriteConfirmed)) {
+    // Manual and locked pre-scheduling assignments are FIXED constraints.
+    // Only generated/unprotected rows are eligible for regeneration.
+    if (replaceable.length && !yes_(options.overwriteConfirmed)) {
       return {
         ok:false,
         stage:'OVERLAP_CONFIRMATION_REQUIRED',
         errors:[
-          'The selected dates contain '+overlap.length+
-          ' existing schedule row(s). Confirm the overwrite warning before generating.'
+          'The selected dates contain '+replaceable.length+
+          ' existing generated/unprotected schedule row(s). Confirm regeneration before continuing. Manual and locked assignments will remain protected.'
         ],
         warnings:[]
       };
     }
 
-    // Confirmed overwrite means EVERYTHING inside the selected date range is
-    // replaced, including previously locked/finalized rows. Rows outside the
-    // selected range remain untouched.
-    const preserved = [];
+    // The allocator is seeded with every manual or locked assignment so their
+    // workdays, hours, evenings, weekends, resident duties, rotations and rest
+    // transitions are counted BEFORE any new shift is assigned.
     const generationId = clean_(options.batchGenerationId) || makeGenerationId_(start,end);
     const slots = createRequiredSlots_(model,start,end,generationId);
     const preservedKeys = new Set(preserved.map(r => slotKey_(dateKey_(r.Date),clean_(r.Shift),num_(r.Slot,1))));
@@ -964,7 +984,7 @@ function generateSchedule(token, options) {
     }).concat(preserved);
     const state = createState_(model, fixedContext, start, end);
     const slotResults = preserved.map(r => scheduleRowToAssignment_(r, model)).filter(Boolean);
-    const lockedSnapshot = preserved.map(r => lockedFingerprint_(r));
+    const lockedSnapshot = preserved.filter(r=>yes_(r.Locked)).map(r => lockedFingerprint_(r));
 
     // Mandatory-pattern passes happen before the normal fairness allocator.
     // 1) True 7-on/7-off employees stay on one dedicated shift for each ON block.
@@ -1051,7 +1071,7 @@ function generateSchedule(token, options) {
 
     saveSchedulePeriod_(existing, slotResults, start, end, mode);
     audit_('SCHEDULE_GENERATED', formatDateKey_(start), '', '', '', '', generationId, 'No', '',
-      JSON.stringify({start:formatDateKey_(start),end:formatDateKey_(end),mode:mode,filled:slotResults.filter(r=>r.status!=='UNFILLED').length,unfilled:slotResults.filter(r=>r.status==='UNFILLED').length}), ctx.username);
+      JSON.stringify({start:formatDateKey_(start),end:formatDateKey_(end),mode:mode,protectedPreAssignments:preserved.length,replacedRows:replaceable.length,filled:slotResults.filter(r=>r.status!=='UNFILLED').length,unfilled:slotResults.filter(r=>r.status==='UNFILLED').length}), ctx.username);
 
     const health = computeScheduleHealth_(slotResults.map(assignmentToScheduleObject_));
     return serialize_({
@@ -1157,7 +1177,7 @@ function loadSchedulingModel_() {
   const model={
     users,skills,shifts,requirements,requests,requestsByUser,
     weeklyAvailability,weeklyAvailabilityByUser,shiftMap,usersByUsername,usersByName,skillsByUser,settings,
-    _ptoCache:{},_availabilityCache:{},_weeklyAvailabilityCache:{},_staticCandidateCache:{},
+    _ptoCache:{},_regularOffCache:{},_availabilityCache:{},_weeklyAvailabilityCache:{},_staticCandidateCache:{},
     runtimeDeadline:0
   };
   model.activeUsers=users.filter(u=>yes_(u.Active));
@@ -1307,6 +1327,7 @@ function eligibility_(u, slot, model, state, manualMode) {
   if (!yes_(u.Active)) reasons.push('INACTIVE');
   if (!hasRequiredSkillForSlot_(u,slot,model)) reasons.push('MISSING_SKILL');
   if (isBlockedByPto_(u,slot.date,model)) reasons.push('PTO');
+  if (isBlockedByRegularOff_(u,slot.date,model)) reasons.push('REGULAR_OFF');
   const avail = availabilityStatus_(u,slot.date,model);
   if (avail.blocked) reasons.push('UNAVAILABLE');
   const weeklyAvail = weeklyAvailabilityStatus_(u,slot.date,slot.shift,model);
@@ -2312,7 +2333,7 @@ function explainUnfilled_(slot,model,state) {
         const key=e.ok?'OTHER':((e.reasons||[])[0]||'OTHER');
         blocked[key]=num_(blocked[key],0)+1;
       });
-      const labels={PTO:'on approved PTO',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',EVENING_LIMIT:'at evening limit',WRONG_WEEKEND_GROUP:'wrong weekend group',WEEKEND_ANCHOR_OFF:'outside weekend rotation',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
+      const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',EVENING_LIMIT:'at evening limit',WRONG_WEEKEND_GROUP:'wrong weekend group',WEEKEND_ANCHOR_OFF:'outside weekend rotation',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
       const pieces=Object.keys(blocked).map(k=>blocked[k]+' '+(labels[k]||k.toLowerCase().replace(/_/g,' ')));
       return 'UNFILLED — '+clean_(owners[0]['Pharmacist Name'])+' has an algorithm-generated OFF day; '+backups.length+' pharmacist(s) are configured in Users -> Off-Day Coverage Skills for '+clean_(slot.shiftCode)+': '+pieces.join('; ')+'.';
     }
@@ -2328,7 +2349,7 @@ function explainUnfilled_(slot,model,state) {
       const primary=e.reasons[0]||'OTHER'; counts[primary]=num_(counts[primary],0)+1;
     }
   });
-  const labels={PTO:'on approved PTO',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at evening limit',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
+  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at evening limit',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
   const pieces=Object.keys(counts).map(k=>counts[k]+' '+(labels[k]||k.toLowerCase().replace(/_/g,' ')));
   return 'UNFILLED — '+skillQualified.length+' active employees have the skill: '+pieces.join('; ')+'.';
 }
@@ -2358,6 +2379,7 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
       const offDayCoverageAssignment=clean_(a.coverageReason).toUpperCase()==='GENERATED OFF DAY' && hasOffDayCoverageSkillForSlot_(u,validationSlot);
       if (!hasRequiredSkillForSlot_(u,validationSlot,model) && !offDayCoverageAssignment) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' lacks '+a.requiredSkill+' and is not configured for OFF-day coverage.');
       if (isBlockedByPto_(u,a.date,model)) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' is on approved PTO.');
+      if (isBlockedByRegularOff_(u,a.date,model)) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' has an approved Regular Off request.');
       const wa=weeklyAvailabilityStatus_(u,a.date,a.shift,model);
       if(wa.blocked&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' violates recurring weekly availability.');
       if (preceptorEveningBlocked_(u,validationSlot,model)) errors.push(a.dateKey+' '+a.shiftCode+': preceptor assigned a weekday evening shift; preceptors may work evening shifts on weekends only.');
@@ -2701,6 +2723,7 @@ function openShiftForceRuleMeta_(code) {
     INACTIVE:{label:'Employee is inactive',weight:1200,risk:'CRITICAL'},
     MISSING_SKILL:{label:'Missing required skill',weight:1000,risk:'CRITICAL'},
     PTO:{label:'Approved PTO',weight:950,risk:'CRITICAL'},
+    REGULAR_OFF:{label:'Approved Regular Off',weight:950,risk:'CRITICAL'},
     ALREADY_SCHEDULED:{label:'Already scheduled that day',weight:900,risk:'CRITICAL'},
     TIME_CONFLICT:{label:'Time conflict / overlapping shift',weight:900,risk:'CRITICAL'},
     UNAVAILABLE:{label:'Marked unavailable',weight:750,risk:'HIGH'},
@@ -5161,6 +5184,25 @@ function isBlockedByPto_(u,date,model) {
   return blocked;
 }
 
+function isRegularOffRecordType_(value) {
+  const type=clean_(value).toUpperCase().replace(/[\-_]+/g,' ').replace(/\s+/g,' ').trim();
+  return type==='REGULAR OFF' || type==='REGULAR OFF REQUEST';
+}
+
+function isBlockedByRegularOff_(u,date,model) {
+  const username=clean_(u.Username), dk=formatDateKey_(date), key=username+'|'+dk;
+  if(model._regularOffCache && model._regularOffCache[key]!==undefined)return model._regularOffCache[key];
+  const rows=(model.requestsByUser&&model.requestsByUser[username]) || model.requests || [];
+  const blocked=rows.some(r => {
+    if(clean_(r.Status).toLowerCase()!=='approved')return false;
+    if(!isRegularOffRecordType_(r['Record Type']))return false;
+    if((!model.requestsByUser) && !requestMatchesUser_(r,u))return false;
+    return requestCoversDate_(r,date);
+  });
+  if(model._regularOffCache)model._regularOffCache[key]=blocked;
+  return blocked;
+}
+
 function availabilityStatus_(u,date,model) {
   const username=clean_(u.Username), dk=formatDateKey_(date), key=username+'|'+dk;
   if(model._availabilityCache && model._availabilityCache[key])return model._availabilityCache[key];
@@ -5170,7 +5212,7 @@ function availabilityStatus_(u,date,model) {
     if(clean_(r.Status).toLowerCase()!=='approved')return;
     if((!model.requestsByUser) && !requestMatchesUser_(r,u))return;
     const type=clean_(r['Record Type']).toUpperCase();
-    if(type==='PTO'||!requestCoversDate_(r,date))return;
+    if(type==='PTO'||isRegularOffRecordType_(type)||!requestCoversDate_(r,date))return;
     if(type==='UNAVAILABLE'||clean_(r.Available).toLowerCase()==='no')blocked=true;
     if(type==='AVAILABILITY'||type==='PREFERRED'||clean_(r.Available).toLowerCase()==='yes')preferred=true;
   });
@@ -5536,7 +5578,7 @@ function employeeWeekendIsOn_(u,date,settings){
 function weekendSaturday_(date){const d=startOfDay_(date),day=dayIndex_(d);if(day===6)return d;if(day===0)return addDays_(d,-1);return addDays_(d,6-day);}
 function isWeekendDate_(date){const d=dayIndex_(date);return d===0||d===6;}
 
-function reasonToWarning_(r){const m={INACTIVE:'Employee is inactive.',MISSING_SKILL:'Employee does not possess the required skill.',PTO:'Employee is on approved PTO.',UNAVAILABLE:'Employee is unavailable on this date.',ALREADY_SCHEDULED:'Employee already has a shift on this date.',TIME_CONFLICT:'Assignment overlaps another scheduled shift.',WEEKLY_HOURS:'Assignment would exceed the employee weekly-hour maximum.',WEEKLY_DAYS:'Assignment would exceed the required five workdays in this Sunday-Saturday week.',CONSECUTIVE_DAYS:'Assignment would create more than five consecutive workdays.',EVENING_TO_MORNING:'Evening-to-morning transition is not allowed. If the pharmacist works an evening shift, the next calendar day must be OFF or another evening shift, not a Day/Morning shift.',TWO_MONTH_HOURS:'Assignment would push the pharmacist above the exact 320-hour target for the generated schedule period.',PRECEPTOR_WEEKDAY_EVENING:'Preceptor cannot work evening shifts Monday-Friday; evening shifts are allowed for preceptors only on Saturday/Sunday.',PRECEPTOR_EVENING:'Preceptor cannot normally work evening shifts.',EVENING_LIMIT:'Assignment would exceed the monthly evening-shift maximum.',WRONG_WEEKEND_GROUP:'Employee is not in the scheduled weekend group.',RESIDENT_WRONG_WEEKEND_GROUP:'Resident is not in the weekend group scheduled for this date.',WEEKEND_ANCHOR_OFF:'Employee is outside the assigned one-weekend-every-three-weeks rotation.',SEVEN_OFF:'7-on/7-off employee is in an OFF period.',SEVEN_WRONG_SHIFT:'7-on/7-off employee must remain on the dedicated N1, N2, or E shift during the ON block.',RESIDENT_E2_WEEKLY_LIMIT:'Resident already has the required E2 shift for this week.',CUSTOM_HOURS:'Shift is outside the employee hard custom work hours.',WEEKLY_AVAILABILITY_DAY:'Employee is not available on this weekday under recurring weekly availability.',WEEKLY_AVAILABILITY_TIME:'Shift is outside the employee recurring weekly available hours.',WEEKEND_NOT_ELIGIBLE:'Employee is not weekend eligible.',EVENING_NOT_ELIGIBLE:'Employee is not evening eligible.',NIGHT_NOT_ELIGIBLE:'Employee is not night eligible.',RESIDENT_RESTRICTION:'Resident settings do not allow this assignment.'};return m[r]||r;}
+function reasonToWarning_(r){const m={INACTIVE:'Employee is inactive.',MISSING_SKILL:'Employee does not possess the required skill.',PTO:'Employee is on approved PTO.',REGULAR_OFF:'Employee has an approved Regular Off request.',UNAVAILABLE:'Employee is unavailable on this date.',ALREADY_SCHEDULED:'Employee already has a shift on this date.',TIME_CONFLICT:'Assignment overlaps another scheduled shift.',WEEKLY_HOURS:'Assignment would exceed the employee weekly-hour maximum.',WEEKLY_DAYS:'Assignment would exceed the required five workdays in this Sunday-Saturday week.',CONSECUTIVE_DAYS:'Assignment would create more than five consecutive workdays.',EVENING_TO_MORNING:'Evening-to-morning transition is not allowed. If the pharmacist works an evening shift, the next calendar day must be OFF or another evening shift, not a Day/Morning shift.',TWO_MONTH_HOURS:'Assignment would push the pharmacist above the exact 320-hour target for the generated schedule period.',PRECEPTOR_WEEKDAY_EVENING:'Preceptor cannot work evening shifts Monday-Friday; evening shifts are allowed for preceptors only on Saturday/Sunday.',PRECEPTOR_EVENING:'Preceptor cannot normally work evening shifts.',EVENING_LIMIT:'Assignment would exceed the monthly evening-shift maximum.',WRONG_WEEKEND_GROUP:'Employee is not in the scheduled weekend group.',RESIDENT_WRONG_WEEKEND_GROUP:'Resident is not in the weekend group scheduled for this date.',WEEKEND_ANCHOR_OFF:'Employee is outside the assigned one-weekend-every-three-weeks rotation.',SEVEN_OFF:'7-on/7-off employee is in an OFF period.',SEVEN_WRONG_SHIFT:'7-on/7-off employee must remain on the dedicated N1, N2, or E shift during the ON block.',RESIDENT_E2_WEEKLY_LIMIT:'Resident already has the required E2 shift for this week.',CUSTOM_HOURS:'Shift is outside the employee hard custom work hours.',WEEKLY_AVAILABILITY_DAY:'Employee is not available on this weekday under recurring weekly availability.',WEEKLY_AVAILABILITY_TIME:'Shift is outside the employee recurring weekly available hours.',WEEKEND_NOT_ELIGIBLE:'Employee is not weekend eligible.',EVENING_NOT_ELIGIBLE:'Employee is not evening eligible.',NIGHT_NOT_ELIGIBLE:'Employee is not night eligible.',RESIDENT_RESTRICTION:'Resident settings do not allow this assignment.'};return m[r]||r;}
 
 /** ---------------------- DASHBOARD / REPORTING -------------------- */
 
