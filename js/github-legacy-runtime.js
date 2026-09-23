@@ -714,6 +714,44 @@
     return row?String(row['Record Type']||'').trim().toUpperCase():'';
   }
 
+  async function preservePreviouslyApprovedPto_(localMatrix,googleMatrix){
+    if(!window.__neoGooglePtoSource||typeof window.__neoGooglePtoSource.reviewRequest!=='function'){
+      return googleMatrix;
+    }
+
+    const localRows=requestMatrixToObjects_(localMatrix||[]);
+    let currentMatrix=googleMatrix;
+    const previouslyApproved=localRows.filter(row=>
+      String(row['Record Type']||'').trim().toUpperCase()==='PTO' &&
+      String(row.Status||'').trim().toUpperCase()==='APPROVED' &&
+      String(row['Record ID']||'').trim()
+    );
+
+    for(const oldRow of previouslyApproved){
+      const id=String(oldRow['Record ID']||'').trim();
+      const currentRows=requestMatrixToObjects_(currentMatrix||[]);
+      const current=currentRows.find(row=>String(row['Record ID']||'').trim()===id);
+      if(!current)continue;
+
+      const status=String(current.Status||'').trim().toUpperCase();
+
+      // Respect an explicit administrator rejection. The protection below is
+      // only for the old auto-reconciliation bug that changed Approved -> Pending.
+      if(status==='APPROVED'||status==='REJECTED')continue;
+
+      const restored=await window.__neoGooglePtoSource.reviewRequest(
+        id,
+        'Approved',
+        oldRow.Comment===undefined?'':String(oldRow.Comment)
+      );
+      if(restored&&Array.isArray(restored.matrix)&&restored.matrix.length){
+        currentMatrix=restored.matrix;
+      }
+    }
+
+    return currentMatrix;
+  }
+
   async function syncGooglePtoMatrix_(googleMatrix,reason){
     if(!Array.isArray(googleMatrix)||!googleMatrix.length){
       throw new Error('Google confirmed the PTO change but did not return a sheet snapshot for neochrono-data.');
@@ -728,6 +766,12 @@
 
       const localSheet=data.sheets[GOOGLE_PTO_SHEET]||{values:[]};
       const localMatrix=Array.isArray(localSheet.values)?localSheet.values:[];
+
+      // Older deployed Google bridge versions could recalculate the first-two
+      // queue and silently turn an already Approved PTO back into Pending.
+      // Repair that immediately before syncing so an approval is monotonic.
+      googleMatrix=await preservePreviouslyApprovedPto_(localMatrix,googleMatrix);
+
       const merged=mergeGooglePtoIntoGithub_(localMatrix,googleMatrix);
 
       // Poll every 5 seconds, but write to GitHub ONLY when Google actually changed.
