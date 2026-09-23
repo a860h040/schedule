@@ -156,7 +156,7 @@ body:has(.paper-page-shell) .content{
   display:flex;
   align-items:flex-end;
   gap:6px;
-  flex-wrap:nowrap;
+  flex-wrap:wrap;
 }
 .paper-filter-row .field{
   flex:0 0 132px;
@@ -182,55 +182,14 @@ body:has(.paper-page-shell) .content{
   background:#fff;
   font-size:10px;
 }
-.paper-clear-btn{
+.paper-clear-btn,
+.paper-filter-action-btn{
   height:29px;
   min-height:29px;
   padding:3px 8px!important;
   border-radius:0!important;
   font-size:10px!important;
   white-space:nowrap;
-}
-
-/* Compact pre-scheduling totals. The horizontal strip keeps the Excel grid
- * from being pushed down by a long pharmacist list. */
-.paper-assignment-totals{
-  margin:4px 0 3px;
-  border:1px solid #9ca3af;
-  background:#fff;
-  font-size:9px;
-  color:#334155;
-}
-.paper-assignment-totals summary{
-  cursor:pointer;
-  padding:3px 6px;
-  font-weight:800;
-  background:#f8fafc;
-}
-.paper-total-grid{
-  display:flex;
-  flex-wrap:nowrap;
-  gap:4px;
-  overflow-x:auto;
-  padding:4px 5px 5px;
-}
-.paper-total-item{
-  flex:0 0 168px;
-  min-width:0;
-  border:1px solid #d1d5db;
-  background:#fff;
-  padding:3px 5px;
-}
-.paper-total-item b,
-.paper-total-item span{
-  display:block;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-.paper-total-item span{
-  margin-top:1px;
-  color:#64748b;
-  font-size:8px;
 }
 
 /* Small legend so the grid gets most of the screen. */
