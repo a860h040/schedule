@@ -720,8 +720,8 @@
 <div id="modalRoot"></div>
 
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
-<script src="js/google-pto-source.js?v=20260919-githubflow2"></script>
-<script src="js/github-legacy-runtime.js?v=20260922-fastlogin1"></script>
+<script src="js/google-pto-source.js?v=20260923-pharmacistname1"></script>
+<script src="js/github-legacy-runtime.js?v=20260923-pharmacistname1"></script>
 <script src="js/legacy/main-backend.js?v=20260922-deletecontrols1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
@@ -3446,7 +3446,36 @@ function openEmployeeRequestModal(){const body=`<div class="form-grid"><div clas
 
 function updateRequestStatusUI(){const isPto=$('arType')&&$('arType').value==='PTO';if($('arStatusWrap'))$('arStatusWrap').style.display=isPto?'none':'';if($('arPtoRule'))$('arPtoRule').style.display=isPto?'':'none'}
 
-async function saveEmployeeRequestUI(){const p={Username:$('arUser').value,'Record Type':$('arType').value,Date:$('arDate').value,'Start Date':$('arStart').value,'End Date':$('arEnd').value,Available:$('arAvail').value,Status:$('arStatus').value,Comment:$('arComment').value};try{const r=await server('saveEmployeeRequest',State.token,p);closeModal();if(p['Record Type']==='PTO'){toast(r.status==='Approved'?'PTO automatically approved — within the first 2 requests on every requested OFF date.':'PTO saved as Pending — it is request #3 or later on at least one requested OFF date; administrator review required',r.status==='Approved'?'success':'warning')}else toast('PTO / availability record saved','success');await refreshData()}catch(e){toast(e.message,'error')}}
+async function saveEmployeeRequestUI(){
+  const username=$('arUser').value;
+  const selected=(State.data.users||[]).find(u=>String(u.Username||'')===String(username||''));
+  const p={
+    Username:username,
+    'Employee ID':selected?String(selected['Employee ID']||''):'',
+    Pharmacist:selected?String(selected['Pharmacist Name']||''):'',
+    'Record Type':$('arType').value,
+    Date:$('arDate').value,
+    'Start Date':$('arStart').value,
+    'End Date':$('arEnd').value,
+    Available:$('arAvail').value,
+    Status:$('arStatus').value,
+    Comment:$('arComment').value
+  };
+  if(!p.Pharmacist){toast('Select a pharmacist before saving the request.','error');return;}
+  try{
+    const r=await server('saveEmployeeRequest',State.token,p);
+    closeModal();
+    if(p['Record Type']==='PTO'){
+      toast(
+        r.status==='Approved'
+          ?'PTO automatically approved — within the first 2 requests on every requested OFF date.'
+          :'PTO saved as Pending — it is request #3 or later on at least one requested OFF date; administrator review required',
+        r.status==='Approved'?'success':'warning'
+      );
+    }else toast('PTO / availability record saved','success');
+    await refreshData();
+  }catch(e){toast(e.message,'error')}
+}
 
 function requestDates(r){if(r['Start Date']||r['End Date'])return `${fmtDate(r['Start Date']||r['End Date'])} – ${fmtDate(r['End Date']||r['Start Date'])}`;if(r.Date)return fmtDate(r.Date);return''}
 function statusBadge(s){const x=String(s||'').toLowerCase();return `<span class="badge ${x==='approved'?'badge-ok':x==='rejected'?'badge-danger':'badge-warn'}">${esc(s)}</span>`}
