@@ -474,7 +474,7 @@
     html+=
       '<div class="paper-filter-card">'+
         '<div class="paper-filter-row">'+
-          selectFilter('pharmacistType','Pharmacist Type',['REGULAR','PRN','NIGHT','EVENING'],filt.pharmacistType)+
+          selectFilter('pharmacistType','Pharmacist Type',['Regular','PRN','Night','Evening'],filt.pharmacistType)+
           selectFilter('resident','Resident',['Yes','No'],filt.resident)+
           selectFilter('preceptor','Preceptor',['Yes','No'],filt.preceptor)+
           '<button class="btn btn-ghost btn-sm paper-clear-btn" onclick="clearPaperScheduleFilters_()">Clear filters</button>'+
