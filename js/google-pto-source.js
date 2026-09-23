@@ -25,11 +25,41 @@
     if(given)return given;
     const userKey=String(username||'').trim().toLowerCase();
     if(!userKey)return '';
+
+    // First try the current UI data when it is exposed.
     try{
-      const users=window.State&&State.data&&Array.isArray(State.data.users)?State.data.users:[];
+      const users=window.State&&window.State.data&&Array.isArray(window.State.data.users)
+        ? window.State.data.users
+        : [];
       const match=users.find(u=>String(u.Username||u.username||'').trim().toLowerCase()===userKey);
-      return match?String(match['Pharmacist Name']||match.Pharmacist||match.Name||'').trim():'';
-    }catch(_e){return '';}
+      const name=match?String(match['Pharmacist Name']||match.Pharmacist||match.Name||'').trim():'';
+      if(name)return name;
+    }catch(_e){}
+
+    // During a GitHub runtime mutation the authoritative workbook is loaded.
+    // Read Users directly so PTO can never lose the pharmacist name simply
+    // because State is a lexical global rather than window.State.
+    try{
+      if(window.__neoRuntime&&typeof window.__neoRuntime.currentBook==='function'){
+        const book=window.__neoRuntime.currentBook();
+        const sh=book&&book.getSheetByName?book.getSheetByName('Users'):null;
+        const matrix=sh&&sh.getDataRange?sh.getDataRange().getValues():[];
+        if(matrix&&matrix.length){
+          const headers=(matrix[0]||[]).map(x=>String(x??'').trim());
+          const ui=headers.indexOf('Username');
+          const ni=headers.indexOf('Pharmacist Name');
+          if(ui>=0&&ni>=0){
+            const row=matrix.slice(1).find(r=>String(r[ui]??'').trim().toLowerCase()===userKey);
+            if(row){
+              const name=String(row[ni]??'').trim();
+              if(name)return name;
+            }
+          }
+        }
+      }
+    }catch(_e){}
+
+    return '';
   }
 
   function makeRecordId_(){
