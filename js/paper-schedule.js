@@ -327,39 +327,6 @@
     });
   }
 
-  function paperAvailableXCount_(user,month){
-    return paperMonthDates_(month).reduce(function(total,dt){
-      var dk=dateKey(dt);
-      var assigned=calendarRowsForDate(dk).some(function(r){
-        return r.Status!=='UNFILLED' &&
-          String(r.Username==null?'':r.Username)===String(user.Username==null?'':user.Username);
-      });
-      if(assigned)return total;
-      if(paperApprovedTimeOff_(user.Username,user['Pharmacist Name'],dk))return total;
-      return total+1;
-    },0);
-  }
-
-  function paperAssignmentTotals_(month,users){
-    if(!users.length)return '';
-    var totalManual=0;
-    var cards=users.map(function(user){
-      var manual=paperManualAssignmentsForUserMonth_(user,month).length;
-      var locked=paperManualAssignmentsForUserMonth_(user,month).filter(function(r){
-        return yes(r.Locked)||String(r.Status||'').toUpperCase()==='LOCKED';
-      }).length;
-      var available=paperAvailableXCount_(user,month);
-      totalManual+=manual;
-      return '<div class="paper-total-item"><b>'+esc(user['Pharmacist Name']||'')+'</b><span>'+
-        manual+' manual'+(locked?' · '+locked+' locked':'')+' · '+available+' X available</span></div>';
-    }).join('');
-
-    return '<details class="paper-assignment-totals" open>'+
-      '<summary>Pre-scheduling totals — <b>'+totalManual+'</b> manual assignment'+(totalManual===1?'':'s')+'</summary>'+
-      '<div class="paper-total-grid">'+cards+'</div>'+
-    '</details>';
-  }
-
   function paperUnfilledForDate_(dk){
     return calendarRowsForDate(dk).filter(function(r){
       return r.Status==='UNFILLED';
