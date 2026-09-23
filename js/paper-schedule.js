@@ -196,6 +196,7 @@
     var skills=paperUserSkillCodes_(user);
     var sevenOn=scheduleType.indexOf('7-ON')>=0||scheduleType.indexOf('7ON')>=0;
 
+    if(yes(user&&user.Resident))return 'RESIDENT';
     if(employment==='PRN'||scheduleType==='PRN')return 'PRN';
     if(preferred==='N1'||preferred==='N2'||preferred==='NIGHT'||(sevenOn&&(skills.indexOf('N1')>=0||skills.indexOf('N2')>=0)))return 'NIGHT';
     if(preferred==='E'||preferred==='E1'||preferred==='E2'||preferred==='EVENING'||(sevenOn&&(skills.indexOf('E')>=0||skills.indexOf('E1')>=0||skills.indexOf('E2')>=0)))return 'EVENING';
@@ -216,9 +217,6 @@
     }
     if(f.pharmacistType){
       users=users.filter(function(u){return paperPharmacistType_(u)===String(f.pharmacistType||'').toUpperCase();});
-    }
-    if(f.resident){
-      users=users.filter(function(u){return String(u.Resident||'')===f.resident;});
     }
     if(f.preceptor){
       users=users.filter(function(u){return String(u.Preceptor||'')===f.preceptor;});
@@ -461,14 +459,6 @@
           '<div class="calendar-title">'+esc(monthTitle(m))+' — Paper Schedule</div>'+
           '<div class="muted small">Excel-style view: pharmacists down the left, dates across the top. X = unassigned/available, P = approved PTO, R = approved Regular Off.</div>'+
         '</div>'+
-        '<div class="toolbar">'+
-          '<button class="btn btn-secondary btn-sm" onclick="paperScheduleChangeMonth_(-1)">← Previous</button>'+
-          '<button class="btn btn-secondary btn-sm" onclick="State.month=firstOfMonth(new Date());renderPaperSchedule()">Today</button>'+
-          '<button class="btn btn-secondary btn-sm" onclick="paperScheduleChangeMonth_(1)">Next →</button>'+
-          '<button class="btn btn-primary btn-sm" onclick="printPaperSchedule_()">Print / Save PDF</button>'+
-          (d.isAdmin?'<button class="btn btn-primary btn-sm" onclick="openAssignmentModal(null)">+ Manual assignment</button>':'')+
-          (d.isAdmin?'<button id="paperGenerateScheduleBtn" class="btn btn-primary btn-sm" onclick="paperGenerateSchedule_()">Generate Schedule</button>':'')+
-        '</div>'+
       '</div>';
 
     html+=
@@ -480,14 +470,17 @@
     html+=
       '<div class="paper-filter-card">'+
         '<div class="paper-filter-row">'+
-          selectFilter('pharmacistType','Pharmacist Type',['Regular','PRN','Night','Evening'],filt.pharmacistType)+
-          selectFilter('resident','Resident',['Yes','No'],filt.resident)+
+          selectFilter('pharmacistType','Pharmacist Type',['Regular','PRN','Night','Evening','Resident'],filt.pharmacistType)+
           selectFilter('preceptor','Preceptor',['Yes','No'],filt.preceptor)+
           '<button class="btn btn-ghost btn-sm paper-clear-btn" onclick="clearPaperScheduleFilters_()">Clear filters</button>'+
+          '<button class="btn btn-secondary btn-sm paper-filter-action-btn" onclick="paperScheduleChangeMonth_(-1)">← Previous</button>'+
+          '<button class="btn btn-secondary btn-sm paper-filter-action-btn" onclick="State.month=firstOfMonth(new Date());renderPaperSchedule()">Today</button>'+
+          '<button class="btn btn-secondary btn-sm paper-filter-action-btn" onclick="paperScheduleChangeMonth_(1)">Next →</button>'+
+          '<button class="btn btn-primary btn-sm paper-filter-action-btn" onclick="printPaperSchedule_()">Print / Save PDF</button>'+
+          (d.isAdmin?'<button class="btn btn-primary btn-sm paper-filter-action-btn" onclick="openAssignmentModal(null)">+ Manual assignment</button>':'')+
+          (d.isAdmin?'<button id="paperGenerateScheduleBtn" class="btn btn-primary btn-sm paper-filter-action-btn" onclick="paperGenerateSchedule_()">Generate Schedule</button>':'')+
         '</div>'+
       '</div>';
-
-    html+=paperAssignmentTotals_(m,users);
 
     html+=
       '<div class="paper-legend">'+
@@ -645,7 +638,7 @@
   window.clearPaperScheduleFilters_=function(){
     State.calendarFilters.employees=['','','','','',''];
     State.calendarFilters.showUnfilledWithSelected=false;
-    ['status','shift','type','skill','weekendGroup','pharmacistType','resident','preceptor'].forEach(function(k){
+    ['status','shift','type','skill','weekendGroup','pharmacistType','preceptor'].forEach(function(k){
       State.calendarFilters[k]='';
     });
     renderPaperSchedule();
