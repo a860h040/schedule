@@ -4977,8 +4977,10 @@ function getPtoQueueStateForRecord_(recordId) {
 /**
  * Synchronize PTO statuses independently for each requested OFF date. The first
  * two requests FOR EACH DATE are SYSTEM AUTO-APPROVED. Request 3+ remains Pending unless an
- * administrator has explicitly approved it. If an earlier request is rejected,
- * the next Pending request is promoted automatically.
+ * administrator has explicitly approved it. Approved requests are sticky:
+ * reconciliation can promote Pending requests but can never demote an Approved
+ * request. If an earlier request is rejected, the next Pending request may be
+ * promoted automatically.
  */
 function reconcilePtoAutoApprovals_(updatedBy) {
   const rows=readTable_(APP.SHEETS.REQUESTS);
@@ -5014,19 +5016,9 @@ function reconcilePtoAutoApprovals_(updatedBy) {
       return;
     }
 
-    // If a request was auto-approved but an earlier request is later inserted
-    // or restored ahead of it, return only SYSTEM approvals to Pending.
-    // Explicit administrator approvals are never removed automatically.
-    if(status==='approved' && systemAuto) {
-      updateRowByKey_(APP.SHEETS.REQUESTS,'Record ID',id,{
-        'Status':'Pending',
-        'Reviewed By':'',
-        'Reviewed At':'',
-        'Updated At':now,
-        'Updated By':updatedBy||'SYSTEM'
-      });
-      updated++; demoted++;
-    }
+    // Approval is permanent unless an administrator explicitly rejects or
+    // deletes the request. Queue recalculation may promote Pending requests,
+    // but it must never demote an already Approved request.
   });
 
   if(updated) SpreadsheetApp.flush();
