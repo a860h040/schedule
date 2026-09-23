@@ -25,20 +25,26 @@
       var r=rows[i];
       if(String(r.Status||'').toUpperCase()!=='APPROVED')continue;
 
+      var requestUser=String(r.Username==null?'':r.Username).trim().toLowerCase();
+      var requestName=String(r.Pharmacist||'').trim().toLowerCase();
+      var wantedUser=String(username==null?'':username).trim().toLowerCase();
+      var wantedName=String(name||'').trim().toLowerCase();
       var sameUser=
-        String(r.Username==null?'':r.Username)===String(username==null?'':username) ||
-        String(r.Pharmacist||'')===String(name||'');
+        (!!wantedUser&&requestUser===wantedUser) ||
+        (!!wantedName&&requestName===wantedName);
       if(!sameUser)continue;
 
-      var start=dateKey(r['Start Date']||r['End Date']||r.Date);
-      var end=dateKey(r['End Date']||r['Start Date']||r.Date);
-      if(!start||!end||dk<start||dk>end)continue;
+      var start=dateKey(r['Start Date']||r.Date||r['End Date']);
+      var end=dateKey(r['End Date']||r.Date||r['Start Date']);
+      if(!start||!end)continue;
+      if(end<start){var tmp=start;start=end;end=tmp;}
+      if(dk<start||dk>end)continue;
 
       var type=paperRequestType_(r['Record Type']);
       if(type==='PTO'){
         return {code:'P',cls:'paper-pto',title:'Approved PTO',record:r};
       }
-      if(type==='REGULAR OFF'||type==='REGULAR OFF REQUEST'){
+      if(type==='REGULAR OFF'||type==='REGULAR OFF REQUEST'||type==='REGULAROFF'){
         foundRegularOff={code:'R',cls:'paper-regular-off',title:'Approved Regular Off',record:r};
       }
     }
@@ -296,7 +302,7 @@
       filters.skill || filters.weekendGroup
     );
 
-    if(!filtersActive && protectedDay){
+    if(protectedDay){
       return {text:protectedDay.code,cls:protectedDay.cls,title:protectedDay.title,id:'',protectedDay:protectedDay};
     }
 
