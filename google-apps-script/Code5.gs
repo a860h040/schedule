@@ -18,8 +18,10 @@ const NEOCHRONO_RECEIVER = Object.freeze({
   SPREADSHEET_ID: '1flTBzOIM_dbDODjC-S-DHoViAhHASEyNWInZBxab5To',
   SCHEDULE_SHEET: 'Schedule',
   PTO_SHEET: 'PTO / Availability Requests',
+  PRN_AVAILABILITY_SHEET: 'My Availability',
   SCHEDULE_MESSAGE_TYPE: 'NEOCHRONO_SCHEDULE_RECEIVER',
   PTO_MESSAGE_TYPE: 'NEOCHRONO_PTO_RECEIVER',
+  PRN_AVAILABILITY_MESSAGE_TYPE: 'NEOCHRONO_PRN_AVAILABILITY',
   PTO_AUTO_APPROVE_LIMIT: 2
 });
 
@@ -75,6 +77,14 @@ function doPost(e) {
 
     if (action === 'neochronoPtoWrite') {
       return neoChronoHandlePtoWrite_(requestId, parsed.sheet, payload);
+    }
+
+    if (action === 'neochronoPrnAvailability') {
+      return neoChronoHandlePrnAvailabilityRead_(requestId, parsed.sheet);
+    }
+
+    if (action === 'neochronoPrnAvailabilityExport') {
+      return neoChronoHandlePrnAvailabilityExport_(parsed.sheet);
     }
 
     throw new Error('Unsupported NeoChrono action: ' + action);
@@ -704,6 +714,146 @@ function neoChronoSortScheduleRows_(
     .map(function(item) {
       return item.row;
     });
+}
+
+/* =========================
+   PRN "MY AVAILABILITY" READ
+   ========================= */
+
+function neoChronoValidatePrnAvailabilitySheetName_(requestedSheet) {
+  var requested = String(
+    requestedSheet ||
+    NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET
+  ).trim();
+
+  if (requested !== NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET) {
+    throw new Error(
+      'Invalid PRN availability sheet. Expected "' +
+      NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET +
+      '".'
+    );
+  }
+}
+
+function neoChronoHandlePrnAvailabilityRead_(requestId, requestedSheet) {
+  neoChronoValidatePrnAvailabilitySheetName_(requestedSheet);
+
+  var ss = neoChronoSpreadsheet_();
+  var snapshot = neoChronoPrnAvailabilitySnapshot_(ss);
+
+  return neoChronoBridgeResponse_({
+    type: NEOCHRONO_RECEIVER.PRN_AVAILABILITY_MESSAGE_TYPE,
+    ok: true,
+    success: true,
+    requestId: requestId,
+    sheet: NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET,
+    headers: snapshot.headers,
+    rows: snapshot.rows,
+    rowCount: snapshot.rowCount,
+    generatedAt: snapshot.generatedAt,
+    message: 'PRN availability loaded from My Availability.'
+  });
+}
+
+function neoChronoHandlePrnAvailabilityExport_(requestedSheet) {
+  neoChronoValidatePrnAvailabilitySheetName_(requestedSheet);
+
+  var ss = neoChronoSpreadsheet_();
+  var snapshot = neoChronoPrnAvailabilitySnapshot_(ss);
+
+  return neoChronoJsonResponse_({
+    ok: true,
+    success: true,
+    sheet: NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET,
+    headers: snapshot.headers,
+    rows: snapshot.rows,
+    rowCount: snapshot.rowCount,
+    generatedAt: snapshot.generatedAt,
+    message: 'PRN availability export generated.'
+  });
+}
+
+function neoChronoPrnAvailabilitySnapshot_(ss) {
+  var sheet = ss.getSheetByName(
+    NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET
+  );
+
+  if (!sheet) {
+    return {
+      headers: [],
+      rows: [],
+      rowCount: 0,
+      generatedAt: new Date().toISOString()
+    };
+  }
+
+  var lastRow = sheet.getLastRow();
+  var lastColumn = sheet.getLastColumn();
+
+  if (lastRow < 1 || lastColumn < 1) {
+    return {
+      headers: [],
+      rows: [],
+      rowCount: 0,
+      generatedAt: new Date().toISOString()
+    };
+  }
+
+  var values = sheet
+    .getRange(1, 1, lastRow, lastColumn)
+    .getValues();
+
+  var headers = values[0].map(function(value) {
+    return String(value || '').trim();
+  });
+
+  var timezone =
+    ss.getSpreadsheetTimeZone() ||
+    Session.getScriptTimeZone() ||
+    'America/New_York';
+
+  var rows = [];
+
+  for (var r = 1; r < values.length; r++) {
+    var source = values[r];
+    var object = {};
+    var hasValue = false;
+
+    for (var col = 0; col < headers.length; col++) {
+      var header = headers[col];
+      if (!header) continue;
+
+      var value = source[col];
+
+      if (value !== '' && value !== null && value !== undefined) {
+        hasValue = true;
+      }
+
+      if (value instanceof Date && !isNaN(value.getTime())) {
+        if (/time/i.test(header) && !/date/i.test(header)) {
+          object[header] = Utilities.formatDate(value, timezone, 'HH:mm');
+        } else if (/date|day/i.test(header)) {
+          object[header] = Utilities.formatDate(value, timezone, 'yyyy-MM-dd');
+        } else {
+          object[header] = value.toISOString();
+        }
+      } else {
+        object[header] =
+          value === null || value === undefined
+            ? ''
+            : value;
+      }
+    }
+
+    if (hasValue) rows.push(object);
+  }
+
+  return {
+    headers: headers,
+    rows: rows,
+    rowCount: rows.length,
+    generatedAt: new Date().toISOString()
+  };
 }
 
 /* =========================
