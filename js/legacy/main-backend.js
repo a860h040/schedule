@@ -4820,6 +4820,75 @@ function removeAssignment(token,assignmentId,reason) {
   return {ok:true};
 }
 
+function setAssignmentToX(token,assignmentId) {
+  const ctx=requireAdmin_(token);
+  const rows=readTable_(APP.SHEETS.SCHEDULE);
+  const row=rows.find(r=>clean_(r['Assignment ID'])===clean_(assignmentId));
+
+  if(!row) throw new Error('Assignment not found.');
+  if(asDate_(row['Finalized At'])) {
+    throw new Error('This assignment is in a finalized schedule. Unfinalize the period before changing it to X.');
+  }
+
+  const required=isRequiredSlot_(
+    asDate_(row.Date),
+    clean_(row.Shift),
+    num_(row.Slot,1)
+  );
+
+  if(required) {
+    // Explicit administrator action: change the pharmacist's assigned shift
+    // back to X/unassigned. A previous lock protects against the algorithm,
+    // but does not block this intentional manual change.
+    updateRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',assignmentId,{
+      'Assigned Pharmacist':'UNFILLED',
+      'Username':'',
+      'Coverage For Pharmacist':'',
+      'Coverage For Username':'',
+      'Coverage Reason':'',
+      'Locked':'No',
+      'Manual':'Yes',
+      'Status':'UNFILLED',
+      'Warning':'MANUALLY SET TO X / UNASSIGNED',
+      'Updated At':new Date(),
+      'Updated By':ctx.username
+    });
+
+    collapseDuplicateUnfilledRowsForSlot_(
+      asDate_(row.Date),
+      clean_(row.Shift),
+      num_(row.Slot,1),
+      assignmentId
+    );
+  } else {
+    deleteRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',assignmentId);
+  }
+
+  audit_(
+    'ASSIGNMENT_SET_TO_X',
+    dateKey_(row.Date),
+    row['Assigned Pharmacist'],
+    row.Shift,
+    '',
+    row['Assigned Pharmacist'],
+    'X',
+    'Yes',
+    'Administrator changed assigned shift to X',
+    required?'Required slot remains UNFILLED.':'Non-required assignment removed.',
+    ctx.username
+  );
+
+  return {
+    ok:true,
+    assignmentId:assignmentId,
+    date:dateKey_(row.Date),
+    shift:clean_(row.Shift),
+    pharmacist:clean_(row['Assigned Pharmacist']),
+    required:required
+  };
+}
+
+
 function setAssignmentLock(token,assignmentId,locked) {
   const ctx=requireAdmin_(token);
   const row=findRowByKey_(APP.SHEETS.SCHEDULE,'Assignment ID',assignmentId);
