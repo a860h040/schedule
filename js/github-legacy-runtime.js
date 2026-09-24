@@ -665,6 +665,113 @@
     ].join('|');
   }
 
+  function timeOffDateKey_(value){
+    if(value instanceof Date&&!isNaN(value.getTime())){
+      return value.toISOString().slice(0,10);
+    }
+    const raw=String(value||'').trim();
+    if(!raw)return '';
+    const m=raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if(m)return m[1];
+    const d=new Date(raw);
+    return isNaN(d.getTime())?'':d.toISOString().slice(0,10);
+  }
+
+  function timeOffDateKeys_(row){
+    let start=timeOffDateKey_(row&&row['Start Date']);
+    let end=timeOffDateKey_(row&&row['End Date']);
+
+    if(start||end){
+      if(!start)start=end;
+      if(!end)end=start;
+      if(!start||!end||end<start)return [];
+
+      const out=[];
+      let d=new Date(start+'T00:00:00Z');
+      const finish=new Date(end+'T00:00:00Z');
+      while(d<=finish&&out.length<=370){
+        out.push(d.toISOString().slice(0,10));
+        d=new Date(d.getTime()+86400000);
+      }
+      return out;
+    }
+
+    const single=timeOffDateKey_(row&&row.Date);
+    return single?[single]:[];
+  }
+
+  function reconcileQueuedTimeOffMatrix_(matrix,limit){
+    if(!Array.isArray(matrix)||!matrix.length)return matrix;
+
+    const headers=(matrix[0]||[]).map(x=>String(x??'').trim());
+    const rows=requestMatrixToObjects_(matrix);
+    const max=Math.max(0,Math.floor(Number(limit)||2));
+
+    const items=rows.map((row,index)=>({
+      row,
+      index,
+      id:String(row['Record ID']||'').trim()||('ROW-'+index),
+      submitted:(()=>{
+        const raw=row['Submitted At']||row['Updated At']||'';
+        const ms=Date.parse(String(raw||''));
+        return Number.isFinite(ms)?ms:index;
+      })(),
+      dates:timeOffDateKeys_(row)
+    })).filter(item=>
+      !!googleTimeOffType_(item.row['Record Type']) &&
+      String(item.row.Status||'').trim().toUpperCase()!=='REJECTED' &&
+      item.dates.length
+    );
+
+    const byDate={};
+    items.forEach(item=>{
+      item.dates.forEach(d=>{
+        if(!byDate[d])byDate[d]=[];
+        byDate[d].push(item);
+      });
+    });
+
+    const positions={};
+    items.forEach(item=>positions[item.id]={});
+    Object.keys(byDate).forEach(d=>{
+      byDate[d]
+        .slice()
+        .sort((a,b)=>a.submitted-b.submitted||a.index-b.index||a.id.localeCompare(b.id))
+        .forEach((item,index)=>{positions[item.id][d]=index+1;});
+    });
+
+    const now=new Date().toISOString();
+
+    items.forEach(item=>{
+      const row=item.row;
+      const status=String(row.Status||'').trim().toUpperCase();
+      const auto=item.dates.every(d=>Number((positions[item.id]||{})[d]||999999)<=max);
+
+      // Never demote an existing approval. This includes both administrator
+      // approvals and earlier system auto-approvals.
+      if(status==='APPROVED')return;
+
+      if(auto){
+        row.Status='Approved';
+        row['Reviewed By']='SYSTEM AUTO-APPROVAL';
+        row['Reviewed At']=row['Reviewed At']||now;
+        row['Updated At']=now;
+        row['Updated By']=row['Updated By']||'SYSTEM';
+      }else if(status!=='PENDING'){
+        row.Status='Pending';
+        row['Reviewed By']='';
+        row['Reviewed At']='';
+        row['Updated At']=now;
+        row['Updated By']=row['Updated By']||'SYSTEM';
+      }
+    });
+
+    return [
+      headers,
+      ...rows.map(row=>headers.map(h=>row[h]??''))
+    ];
+  }
+
   function mergeGooglePtoIntoGithub_(localMatrix,googleMatrix){
     const fallbackHeaders=[
       'Record Type','Record ID','Pharmacist','Username','Date','Start Date','End Date',
@@ -773,13 +880,15 @@
       googleMatrix=await preservePreviouslyApprovedTimeOff_(localMatrix,googleMatrix);
 
       const merged=mergeGooglePtoIntoGithub_(localMatrix,googleMatrix);
+      const reconciled=reconcileQueuedTimeOffMatrix_(merged,2);
 
-      // Poll every 5 seconds, but write to GitHub ONLY when Google actually changed.
-      if(JSON.stringify(localMatrix)===JSON.stringify(merged)){
-        return {ok:true,changed:false,rows:Math.max(0,merged.length-1)};
+      // Poll every 5 seconds, but write to GitHub ONLY when the authoritative
+      // merged time-off state actually changed.
+      if(JSON.stringify(localMatrix)===JSON.stringify(reconciled)){
+        return {ok:true,changed:false,rows:Math.max(0,reconciled.length-1)};
       }
 
-      data.sheets[GOOGLE_PTO_SHEET]={values:merged};
+      data.sheets[GOOGLE_PTO_SHEET]={values:reconciled};
       data.meta=data.meta||{};
       data.meta.googlePtoSyncedAt=new Date().toISOString();
       data.meta.googlePtoSource='Google Sheet -> neochrono-data (PTO + Regular Off)';
@@ -791,7 +900,7 @@
           reason||'Sync PTO from Google Sheet'
         );
         cache={data,sha:(result&&result.content&&result.content.sha)||loaded.sha,loadedAt:Date.now()};
-        return {ok:true,changed:true,rows:Math.max(0,merged.length-1)};
+        return {ok:true,changed:true,rows:Math.max(0,reconciled.length-1)};
       }catch(e){
         lastError=e;
         const conflict=
