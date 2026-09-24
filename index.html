@@ -3444,7 +3444,113 @@ window.addEventListener('neochrono:prn-availability-synced',()=>{
   }catch(_e){}
 });
 
-function renderRequests(){const rows=(State.data.requests||[]).slice().sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));$('content').innerHTML=`<div class="section-title"><div><h3>PTO / Time Off / Date Availability</h3><p>PTO and Regular Off share the same first-come, first-served queue for each requested OFF date. The first 2 combined requests for a date are automatically Approved. Request #3 and above remain Pending until an administrator explicitly approves or rejects them. Once Approved, the request stays Approved and blocks scheduling on those dates.</p><div style="margin-top:6px">${googlePtoSourceBadge_()}</div></div><button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add Time Off / Availability</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Type / ID</th><th>Pharmacist</th><th>Date(s)</th><th>Available</th><th>Status</th><th>Comment</th><th>Updated</th><th>Review</th></tr></thead><tbody>${rows.map(r=>{const reviewer=String(r['Reviewed By']||'').trim();const reviewerUpper=reviewer.toUpperCase();const approvalNote=String(r.Status||'').toLowerCase()==='approved'?(reviewerUpper==='SYSTEM AUTO-APPROVAL'?'<div class="small muted">Auto-approved · first 2</div>':(reviewer?'<div class="small muted"><b>Admin approved</b> · protected</div>':'')):'';return `<tr><td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td><td>${esc(r.Pharmacist)}</td><td>${requestDates(r)}</td><td>${esc(r.Available)}</td><td>${statusBadge(r.Status)}${approvalNote}</td><td>${esc(r.Comment)}</td><td>${esc(r['Updated At']||r['Submitted At'])}</td><td>${String(r.Status||'').toLowerCase()==='pending'?`<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button><button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`}
+function renderRequests(){
+  const rows=(State.data.requests||[])
+    .slice()
+    .sort((a,b)=>String(b['Submitted At']).localeCompare(String(a['Submitted At'])));
+
+  $('content').innerHTML=
+    `<div class="section-title">
+      <div>
+        <h3>PTO / Time Off / Date Availability</h3>
+        <p>PTO and Regular Off share the same first-come, first-served queue for each requested OFF date. The first 2 combined requests for a date are automatically Approved. Request #3 and above remain Pending until an administrator explicitly approves or rejects them. Once Approved, the request stays Approved and blocks scheduling on those dates.</p>
+        <div style="margin-top:6px">${googlePtoSourceBadge_()}</div>
+      </div>
+      <button class="btn btn-primary" onclick="openEmployeeRequestModal()">+ Add Time Off / Availability</button>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Type / ID</th>
+            <th>Pharmacist</th>
+            <th>Date(s)</th>
+            <th>Available</th>
+            <th>Status</th>
+            <th>Comment</th>
+            <th>Updated</th>
+            <th>Review / Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r=>{
+            const reviewer=String(r['Reviewed By']||'').trim();
+            const reviewerUpper=reviewer.toUpperCase();
+            const status=String(r.Status||'').toLowerCase();
+            const queued=isQueuedTimeOffUI_(r['Record Type']);
+
+            const approvalNote=status==='approved'
+              ?(
+                  reviewerUpper==='SYSTEM AUTO-APPROVAL'
+                    ?'<div class="small muted">Auto-approved · first 2</div>'
+                    :(reviewer
+                        ?'<div class="small muted"><b>Admin approved</b> · protected</div>'
+                        :'')
+                )
+              :'';
+
+            const actions=[];
+
+            if(status==='pending'){
+              actions.push(
+                `<button class="btn btn-primary btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Approved')">Approve</button>`
+              );
+              actions.push(
+                `<button class="btn btn-ghost btn-sm" onclick="reviewReqUI('${attr(r['Record ID'])}','Rejected')">Reject</button>`
+              );
+            }
+
+            if(queued){
+              actions.push(
+                `<button class="btn btn-danger btn-sm" onclick="deleteTimeOffRequestUI_('${attr(r['Record ID'])}','${attr(r['Record Type'])}','${attr(r.Pharmacist)}','${attr(requestDates(r))}')">Delete</button>`
+              );
+            }
+
+            return `
+              <tr>
+                <td><b>${esc(r['Record Type'])}</b><div class="small muted">${esc(r['Record ID'])}</div></td>
+                <td>${esc(r.Pharmacist)}</td>
+                <td>${requestDates(r)}</td>
+                <td>${esc(r.Available)}</td>
+                <td>${statusBadge(r.Status)}${approvalNote}</td>
+                <td>${esc(r.Comment)}</td>
+                <td>${esc(r['Updated At']||r['Submitted At'])}</td>
+                <td>
+                  ${actions.length
+                    ?'<div style="display:flex;gap:6px;flex-wrap:wrap">'+actions.join('')+'</div>'
+                    :'—'}
+                </td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function deleteTimeOffRequestUI_(id,type,pharmacist,dates){
+  const label=String(type||'').toUpperCase()==='PTO'?'PTO':'Regular Off';
+
+  if(!confirm(
+    'Delete this '+label+' request?\n\n'+
+    (pharmacist?pharmacist+'\n':'')+
+    (dates?dates+'\n\n':'\n')+
+    'This permanently removes the request. If it is currently Approved, the P/R protection will be removed from Paper Schedule. The first-come approval queue will then be recalculated.'
+  ))return;
+
+  try{
+    const r=await server('deleteTimeOffRequest',State.token,id);
+    toast(
+      label+' request deleted'+
+      (Number(r&&r.ptoAutoApprovalsUpdated||0)>0
+        ?'; the time-off approval queue was recalculated'
+        :''),
+      'success'
+    );
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
+}
 
 function openEmployeeRequestModal(){const body=`<div class="form-grid"><div class="field"><label>Pharmacist</label><select id="arUser" class="control">${userOptions().map(o=>`<option value="${attr(o.value)}">${esc(o.label)}</option>`).join('')}</select></div><div class="field"><label>Record Type</label><select id="arType" class="control" onchange="updateRequestStatusUI()"><option>PTO</option><option value="REGULAR OFF">Regular Off</option><option>UNAVAILABLE</option><option>AVAILABILITY</option><option>PREFERRED</option></select></div><div class="field"><label>Single Date (optional)</label><input id="arDate" type="date" class="control"></div><div class="field"><label>Start Date</label><input id="arStart" type="date" class="control"></div><div class="field"><label>End Date</label><input id="arEnd" type="date" class="control"></div><div class="field"><label>Available</label><select id="arAvail" class="control"><option value=""></option><option>Yes</option><option>No</option></select></div><div class="field" id="arStatusWrap"><label>Status</label><select id="arStatus" class="control"><option>Approved</option><option>Pending</option><option>Rejected</option></select></div><div class="field span-2" id="arPtoRule"><div class="small muted" style="padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#f8fafc"><b>PTO and Regular Off use automatic first-come approval.</b> The first 2 combined time-off requests for each covered date are Approved. Request #3 and above are saved as Pending until an administrator approves or rejects them. Admin-approved requests remain protected.</div></div><div class="field span-2"><label>Comment</label><textarea id="arComment" class="control"></textarea></div></div>`;openModal('Add Pharmacist Time Off / Availability',body,[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'},{label:'Save',cls:'btn-primary',action:'saveEmployeeRequestUI()'}]);setTimeout(updateRequestStatusUI,0)}
 
