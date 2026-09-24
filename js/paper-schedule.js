@@ -720,53 +720,168 @@
     openAssignmentModal(null,dk,shift,1,String(user.Username==null?'':user.Username));
   };
 
-  window.paperGenerateSchedule_=async function(){
+  window.paperGenerateSchedule_=function(){
     if(!State.data||!State.data.isAdmin)return;
 
     var month=State.month;
-    var start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
-    var end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
-    var btn=$('paperGenerateScheduleBtn');
-    var users=paperVisibleUsers_();
-    var manualTotal=users.reduce(function(sum,u){return sum+paperManualAssignmentsForUserMonth_(u,month).length;},0);
-    var visiblePrnUsers=new Set(
-      users
-        .filter(function(u){return paperPharmacistType_(u)==='PRN';})
-        .map(function(u){return String(u.Username==null?'':u.Username).trim().toLowerCase();})
+    var monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+    var monthEnd=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+    var midDay=Math.floor((new Date(month.getFullYear(),month.getMonth()+1,0).getDate())/2);
+    var firstHalfEnd=dateKey(new Date(month.getFullYear(),month.getMonth(),midDay));
+    var secondHalfStart=dateKey(new Date(month.getFullYear(),month.getMonth(),midDay+1));
+
+    var body=
+      '<div class="alert alert-info">'+
+        '<b>Run the scheduling algorithm for only part of '+esc(monthTitle(month))+'.</b><br>'+
+        'Only dates inside the selected range will be regenerated. Dates before and after the range stay unchanged. '+
+        'Manual/locked assignments, approved PTO, and approved Regular Off remain protected.'+
+      '</div>'+
+      '<div class="form-grid two mt12">'+
+        '<div class="field">'+
+          '<label>Start date</label>'+
+          '<input id="paperGenerateStart" class="control" type="date" min="'+attr(monthStart)+'" max="'+attr(monthEnd)+'" value="'+attr(monthStart)+'">'+
+        '</div>'+
+        '<div class="field">'+
+          '<label>End date</label>'+
+          '<input id="paperGenerateEnd" class="control" type="date" min="'+attr(monthStart)+'" max="'+attr(monthEnd)+'" value="'+attr(monthEnd)+'">'+
+        '</div>'+
+      '</div>'+
+      '<div class="mt12" style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn btn-secondary btn-sm" type="button" onclick="paperSetGenerateRangePreset_(\'FULL\')">Full month</button>'+
+        '<button class="btn btn-secondary btn-sm" type="button" onclick="paperSetGenerateRangePreset_(\'FIRST\')">First half</button>'+
+        '<button class="btn btn-secondary btn-sm" type="button" onclick="paperSetGenerateRangePreset_(\'SECOND\')">Second half</button>'+
+      '</div>'+
+      '<div class="muted small mt12">'+
+        'For a partial Sunday-Saturday week, NeoChrono still counts neighboring existing assignments for weekly hours, rest rules, and one-shift-per-day checks. '+
+        'The algorithm will not change those neighboring dates unless they are inside the selected range.'+
+      '</div>';
+
+    window.__paperGenerateRange={
+      monthStart:monthStart,
+      monthEnd:monthEnd,
+      firstHalfEnd:firstHalfEnd,
+      secondHalfStart:secondHalfStart
+    };
+
+    openModal(
+      'Generate Schedule — Select Date Range',
+      body,
+      [
+        {text:'Cancel',cls:'btn-secondary',fn:closeModal},
+        {
+          text:'Run Algorithm',
+          cls:'btn-primary',
+          fn:function(){
+            var startInput=$('paperGenerateStart');
+            var endInput=$('paperGenerateEnd');
+            var selectedStart=startInput?String(startInput.value||''):'';
+            var selectedEnd=endInput?String(endInput.value||''):'';
+
+            if(!selectedStart||!selectedEnd){
+              toast('Select both a start date and an end date.','error');
+              return;
+            }
+            if(selectedStart<monthStart||selectedStart>monthEnd||selectedEnd<monthStart||selectedEnd>monthEnd){
+              toast('The selected dates must stay inside '+monthTitle(month)+'.','error');
+              return;
+            }
+            if(selectedEnd<selectedStart){
+              toast('End date must be on or after the start date.','error');
+              return;
+            }
+
+            closeModal();
+            paperRunScheduleRange_(selectedStart,selectedEnd);
+          }
+        }
+      ]
     );
-    var prnAvailableDates=new Set();
-    (State.data.prnAvailability||[]).forEach(function(r){
-      var username=String(r.Username==null?'':r.Username).trim().toLowerCase();
-      var dk=String(r.Date||'').slice(0,10);
-      if(!visiblePrnUsers.has(username)||dk<start||dk>end||!yes(r.Available===undefined?'Yes':r.Available))return;
-      prnAvailableDates.add(username+'|'+dk);
-    });
+  };
+
+  window.paperSetGenerateRangePreset_=function(which){
+    var cfg=window.__paperGenerateRange||{};
+    var startInput=$('paperGenerateStart');
+    var endInput=$('paperGenerateEnd');
+    if(!startInput||!endInput)return;
+
+    which=String(which||'').toUpperCase();
+    if(which==='FIRST'){
+      startInput.value=cfg.monthStart||startInput.min;
+      endInput.value=cfg.firstHalfEnd||endInput.max;
+      return;
+    }
+    if(which==='SECOND'){
+      startInput.value=cfg.secondHalfStart||startInput.min;
+      endInput.value=cfg.monthEnd||endInput.max;
+      return;
+    }
+
+    startInput.value=cfg.monthStart||startInput.min;
+    endInput.value=cfg.monthEnd||endInput.max;
+  };
+
+  window.paperRunScheduleRange_=async function(start,end){
+    if(!State.data||!State.data.isAdmin)return;
+
+    var btn=$('paperGenerateScheduleBtn');
+    var month=State.month;
+    var monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+    var monthEnd=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+
+    start=String(start||'');
+    end=String(end||'');
+
+    if(!start||!end||end<start){
+      toast('Choose a valid schedule date range.','error');
+      return;
+    }
+    if(start<monthStart||end>monthEnd){
+      toast('The selected range must stay inside '+monthTitle(month)+'.','error');
+      return;
+    }
+
+    var isFullMonth=start===monthStart&&end===monthEnd;
+    var rangeLabel=isFullMonth
+      ? monthTitle(month)
+      : start+' through '+end;
 
     if(!confirm(
-      'Generate the remaining schedule for '+monthTitle(month)+'?\n\n'+
-      manualTotal+' visible manual assignment(s) will be treated as fixed scheduling constraints. '+
-      prnAvailableDates.size+' PRN available date(s) from My Availability will be counted and used as scheduling constraints. '+
-      'Approved PTO (P), approved Regular Off (R), and all manual/locked assignments will not be overwritten.'
+      'Run the scheduling algorithm for '+rangeLabel+'?\n\n'+
+      (isFullMonth
+        ? 'The displayed month will be regenerated.'
+        : 'ONLY '+start+' through '+end+' will be regenerated. Dates outside this range will stay unchanged.')+
+      '\n\nManual/locked assignments, approved PTO, and approved Regular Off will remain protected.'
     ))return;
 
     try{
       if(btn){btn.disabled=true;btn.textContent='Checking...';}
 
-      var pre=await server('preflightScheduleGeneration',State.token,{startDate:start,endDate:end});
-      if(!pre.ok)throw new Error((pre.errors||[]).join('\n')||'Schedule preflight failed.');
+      var pre=await server('preflightScheduleGeneration',State.token,{
+        startDate:start,
+        endDate:end
+      });
+
+      if(!pre.ok){
+        throw new Error((pre.errors||[]).join('\n')||'Schedule preflight failed.');
+      }
 
       var overwriteConfirmed=false;
       if(pre.requiresOverwriteConfirmation){
         var replaceable=Number(pre.replaceableCount||0);
         var protectedCount=Number(pre.protectedCount||0);
+
         if(!confirm(
-          'This month contains '+replaceable+' generated/unprotected schedule row(s) that will be regenerated.\n'+
-          protectedCount+' manual/locked row(s) will remain protected.\n\nContinue?'
+          'The selected range contains '+replaceable+
+          ' generated/unprotected schedule row(s) that will be regenerated.\n'+
+          protectedCount+' manual/locked row(s) will remain protected.\n\n'+
+          'Dates outside '+start+' through '+end+' will not be regenerated.\n\nContinue?'
         ))return;
+
         overwriteConfirmed=true;
       }
 
       if(btn)btn.textContent='Generating...';
+
       var result=await server('generateSchedule',State.token,{
         startDate:start,
         endDate:end,
@@ -776,27 +891,57 @@
         batchGenerationId:pre.batchGenerationId
       });
 
-      if(!result.ok)throw new Error((result.errors||[]).join('\n')||'Schedule generation failed.');
+      if(!result.ok){
+        throw new Error((result.errors||[]).join('\n')||'Schedule generation failed.');
+      }
 
       await refreshData(false);
       renderPaperSchedule();
 
       var errors=result.errors||[];
       var warnings=result.warnings||[];
-      var body='<div class="alert '+(errors.length?'alert-warn':'alert-ok')+'"><b>'+
-        (errors.length?'Schedule generated with conflicts to review.':'Schedule generated around the protected pre-assignments.')+
-        '</b><br>'+esc(String(result.filled||0))+' of '+esc(String(result.required||0))+' required shift positions filled.</div>';
+      var body=
+        '<div class="alert '+(errors.length?'alert-warn':'alert-ok')+'"><b>'+
+          (errors.length
+            ? 'Selected date range generated with conflicts to review.'
+            : 'Selected date range generated successfully.')+
+        '</b><br>'+
+        'Range: '+esc(start)+' through '+esc(end)+'<br>'+
+        esc(String(result.filled||0))+' of '+esc(String(result.required||0))+
+        ' required shift positions filled.</div>';
+
+      if(!isFullMonth){
+        body+=
+          '<div class="alert alert-info">'+
+            'Only the selected dates were regenerated. The rest of '+esc(monthTitle(month))+
+            ' was left unchanged.'+
+          '</div>';
+      }
+
       if(errors.length){
-        body+='<div class="alert alert-danger"><b>Conflicts</b><br>'+errors.slice(0,30).map(esc).join('<br>')+'</div>';
+        body+='<div class="alert alert-danger"><b>Conflicts</b><br>'+
+          errors.slice(0,30).map(esc).join('<br>')+
+        '</div>';
       }
+
       if(warnings.length){
-        body+='<div class="alert alert-warn"><b>Warnings</b><br>'+warnings.slice(0,30).map(esc).join('<br>')+'</div>';
+        body+='<div class="alert alert-warn"><b>Warnings</b><br>'+
+          warnings.slice(0,30).map(esc).join('<br>')+
+        '</div>';
       }
-      openModal('Paper Schedule Generation',body,[{label:'Close',cls:'btn-secondary',action:'closeModal()'}]);
+
+      openModal(
+        'Paper Schedule Generation',
+        body,
+        [{text:'Close',cls:'btn-secondary',fn:closeModal}]
+      );
     }catch(e){
       toast(e&&e.message?e.message:String(e),'error');
     }finally{
-      if(btn){btn.disabled=false;btn.textContent='Generate Schedule';}
+      if(btn){
+        btn.disabled=false;
+        btn.textContent='Generate Schedule';
+      }
     }
   };
 
