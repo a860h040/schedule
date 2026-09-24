@@ -723,7 +723,7 @@
 <script src="js/google-pto-source.js?v=20260923-timeoffqueue1"></script>
 <script src="js/google-prn-availability-source.js?v=20260923-prnavail1"></script>
 <script src="js/github-legacy-runtime.js?v=20260923-timedelete1"></script>
-<script src="js/legacy/main-backend.js?v=20260924-manualrules1"></script>
+<script src="js/legacy/main-backend.js?v=20260924-40hrule1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -2732,7 +2732,9 @@ function peopleV32Card_(u,skills,weekly,sched,periodTarget){
   const weekends=new Set(mine.filter(r=>yes(r.Weekend)).map(r=>String(r.Date||'').slice(0,10)).filter(Boolean)).size;
   const evenings=new Set(mine.filter(r=>String(r['Shift Type']||'').trim().toLowerCase()==='evening').map(r=>String(r.Date||'').slice(0,10)).filter(Boolean)).size;
   const target=num(periodTarget,320),pct=target?Math.round(hrs/target*100):0,ring=Math.max(0,Math.min(100,pct)),ringColor=pct>100?'#d45b55':pct<70?'#d5a13a':'#0d8b84';
-  const badges=[yes(u.Resident)?'<span class="pharm-v32-badge resident">Resident</span>':'',yes(u.Preceptor)?'<span class="pharm-v32-badge preceptor">Preceptor</span>':'',String(u['Employment Type']||'Regular').toUpperCase()==='PRN'?'<span class="pharm-v32-badge prn">PRN</span>':'',seven?'<span class="pharm-v32-badge seven">7-on/7-off</span>':'',g?`<span class="pharm-v32-badge group">Weekend ${esc(g)}</span>`:''].filter(Boolean).join('');
+  const fortyRaw=String(u['40 Hour Week Rule']||'').trim();
+  const fortyEnabled=fortyRaw?yes(fortyRaw):(!seven&&String(u['Employment Type']||'Regular').toUpperCase()!=='PRN'&&!yes(u.Resident)&&num(u['Target Weekly Hours'],40)>=40&&num(u['Weekly Hour Maximum'],40)>=40);
+  const badges=[yes(u.Resident)?'<span class="pharm-v32-badge resident">Resident</span>':'',yes(u.Preceptor)?'<span class="pharm-v32-badge preceptor">Preceptor</span>':'',String(u['Employment Type']||'Regular').toUpperCase()==='PRN'?'<span class="pharm-v32-badge prn">PRN</span>':'',seven?'<span class="pharm-v32-badge seven">7-on/7-off</span>':'',g?`<span class="pharm-v32-badge group">Weekend ${esc(g)}</span>`:'',`<span class="pharm-v32-badge">${fortyEnabled?'40H Yes':'40H No'}</span>`].filter(Boolean).join('');
   const skillChips=normal.length?normal.slice(0,8).map(x=>`<span class="pharm-v32-skill">${esc(x)}</span>`).join('')+(normal.length>8?`<span class="pharm-v32-skill">+${normal.length-8}</span>`:''):'<span class="pharm-v32-skill empty">No normal skills</span>';
   const coverChips=coverage.length?coverage.slice(0,8).map(x=>`<span class="pharm-v32-skill cover">${esc(x)}</span>`).join('')+(coverage.length>8?`<span class="pharm-v32-skill cover">+${coverage.length-8}</span>`:''):'<span class="pharm-v32-skill empty">No OFF-day coverage skills</span>';
   const rotation=g?`Group ${g}`:seven?'7-on / 7-off':'No weekend group';
