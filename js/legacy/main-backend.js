@@ -1716,7 +1716,32 @@ function eligibility_(u, slot, model, state, manualMode) {
     const mk = username+'|'+monthKey_(slot.date);
     // Dedicated 7-on E employees and the mandatory resident E2 shift are not
     // broken by the ordinary monthly evening-shift cap.
-    if (!sevenDedicated && !residentE2 && num_(state.monthlyEvenings[mk],0) + 1 > employeeEveningMax_(u,model)) reasons.push('EVENING_LIMIT');
+    //
+    // Full-time Regular pharmacists are different: their 5-day / 40-hour weekly
+    // obligation is the higher-priority rule. If the only reason an otherwise
+    // eligible full-time Regular would stay below five workdays is the monthly
+    // evening cap, allow the evening assignment and preserve a warning. This
+    // prevents E1/EDE from sitting UNFILLED while a 40-hour Regular pharmacist
+    // is sitting at 16/24/32 hours.
+    const eveningWouldExceed =
+      !sevenDedicated &&
+      !residentE2 &&
+      num_(state.monthlyEvenings[mk],0) + 1 > employeeEveningMax_(u,model);
+
+    if (eveningWouldExceed) {
+      const fullTimeNeedsWorkday =
+        regularFiveDayRuleApplies_(u) &&
+        num_(state.weeklyDays[weekKey],0) <
+          regularRequiredWorkdaysForWeek_(u,slot.date,model);
+
+      if (fullTimeNeedsWorkday) {
+        warnings.push(
+          'EVENING LIMIT OVERRIDE: full-time Regular pharmacist is below the required 5 workdays / 40 hours this week.'
+        );
+      } else {
+        reasons.push('EVENING_LIMIT');
+      }
+    }
   }
   if (type === 'night' && !yesDefault_(u['Night Eligible'],true)) reasons.push('NIGHT_NOT_ELIGIBLE');
 
@@ -2806,7 +2831,7 @@ function explainUnfilled_(slot,model,state) {
       const primary=e.reasons[0]||'OTHER'; counts[primary]=num_(counts[primary],0)+1;
     }
   });
-  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at evening limit',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
+  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at evening limit after the full-time 40-hour obligation is already satisfied',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
   const pieces=Object.keys(counts).map(k=>counts[k]+' '+(labels[k]||k.toLowerCase().replace(/_/g,' ')));
   return 'UNFILLED — '+skillQualified.length+' active employees have the skill: '+pieces.join('; ')+'.';
 }
@@ -6048,7 +6073,16 @@ function sevenOnSlotMatches_(u,slot,model) {
 
 
 function regularFiveDayRuleApplies_(u){
-  return !!u && !isSevenOn_(u) && !isPrnEmployee_(u);
+  if(!u || isSevenOn_(u) || isPrnEmployee_(u) || yes_(u.Resident)) return false;
+
+  // The exact 5-day / 40-hour rule is for full-time Regular pharmacists.
+  // Part-time Regular pharmacists (for example a 20-hour/week supervisor) keep
+  // their own Target Weekly Hours / Weekly Hour Maximum instead of being forced
+  // to five 8-hour shifts. Residents are governed by the resident E2/weekend
+  // rules and are not part of the regular-staff five-day pool.
+  const target=num_(u['Target Weekly Hours'],40);
+  const maximum=num_(u['Weekly Hour Maximum'],40);
+  return target>=39.999 && maximum>=39.999;
 }
 
 function regularProtectedOffDaysForWeek_(u,weekStart,model){
