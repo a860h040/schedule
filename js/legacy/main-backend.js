@@ -1865,7 +1865,7 @@ function eligibility_(u, slot, model, state, manualMode) {
       creditedHours_(slot.shift);
 
     if (
-      !isSevenOn_(u) &&
+      regularFiveDayRuleApplies_(u) &&
       proposedPeriodHours >
       num_(model.settings.periodHoursTarget,320) +
       0.0001
@@ -3332,7 +3332,7 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
   const periodHours={};
 
   model.users
-    .filter(u=>yes_(u.Active)&&!isSevenOn_(u)&&!isPrnEmployee_(u))
+    .filter(u=>yes_(u.Active)&&regularFiveDayRuleApplies_(u))
     .forEach(u=>{
       periodHours[clean_(u.Username)] = 0;
     });
