@@ -242,13 +242,8 @@
 
       if(ga.rank!==gb.rank)return ga.rank-gb.rank;
 
-      var sa=paperUserSortKey_(a);
-      var sb=paperUserSortKey_(b);
-
-      if(sa!==sb)return sa.localeCompare(sb);
-
       return String(a['Pharmacist Name']||'')
-        .localeCompare(String(b['Pharmacist Name']||''));
+        .localeCompare(String(b['Pharmacist Name']||''),undefined,{sensitivity:'base'});
     });
   }
 
@@ -370,6 +365,14 @@
 
   function paperCellData_(user,dk){
     var protectedDay=paperApprovedTimeOff_(user.Username,user['Pharmacist Name'],dk);
+
+    // PRN pharmacists are controlled by submitted availability. A legacy
+    // Regular Off row is redundant for PRN staff and should not replace the
+    // A / unavailable display on the Paper Schedule.
+    if(protectedDay && protectedDay.code==='R' && paperPharmacistType_(user)==='PRN'){
+      protectedDay=null;
+    }
+
     var rows=calendarRowsForDate(dk).filter(function(r){
       return r.Status!=='UNFILLED' &&
         String(r.Username==null?'':r.Username)===String(user.Username==null?'':user.Username);
@@ -419,12 +422,13 @@
     if(protectedDay){
       return {
         text:protectedDay.code,
-        cls:protectedDay.cls+(protectedDay.code==='R'?' paper-assignable':''),
-        title:protectedDay.title+(protectedDay.code==='R'?' — click to review/add a manual calendar rule':''),
+        cls:protectedDay.cls+' paper-assignable',
+        title:protectedDay.title+' — click to remove this time-off rule',
         id:'',
         protectedDay:protectedDay,
-        canAssign:protectedDay.code==='R',
-        manualMode:protectedDay.code==='R'?'REGULAR_OFF':''
+        canDeleteTimeOff:true,
+        timeOffRecordId:String((protectedDay.record||{})['Record ID']||''),
+        timeOffType:String((protectedDay.record||{})['Record Type']||protectedDay.title||'Time Off')
       };
     }
 
@@ -755,6 +759,10 @@
           var onclick='';
           if(cell.id){
             onclick=' onclick="openAssignmentModal(\''+attr(cell.id)+'\')"';
+          }else if(cell.canDeleteTimeOff&&cell.timeOffRecordId&&d.isAdmin){
+            onclick=' onclick="paperDeleteTimeOffCell_(\''+
+              attr(cell.timeOffRecordId)+
+              '\',\''+attr(cell.timeOffType||'Time Off')+'\')"';
           }else if(cell.canAssign&&d.isAdmin){
             onclick=' onclick="paperOpenManualCell_(\''+
               attr(String(user.Username==null?'':user.Username))+
@@ -838,6 +846,28 @@
       State.calendarFilters[k]='';
     });
     renderPaperSchedule();
+  };
+
+  window.paperDeleteTimeOffCell_=async function(recordId,type){
+    if(!State.data||!State.data.isAdmin||!recordId)return;
+
+    var label=String(type||'Time Off').toUpperCase()==='PTO'
+      ? 'PTO'
+      : 'Regular Off';
+
+    if(!confirm(
+      'Delete this '+label+' request?\n\n'+
+      'The P/R marker will be removed from Paper Schedule after the data refreshes.'
+    ))return;
+
+    try{
+      await server('deleteTimeOffRequest',State.token,recordId);
+      toast(label+' request deleted.','success');
+      await refreshData(false);
+      renderPaperSchedule();
+    }catch(e){
+      toast(e&&e.message?e.message:String(e),'error');
+    }
   };
 
   window.paperOpenManualCell_=function(username,dk,prefillMode){
