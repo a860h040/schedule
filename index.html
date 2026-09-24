@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pharmacy Workforce — Scheduling</title>
-  <link rel="stylesheet" href="css/paper-schedule.css?v=20260923-papercontrols1">
+  <link rel="stylesheet" href="css/paper-schedule.css?v=20260923-prnavail1">
   <link rel="stylesheet" href="css/monthly-schedule.css?v=20260919-monthly1">
   <style>
     :root{
@@ -721,14 +721,15 @@
 
 <script src="js/google-schedule-receiver.js?v=20260919-schedrecv6"></script>
 <script src="js/google-pto-source.js?v=20260923-timeoffqueue1"></script>
-<script src="js/github-legacy-runtime.js?v=20260923-timeoffqueue2"></script>
-<script src="js/legacy/main-backend.js?v=20260923-timeoffqueue3"></script>
+<script src="js/google-prn-availability-source.js?v=20260923-prnavail1"></script>
+<script src="js/github-legacy-runtime.js?v=20260923-prnavail1"></script>
+<script src="js/legacy/main-backend.js?v=20260923-prnavail1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
 <script src="js/legacy/delete-schedule.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/patches.js?v=20260919-pharmgroups2"></script>
-<script src="js/paper-schedule.js?v=20260923-papercontrols1"></script>
+<script src="js/paper-schedule.js?v=20260923-prnavail1"></script>
 
 <script>
 const EXPECTED_BACKEND_VERSION='2026.09.06.30';
@@ -3438,6 +3439,14 @@ function isQueuedTimeOffUI_(value){
 
 
 window.addEventListener('neochrono:pto-synced',()=>{
+  try{
+    if(window.State&&State.token&&typeof refreshData==='function'){
+      refreshData(true).catch(()=>{});
+    }
+  }catch(_e){}
+});
+
+window.addEventListener('neochrono:prn-availability-synced',()=>{
   try{
     if(window.State&&State.token&&typeof refreshData==='function'){
       refreshData(true).catch(()=>{});
