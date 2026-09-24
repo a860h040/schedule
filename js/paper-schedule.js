@@ -260,7 +260,16 @@
       ? State.data.prnAvailability
       : [];
 
-    if(!sourceLoaded && !all.length)return null;
+    if(!sourceLoaded && !all.length){
+      return {
+        sourceLoaded:false,
+        totalAvailableDates:0,
+        available:false,
+        rows:[],
+        shifts:[],
+        times:[]
+      };
+    }
 
     var wantedUser=String(user.Username==null?'':user.Username).trim().toLowerCase();
     var wantedName=String(user['Pharmacist Name']||'').trim().toLowerCase();
