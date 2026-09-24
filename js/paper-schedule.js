@@ -252,6 +252,61 @@
     });
   }
 
+  function paperManualShiftTypeRule_(user,dk){
+    var rows=State.data&&Array.isArray(State.data.requests)
+      ? State.data.requests
+      : [];
+
+    var wantedUser=String(user&&user.Username==null?'':user.Username).trim().toLowerCase();
+    var wantedName=String(user&&user['Pharmacist Name']||'').trim().toLowerCase();
+
+    for(var i=0;i<rows.length;i++){
+      var r=rows[i];
+      if(String(r.Status||'').toUpperCase()!=='APPROVED')continue;
+
+      var rowUser=String(r.Username==null?'':r.Username).trim().toLowerCase();
+      var rowName=String(r.Pharmacist||'').trim().toLowerCase();
+      var sameUser=
+        (!!wantedUser&&rowUser===wantedUser) ||
+        (!!wantedName&&rowName===wantedName);
+      if(!sameUser)continue;
+
+      var start=dateKey(r['Start Date']||r.Date||r['End Date']);
+      var end=dateKey(r['End Date']||r.Date||r['Start Date']);
+      if(!start||!end)continue;
+      if(end<start){var x=start;start=end;end=x;}
+      if(dk<start||dk>end)continue;
+
+      var type=String(r['Record Type']||'')
+        .toUpperCase()
+        .replace(/[\-_]+/g,' ')
+        .replace(/\s+/g,' ')
+        .trim();
+
+      if(type==='MANUAL DAY'||type==='DAY SHIFT'||type==='MANUAL DAY SHIFT'){
+        return {
+          code:'D',
+          mode:'DAY',
+          cls:'paper-manual-day paper-assignable',
+          title:'Manual Day assignment — NeoChrono will choose the exact qualified Day/Morning shift when the algorithm runs.',
+          record:r
+        };
+      }
+
+      if(type==='MANUAL EVENING'||type==='EVENING SHIFT'||type==='MANUAL EVENING SHIFT'){
+        return {
+          code:'E',
+          mode:'EVENING',
+          cls:'paper-manual-evening paper-assignable',
+          title:'Manual Evening assignment — NeoChrono will choose the exact qualified Evening shift when the algorithm runs.',
+          record:r
+        };
+      }
+    }
+
+    return null;
+  }
+
   function paperPrnAvailabilityForDate_(user,dk){
     if(paperPharmacistType_(user)!=='PRN')return null;
 
@@ -362,7 +417,28 @@
     );
 
     if(protectedDay){
-      return {text:protectedDay.code,cls:protectedDay.cls,title:protectedDay.title,id:'',protectedDay:protectedDay};
+      return {
+        text:protectedDay.code,
+        cls:protectedDay.cls+(protectedDay.code==='R'?' paper-assignable':''),
+        title:protectedDay.title+(protectedDay.code==='R'?' — click to review/add a manual calendar rule':''),
+        id:'',
+        protectedDay:protectedDay,
+        canAssign:protectedDay.code==='R',
+        manualMode:protectedDay.code==='R'?'REGULAR_OFF':''
+      };
+    }
+
+    var manualTypeRule=paperManualShiftTypeRule_(user,dk);
+    if(manualTypeRule&&!filtersActive){
+      return {
+        text:manualTypeRule.code,
+        cls:manualTypeRule.cls,
+        title:manualTypeRule.title,
+        id:'',
+        canAssign:true,
+        manualMode:manualTypeRule.mode,
+        manualRule:true
+      };
     }
 
     var prnAvailability=paperPrnAvailabilityForDate_(user,dk);
@@ -379,7 +455,8 @@
           title:'PRN available in My Availability. '+details.join(' | ')+' — click to pre-assign a shift',
           id:'',
           canAssign:true,
-          prnAvailable:true
+          prnAvailable:true,
+          manualMode:'PRN_AVAILABILITY'
         };
       }
 
@@ -398,7 +475,8 @@
       cls:'paper-off paper-assignable',
       title:filtersActive?'No matching assignment':'Unassigned / available for scheduling — click to pre-assign a shift',
       id:'',
-      canAssign:!filtersActive
+      canAssign:!filtersActive,
+      manualMode:'SPECIFIC'
     };
   }
 
@@ -674,7 +752,9 @@
           if(cell.id){
             onclick=' onclick="openAssignmentModal(\''+attr(cell.id)+'\')"';
           }else if(cell.canAssign&&d.isAdmin){
-            onclick=' onclick="paperOpenManualCell_(\''+attr(String(user.Username==null?'':user.Username))+'\',\''+attr(dk)+'\')"';
+            onclick=' onclick="paperOpenManualCell_(\''+
+              attr(String(user.Username==null?'':user.Username))+
+              '\',\''+attr(dk)+'\',\''+attr(cell.manualMode||'SPECIFIC')+'\')"';
           }
 
           html+='<td class="paper-cell date-col '+
@@ -756,23 +836,41 @@
     renderPaperSchedule();
   };
 
-  window.paperOpenManualCell_=function(username,dk){
+  window.paperOpenManualCell_=function(username,dk,prefillMode){
     if(!State.data||!State.data.isAdmin)return;
+
     var user=(State.data.users||[]).find(function(u){
       return String(u.Username==null?'':u.Username)===String(username==null?'':username);
     });
     if(!user)return;
 
-    if(paperApprovedTimeOff_(user.Username,user['Pharmacist Name'],dk)){
-      toast('This date is protected by approved time off and cannot be automatically scheduled.','error');
+    var mode=String(prefillMode||'SPECIFIC').toUpperCase();
+    var protectedDay=paperApprovedTimeOff_(user.Username,user['Pharmacist Name'],dk);
+
+    if(protectedDay&&protectedDay.code==='P'){
+      toast('This date is protected by approved PTO. Remove the PTO before adding a work assignment.','error');
       return;
+    }
+
+    if(protectedDay&&protectedDay.code==='R'&&mode!=='REGULAR_OFF'){
+      mode='REGULAR_OFF';
     }
 
     var active=(State.data.shifts||[]).filter(function(s){return yes(s.Active);});
     var preferred=String(user['Preferred Shift Type']||'').trim().toUpperCase();
-    var chosen=active.find(function(s){return String(s.Shift||'').trim().toUpperCase()===preferred;});
+    var chosen=active.find(function(s){
+      return String(s.Shift||'').trim().toUpperCase()===preferred;
+    });
     var shift=chosen?chosen.Shift:(active.length?active[0].Shift:'');
-    openAssignmentModal(null,dk,shift,1,String(user.Username==null?'':user.Username));
+
+    openAssignmentModal(
+      null,
+      dk,
+      shift,
+      1,
+      String(user.Username==null?'':user.Username),
+      mode
+    );
   };
 
   window.paperGenerateSchedule_=function(){
