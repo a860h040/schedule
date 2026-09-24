@@ -95,12 +95,19 @@ function doPost(e) {
       : String(error);
 
     if (requestId) {
+      var isPrnAvailabilityAction =
+        String(action || '') === 'neochronoPrnAvailability';
+
       return neoChronoBridgeResponse_({
-        type: NEOCHRONO_RECEIVER.PTO_MESSAGE_TYPE,
+        type: isPrnAvailabilityAction
+          ? NEOCHRONO_RECEIVER.PRN_AVAILABILITY_MESSAGE_TYPE
+          : NEOCHRONO_RECEIVER.PTO_MESSAGE_TYPE,
         ok: false,
         success: false,
         requestId: requestId,
-        sheet: NEOCHRONO_RECEIVER.PTO_SHEET,
+        sheet: isPrnAvailabilityAction
+          ? NEOCHRONO_RECEIVER.PRN_AVAILABILITY_SHEET
+          : NEOCHRONO_RECEIVER.PTO_SHEET,
         message: message
       });
     }
