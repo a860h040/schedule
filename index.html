@@ -723,7 +723,7 @@
 <script src="js/google-pto-source.js?v=20260923-timeoffqueue1"></script>
 <script src="js/google-prn-availability-source.js?v=20260923-prnavail1"></script>
 <script src="js/github-legacy-runtime.js?v=20260923-timedelete1"></script>
-<script src="js/legacy/main-backend.js?v=20260923-regularmandatory1"></script>
+<script src="js/legacy/main-backend.js?v=20260923-setx1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -3694,7 +3694,7 @@ function statusBadge2(s){const x=String(s||'').toUpperCase();return `<span class
 
 function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,prefillUsername=''){const admin=State.data.isAdmin;const schedule=State.data.schedule||[];let r=null;if(id){const idMatches=schedule.filter(x=>String(x['Assignment ID']||'')===String(id));if(locatorDate&&locatorShift){r=idMatches.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||schedule.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||idMatches[0]||null}else r=idMatches[0]||null}if(!admin){if(!r)return;const sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{};openModal('Assignment Details',`<div class="grid grid-2"><div><label>Date</label><b>${fmtDate(r.Date)}</b></div><div><label>Shift</label><b>${esc(r.Shift)}</b></div><div><label>Pharmacist</label><b>${esc(r['Assigned Pharmacist'])}</b></div><div><label>Type</label>${typeBadge(r['Shift Type'])}</div><div><label>Shift Time</label><b>${esc([sh.Start,sh.End].filter(Boolean).join(' – '))}</b></div><div><label>Credited Hours</label><b>${esc(r['Credited Hours'])}</b></div>${r['Coverage For Pharmacist']?`<div><label>Coverage for</label><b>${esc(r['Coverage For Pharmacist'])}</b></div><div><label>Coverage reason</label><b>${esc(r['Coverage Reason']||'')}</b></div>`:''}</div>${r.Warning?`<div class="alert alert-warn mt12">${esc(r.Warning)}</div>`:''}`,[{label:'Close',cls:'btn-secondary',action:'closeModal()'}]);return}
 const users=State.data.users.filter(u=>yes(u.Active));const shifts=State.data.shifts.filter(s=>yes(s.Active));const initialDate=r?r.Date:(locatorDate||dateKey(new Date()));const initialSlot=r?r.Slot:(locatorSlot||1);const initialShift=r?r.Shift:(locatorShift||'');const initialUsername=r?r.Username:(prefillUsername||'');const body=`<input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}"><input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}"><div class="form-grid"><div class="field"><label>Date</label><input id="asDate" type="date" class="control" value="${attr(initialDate)}"></div><div class="field"><label>Slot</label><input id="asSlot" type="number" min="1" class="control" value="${attr(initialSlot)}"></div><div class="field"><label>Shift</label><select id="asShift" class="control">${shifts.map(s=>`<option value="${attr(s.Shift)}" ${initialShift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}</select></div><div class="field"><label>Pharmacist</label><select id="asUser" class="control">${users.map(u=>`<option value="${attr(u.Username)}" ${String(initialUsername)===String(u.Username)?'selected':''}>${esc(u['Pharmacist Name'])}</option>`).join('')}</select></div><div class="field"><label>Lock after save</label><select id="asLocked" class="control"><option ${r&&yes(r.Locked)?'selected':''}>Yes</option><option ${!r||!yes(r.Locked)?'selected':''}>No</option></select></div>${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}<div class="field span-2 hidden" id="overrideBox"><div class="alert alert-warn" id="overrideWarnings"></div><label class="mt12">Override reason <span class="small muted">(optional)</span></label><textarea id="overrideReason" class="control" placeholder="Optional — add a note if you want it recorded."></textarea></div></div>`;
-const buttons=[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'}];if(r){buttons.push({label:yes(r.Locked)?'Unlock':'Lock',cls:'btn-ghost',action:`toggleLockUI('${attr(r['Assignment ID'])}',${!yes(r.Locked)})`});buttons.push({label:'Remove',cls:'btn-danger',action:`removeAssignmentUI('${attr(r['Assignment ID'])}')`})}buttons.push({label:'Save',cls:'btn-primary',action:'saveAssignmentUI(false)',id:'normalSave'});openModal(r?'Edit Assignment':'Manual Assignment',body,buttons)}
+const buttons=[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'}];if(r){buttons.push({label:yes(r.Locked)?'Unlock':'Lock',cls:'btn-ghost',action:`toggleLockUI('${attr(r['Assignment ID'])}',${!yes(r.Locked)})`});buttons.push({label:'Set to X',cls:'btn-danger',action:`setAssignmentToXUI('${attr(r['Assignment ID'])}')`})}buttons.push({label:'Save',cls:'btn-primary',action:'saveAssignmentUI(false)',id:'normalSave'});openModal(r?'Edit Assignment':'Manual Assignment',body,buttons)}
 
 function manualHoursWarningHtml(h){
   if(!h)return '';
@@ -3771,6 +3771,27 @@ async function saveAssignmentUI(override){
   }
 }
 async function toggleLockUI(id,locked){try{await server('setAssignmentLock',State.token,id,locked);closeModal();toast(locked?'Assignment locked':'Assignment unlocked','success');await refreshData()}catch(e){toast(e.message,'error')}}
+
+async function setAssignmentToXUI(id){
+  if(!confirm(
+    'Change this assigned shift to X / unassigned?\n\n'+
+    'The pharmacist will no longer work this shift. If the shift is required, it will remain as an UNFILLED shift for the algorithm or another pharmacist to cover.'
+  ))return;
+
+  try{
+    const r=await server('setAssignmentToX',State.token,id);
+    closeModal();
+    toast(
+      (r&&r.pharmacist?r.pharmacist+' — ':'')+
+      (r&&r.shift?r.shift+' changed to X.':'Assignment changed to X.'),
+      'success'
+    );
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
+}
+
 async function removeAssignmentUI(id){const reason=prompt('Reason for removal (optional):','')??'';if(!confirm('Remove this assignment? Required staffing slots will remain as UNFILLED.'))return;try{await server('removeAssignment',State.token,id,reason);closeModal();toast('Assignment removed','success');await refreshData()}catch(e){toast(e.message,'error')}}
 
 function openChangePassword(force=false){const body=`<div class="field"><label>Current Password</label><input id="cpCurrent" type="password" class="control"></div><div class="field"><label>New Password</label><input id="cpNew" type="password" class="control"></div><div class="field"><label>Confirm New Password</label><input id="cpConfirm" type="password" class="control"></div><p class="small muted">Use at least 10 characters.</p>`;const btns=[];if(!force)btns.push({label:'Cancel',cls:'btn-secondary',action:'closeModal()'});btns.push({label:'Change Password',cls:'btn-primary',action:'changePasswordUI()'});openModal(force?'Change Temporary Password':'Change Password',body,btns)}
