@@ -4778,27 +4778,31 @@ function saveEmployeeRequest(token,data) {
       'Updated By':ctx.username
     };
 
-    if (recordType === 'PTO') {
+    const queuedTimeOff = recordType === 'PTO' || isRegularOffRecordType_(recordType);
+    if (queuedTimeOff) {
+      row['Record Type'] = recordType === 'PTO' ? 'PTO' : 'REGULAR OFF';
+      const requestLabel = row['Record Type'] === 'PTO' ? 'PTO' : 'Regular Off';
       const dateKeys = ptoRequestDateKeys_(row);
-      if (!dateKeys.length) throw new Error('PTO requires a Single Date or a Start Date / End Date.');
+      if (!dateKeys.length) throw new Error(requestLabel + ' requires a Single Date or a Start Date / End Date.');
       if (row['Start Date'] && row['End Date'] && formatDateKey_(row['End Date']) < formatDateKey_(row['Start Date'])) {
-        throw new Error('PTO End Date cannot be before Start Date.');
+        throw new Error(requestLabel + ' End Date cannot be before Start Date.');
       }
 
       const duplicate = findDuplicatePtoRequest_(target,row,id);
       if (duplicate) {
-        throw new Error('This pharmacist already has a PTO request that overlaps ' + duplicate.date + ' (Record ' + duplicate.recordId + ').');
+        throw new Error('This pharmacist already has a PTO / Regular Off request that overlaps ' + duplicate.date + ' (Record ' + duplicate.recordId + ').');
       }
 
-      // A rejected PTO edited/resubmitted is a fresh request and moves to the
-      // end of the first-come, first-served queue.
+      // A rejected PTO / Regular Off request edited or resubmitted is a fresh
+      // request and moves to the end of the first-come, first-served queue.
       if (old && clean_(old.Status).toLowerCase() === 'rejected') {
         row['Submitted At'] = now;
       }
 
-      // Write the request first, then deterministically rebuild the PTO queue.
-      // This is the key v27 fix: old Pending rows do not occupy invisible slots;
-      // the earliest two requests are calculated independently for each requested OFF date and are automatically Approved.
+      // Write the request first, then deterministically rebuild the combined
+      // PTO + Regular Off queue. The earliest two requests on each requested
+      // OFF date are auto-approved; request #3+ remains Pending until an
+      // administrator explicitly approves it.
       row.Status = old && clean_(old.Status).toLowerCase() === 'approved' && clean_(old['Reviewed By']).toUpperCase() !== 'SYSTEM AUTO-APPROVAL'
         ? 'Approved'
         : 'Pending';
@@ -4816,10 +4820,10 @@ function saveEmployeeRequest(token,data) {
       const autoApproved = clean_(saved.Status).toLowerCase()==='approved' && clean_(saved['Reviewed By']).toUpperCase()==='SYSTEM AUTO-APPROVAL';
       const blockedDates = queueState ? queueState.blockedDates : [];
       const detail = autoApproved
-        ? ('AUTO APPROVED: this request is within the first ' + ptoAutoApprovalLimit_() + ' PTO request(s) on every requested OFF date. No administrator action is required.')
+        ? ('AUTO APPROVED: this ' + requestLabel + ' request is within the first ' + ptoAutoApprovalLimit_() + ' combined PTO / Regular Off request(s) on every requested OFF date. No administrator action is required.')
         : clean_(saved.Status).toLowerCase()==='approved'
-          ? 'APPROVED by administrator.'
-          : ('PENDING ADMIN REVIEW: this request is number 3 or later on ' + (blockedDates.length?blockedDates.join(', '):'one or more covered dates') + '.');
+          ? ('APPROVED by administrator: this ' + requestLabel + ' approval is protected and will be enforced by the scheduler.')
+          : ('PENDING ADMIN REVIEW: this ' + requestLabel + ' request is number 3 or later on ' + (blockedDates.length?blockedDates.join(', '):'one or more covered dates') + '.');
       audit_(old?'REQUEST_UPDATED':'REQUEST_ENTERED',dateKeys[0],row.Pharmacist,'','','',row['Record Type'],'No','',id+' | '+detail,ctx.username);
       SpreadsheetApp.flush();
       return {ok:true,recordId:id,status:saved.Status,autoApproved:autoApproved,blockedDates:blockedDates,message:detail,ptoAutoApprovalsUpdated:rebalance.updated};
@@ -4859,7 +4863,7 @@ function ptoRequestDateKeys_(row) {
     const out = [];
     for (let d = startOfDay_(start); formatDateKey_(d) <= formatDateKey_(end); d = addDays_(d,1)) {
       out.push(formatDateKey_(d));
-      if (out.length > 370) throw new Error('PTO request is too long.');
+      if (out.length > 370) throw new Error('Time-off request is too long.');
     }
     return out;
   }
@@ -4876,7 +4880,7 @@ function findDuplicatePtoRequest_(target,row,excludeRecordId) {
   const rows = readTable_(APP.SHEETS.REQUESTS);
   for (const r of rows) {
     if (clean_(r['Record ID']) === clean_(excludeRecordId)) continue;
-    if (clean_(r['Record Type']).toUpperCase() !== 'PTO') continue;
+    if (clean_(r['Record Type']).toUpperCase() !== 'PTO' && !isRegularOffRecordType_(r['Record Type'])) continue;
     if (clean_(r.Status).toLowerCase() === 'rejected') continue;
     if (clean_(r.Username) !== username && clean_(r.Pharmacist) !== pharmacist) continue;
     const overlap = ptoRequestDateKeys_(r).find(k=>requested.has(k));
@@ -4892,7 +4896,8 @@ function ptoQueueSubmittedMs_(row,index) {
 
 /**
  * Build deterministic first-come, first-served positions for all active PTO
- * requests. Rejected requests do not consume a slot. A multi-day request is
+ * and Regular Off requests in one shared per-date queue. Rejected requests do
+ * not consume a slot. A multi-day request is
  * automatically approved only when its position is 1 or 2 (or configured
  * limit) on EVERY date that it covers.
  */
@@ -4915,7 +4920,7 @@ function buildPtoQueueState_(rows,limit) {
     };
   }).filter(function(x) {
     return x.id &&
-      clean_(x.row['Record Type']).toUpperCase()==='PTO' &&
+      (clean_(x.row['Record Type']).toUpperCase()==='PTO' || isRegularOffRecordType_(x.row['Record Type'])) &&
       clean_(x.row.Status).toLowerCase()!=='rejected' &&
       x.dates.length>0;
   });
@@ -4975,9 +4980,9 @@ function getPtoQueueStateForRecord_(recordId) {
 }
 
 /**
- * Synchronize PTO statuses independently for each requested OFF date. The first
- * two requests FOR EACH DATE are SYSTEM AUTO-APPROVED. Request 3+ remains Pending unless an
- * administrator has explicitly approved it. Approved requests are sticky:
+ * Synchronize PTO + Regular Off statuses independently for each requested OFF
+ * date. The first two combined requests FOR EACH DATE are SYSTEM AUTO-APPROVED.
+ * Request 3+ remains Pending unless an administrator has explicitly approved it. Approved requests are sticky:
  * reconciliation can promote Pending requests but can never demote an Approved
  * request. If an earlier request is rejected, the next Pending request may be
  * promoted automatically.
@@ -4990,7 +4995,7 @@ function reconcilePtoAutoApprovals_(updatedBy) {
   let updated=0, promoted=0, demoted=0;
 
   rows.forEach(r=>{
-    if(clean_(r['Record Type']).toUpperCase()!=='PTO')return;
+    if(clean_(r['Record Type']).toUpperCase()!=='PTO' && !isRegularOffRecordType_(r['Record Type']))return;
     const id=clean_(r['Record ID']);
     if(!id)return;
     const status=clean_(r.Status).toLowerCase();
@@ -5019,6 +5024,16 @@ function reconcilePtoAutoApprovals_(updatedBy) {
     // Approval is permanent unless an administrator explicitly rejects or
     // deletes the request. Queue recalculation may promote Pending requests,
     // but it must never demote an already Approved request.
+    if(status!=='approved' && status!=='pending') {
+      updateRowByKey_(APP.SHEETS.REQUESTS,'Record ID',id,{
+        'Status':'Pending',
+        'Reviewed By':'',
+        'Reviewed At':'',
+        'Updated At':now,
+        'Updated By':updatedBy||'SYSTEM'
+      });
+      updated++;
+    }
   });
 
   if(updated) SpreadsheetApp.flush();
