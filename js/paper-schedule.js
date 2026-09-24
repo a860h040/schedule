@@ -466,7 +466,8 @@
         title:'PRN not listed as available in My Availability. The scheduling algorithm will not assign this date. Admin can still click to manually override.',
         id:'',
         canAssign:true,
-        prnAvailable:false
+        prnAvailable:false,
+        manualMode:'PRN_AVAILABILITY'
       };
     }
 
@@ -621,7 +622,7 @@
       '<div class="calendar-head paper-page-head">'+
         '<div>'+
           '<div class="calendar-title">'+esc(monthTitle(m))+' — Paper Schedule</div>'+
-          '<div class="muted small">Excel-style view: pharmacists down the left, dates across the top. X = unassigned, A = PRN available from My Availability, P = approved PTO, R = approved Regular Off.</div>'+
+          '<div class="muted small">Excel-style view: pharmacists down the left, dates across the top. X = unassigned, D = manual Day assignment, E = manual Evening assignment, A = PRN available, P = approved PTO, R = approved Regular Off.</div>'+
         '</div>'+
       '</div>';
 
@@ -649,6 +650,8 @@
     html+=
       '<div class="paper-legend">'+
         '<span class="key"><span class="swatch" style="background:#fff"></span>X = unassigned</span>'+
+        '<span class="key"><span class="swatch" style="background:#dceeff"></span>D = manual Day</span>'+
+        '<span class="key"><span class="swatch" style="background:var(--paper-evening)"></span>E = manual Evening</span>'+
         '<span class="key"><span class="swatch" style="background:var(--paper-prn-available)"></span>A = PRN available</span>'+
         '<span class="key"><span class="swatch" style="background:var(--paper-pto)"></span>P = PTO</span>'+
         '<span class="key"><span class="swatch" style="background:var(--paper-regular-off)"></span>R = Regular Off</span>'+
