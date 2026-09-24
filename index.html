@@ -723,7 +723,7 @@
 <script src="js/google-pto-source.js?v=20260923-timeoffqueue1"></script>
 <script src="js/google-prn-availability-source.js?v=20260923-prnavail1"></script>
 <script src="js/github-legacy-runtime.js?v=20260923-timedelete1"></script>
-<script src="js/legacy/main-backend.js?v=20260923-setx1"></script>
+<script src="js/legacy/main-backend.js?v=20260924-manualtypes1"></script>
 <script src="js/legacy/preceptor-calendar.js?v=20260919-pharmgroups2"></script>
 <script src="js/legacy/csv-export.js?v=20260918-googlepto1"></script>
 <script src="js/legacy/schedule-publish.js?v=20260919-send-confirm2"></script>
@@ -3692,9 +3692,204 @@ async function renderFairness(){
 function scheduleTable(rows){return `<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Shift</th><th>Pharmacist</th><th>Coverage for</th><th>Coverage reason</th><th>Type</th><th>Hours</th><th>Status</th><th>Warning</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${fmtDate(r.Date)}</td><td><b>${esc(r.Shift)}</b></td><td>${esc(r['Assigned Pharmacist'])}</td><td>${esc(r['Coverage For Pharmacist']||'')}</td><td>${esc(r['Coverage Reason']||'')}</td><td>${typeBadge(r['Shift Type'])}</td><td>${esc(r['Credited Hours'])}</td><td>${statusBadge2(r.Status)}</td><td>${esc(r.Warning)}</td></tr>`).join('')}</tbody></table></div>`}
 function statusBadge2(s){const x=String(s||'').toUpperCase();return `<span class="badge ${x==='UNFILLED'?'badge-danger':x==='LOCKED'?'badge-lock':x==='MANUAL'?'badge-manual':'badge-ok'}">${esc(s)}</span>`}
 
-function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,prefillUsername=''){const admin=State.data.isAdmin;const schedule=State.data.schedule||[];let r=null;if(id){const idMatches=schedule.filter(x=>String(x['Assignment ID']||'')===String(id));if(locatorDate&&locatorShift){r=idMatches.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||schedule.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||idMatches[0]||null}else r=idMatches[0]||null}if(!admin){if(!r)return;const sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{};openModal('Assignment Details',`<div class="grid grid-2"><div><label>Date</label><b>${fmtDate(r.Date)}</b></div><div><label>Shift</label><b>${esc(r.Shift)}</b></div><div><label>Pharmacist</label><b>${esc(r['Assigned Pharmacist'])}</b></div><div><label>Type</label>${typeBadge(r['Shift Type'])}</div><div><label>Shift Time</label><b>${esc([sh.Start,sh.End].filter(Boolean).join(' – '))}</b></div><div><label>Credited Hours</label><b>${esc(r['Credited Hours'])}</b></div>${r['Coverage For Pharmacist']?`<div><label>Coverage for</label><b>${esc(r['Coverage For Pharmacist'])}</b></div><div><label>Coverage reason</label><b>${esc(r['Coverage Reason']||'')}</b></div>`:''}</div>${r.Warning?`<div class="alert alert-warn mt12">${esc(r.Warning)}</div>`:''}`,[{label:'Close',cls:'btn-secondary',action:'closeModal()'}]);return}
-const users=State.data.users.filter(u=>yes(u.Active));const shifts=State.data.shifts.filter(s=>yes(s.Active));const initialDate=r?r.Date:(locatorDate||dateKey(new Date()));const initialSlot=r?r.Slot:(locatorSlot||1);const initialShift=r?r.Shift:(locatorShift||'');const initialUsername=r?r.Username:(prefillUsername||'');const body=`<input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}"><input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}"><div class="form-grid"><div class="field"><label>Date</label><input id="asDate" type="date" class="control" value="${attr(initialDate)}"></div><div class="field"><label>Slot</label><input id="asSlot" type="number" min="1" class="control" value="${attr(initialSlot)}"></div><div class="field"><label>Shift</label><select id="asShift" class="control">${shifts.map(s=>`<option value="${attr(s.Shift)}" ${initialShift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}</select></div><div class="field"><label>Pharmacist</label><select id="asUser" class="control">${users.map(u=>`<option value="${attr(u.Username)}" ${String(initialUsername)===String(u.Username)?'selected':''}>${esc(u['Pharmacist Name'])}</option>`).join('')}</select></div><div class="field"><label>Lock after save</label><select id="asLocked" class="control"><option ${r&&yes(r.Locked)?'selected':''}>Yes</option><option ${!r||!yes(r.Locked)?'selected':''}>No</option></select></div>${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}<div class="field span-2 hidden" id="overrideBox"><div class="alert alert-warn" id="overrideWarnings"></div><label class="mt12">Override reason <span class="small muted">(optional)</span></label><textarea id="overrideReason" class="control" placeholder="Optional — add a note if you want it recorded."></textarea></div></div>`;
-const buttons=[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'}];if(r){buttons.push({label:yes(r.Locked)?'Unlock':'Lock',cls:'btn-ghost',action:`toggleLockUI('${attr(r['Assignment ID'])}',${!yes(r.Locked)})`});buttons.push({label:'Set to X',cls:'btn-danger',action:`setAssignmentToXUI('${attr(r['Assignment ID'])}')`})}buttons.push({label:'Save',cls:'btn-primary',action:'saveAssignmentUI(false)',id:'normalSave'});openModal(r?'Edit Assignment':'Manual Assignment',body,buttons)}
+function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,prefillUsername='',prefillMode='SPECIFIC'){
+  const admin=State.data.isAdmin;
+  const schedule=State.data.schedule||[];
+  let r=null;
+
+  if(id){
+    const idMatches=schedule.filter(x=>String(x['Assignment ID']||'')===String(id));
+    if(locatorDate&&locatorShift){
+      r=idMatches.find(x=>
+        String(x.Date||'')===String(locatorDate) &&
+        String(x.Shift||'')===String(locatorShift) &&
+        num(x.Slot,1)===num(locatorSlot,1)
+      ) || schedule.find(x=>
+        String(x.Date||'')===String(locatorDate) &&
+        String(x.Shift||'')===String(locatorShift) &&
+        num(x.Slot,1)===num(locatorSlot,1)
+      ) || idMatches[0] || null;
+    }else{
+      r=idMatches[0]||null;
+    }
+  }
+
+  if(!admin){
+    if(!r)return;
+    const sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{};
+    openModal(
+      'Assignment Details',
+      `<div class="grid grid-2">
+        <div><label>Date</label><b>${fmtDate(r.Date)}</b></div>
+        <div><label>Shift</label><b>${esc(r.Shift)}</b></div>
+        <div><label>Pharmacist</label><b>${esc(r['Assigned Pharmacist'])}</b></div>
+        <div><label>Type</label>${typeBadge(r['Shift Type'])}</div>
+        <div><label>Shift Time</label><b>${esc([sh.Start,sh.End].filter(Boolean).join(' – '))}</b></div>
+        <div><label>Credited Hours</label><b>${esc(r['Credited Hours'])}</b></div>
+        ${r['Coverage For Pharmacist']?`<div><label>Coverage for</label><b>${esc(r['Coverage For Pharmacist'])}</b></div><div><label>Coverage reason</label><b>${esc(r['Coverage Reason']||'')}</b></div>`:''}
+      </div>
+      ${r.Warning?`<div class="alert alert-warn mt12">${esc(r.Warning)}</div>`:''}`,
+      [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
+    );
+    return;
+  }
+
+  const users=State.data.users.filter(u=>yes(u.Active));
+  const shifts=State.data.shifts.filter(s=>yes(s.Active));
+  const initialDate=r?r.Date:(locatorDate||dateKey(new Date()));
+  const initialSlot=r?r.Slot:(locatorSlot||1);
+  const initialShift=r?r.Shift:(locatorShift||'');
+  const initialUsername=r?r.Username:(prefillUsername||'');
+  const requestedMode=r?'SPECIFIC':String(prefillMode||'SPECIFIC').toUpperCase();
+  const initialMode=['SPECIFIC','DAY','EVENING','REGULAR_OFF','PRN_AVAILABILITY'].includes(requestedMode)
+    ? requestedMode
+    : 'SPECIFIC';
+
+  const modeOptions=r
+    ? '<option value="SPECIFIC" selected>Specific shift</option>'
+    : [
+        ['SPECIFIC','Specific shift'],
+        ['DAY','Day shift — algorithm chooses exact shift'],
+        ['EVENING','Evening shift — algorithm chooses exact shift'],
+        ['REGULAR_OFF','Regular day off'],
+        ['PRN_AVAILABILITY','PRN availability']
+      ].map(x=>`<option value="${x[0]}" ${initialMode===x[0]?'selected':''}>${esc(x[1])}</option>`).join('');
+
+  const body=`
+    <input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}">
+    <input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}">
+
+    <div class="form-grid">
+      <div class="field span-2">
+        <label>Assignment type</label>
+        <select id="asMode" class="control" onchange="manualAssignmentModeChanged_()" ${r?'disabled':''}>
+          ${modeOptions}
+        </select>
+        ${r?'<div class="small muted mt6">To replace an existing assigned shift with Day/Evening/Regular Off, first use <b>Set to X</b>, then add the new manual rule.</div>':''}
+      </div>
+
+      <div class="field">
+        <label>Date</label>
+        <input id="asDate" type="date" class="control" value="${attr(initialDate)}">
+      </div>
+
+      <div class="field" id="asSlotField">
+        <label>Slot</label>
+        <input id="asSlot" type="number" min="1" class="control" value="${attr(initialSlot)}">
+      </div>
+
+      <div class="field" id="asShiftField">
+        <label>Shift</label>
+        <select id="asShift" class="control">
+          ${shifts.map(s=>`<option value="${attr(s.Shift)}" ${initialShift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Pharmacist</label>
+        <select id="asUser" class="control">
+          ${users.map(u=>`<option value="${attr(u.Username)}" ${String(initialUsername)===String(u.Username)?'selected':''}>${esc(u['Pharmacist Name'])}${String(u['Employment Type']||'').toUpperCase()==='PRN'?' — PRN':''}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="field" id="asLockField">
+        <label>Lock after save</label>
+        <select id="asLocked" class="control">
+          <option ${r&&yes(r.Locked)?'selected':''}>Yes</option>
+          <option ${!r||!yes(r.Locked)?'selected':''}>No</option>
+        </select>
+      </div>
+
+      <div class="field span-2">
+        <div id="asModeHelp" class="alert alert-info"></div>
+      </div>
+
+      ${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}
+
+      <div class="field span-2 hidden" id="overrideBox">
+        <div class="alert alert-warn" id="overrideWarnings"></div>
+        <label class="mt12">Override reason <span class="small muted">(optional)</span></label>
+        <textarea id="overrideReason" class="control" placeholder="Optional — add a note if you want it recorded."></textarea>
+      </div>
+    </div>
+  `;
+
+  const buttons=[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'}];
+  if(r){
+    buttons.push({
+      label:yes(r.Locked)?'Unlock':'Lock',
+      cls:'btn-ghost',
+      action:`toggleLockUI('${attr(r['Assignment ID'])}',${!yes(r.Locked)})`
+    });
+    buttons.push({
+      label:'Set to X',
+      cls:'btn-danger',
+      action:`setAssignmentToXUI('${attr(r['Assignment ID'])}')`
+    });
+  }
+  buttons.push({
+    label:'Save',
+    cls:'btn-primary',
+    action:'saveManualAssignmentRouter_(false)',
+    id:'normalSave'
+  });
+
+  openModal(r?'Edit Assignment':'Manual Assignment',body,buttons);
+  setTimeout(manualAssignmentModeChanged_,0);
+}
+
+function manualAssignmentModeChanged_(){
+  const mode=$('asMode')?String($('asMode').value||'SPECIFIC').toUpperCase():'SPECIFIC';
+  const specific=mode==='SPECIFIC';
+
+  ['asSlotField','asShiftField','asLockField'].forEach(id=>{
+    const el=$(id);
+    if(el)el.style.display=specific?'':'none';
+  });
+
+  const help=$('asModeHelp');
+  if(!help)return;
+
+  const messages={
+    SPECIFIC:'Choose the exact shift code and pharmacist. This creates or edits a specific schedule assignment.',
+    DAY:'Choose the pharmacist and date only. NeoChrono will assign that pharmacist to a qualified <b>Day/Morning</b> shift when the algorithm runs.',
+    EVENING:'Choose the pharmacist and date only. NeoChrono will assign that pharmacist to a qualified <b>Evening</b> shift when the algorithm runs. The 7-evening monthly maximum still applies.',
+    REGULAR_OFF:'Choose the pharmacist and date. The date is saved as an approved <b>Regular Off</b> and the scheduling algorithm will keep that pharmacist off.',
+    PRN_AVAILABILITY:'Choose a <b>PRN pharmacist</b> and date. This marks the PRN available for any qualified shift on that date; it does not force the PRN to be scheduled.'
+  };
+
+  help.innerHTML=messages[mode]||messages.SPECIFIC;
+}
+
+async function saveManualAssignmentRouter_(override){
+  const mode=$('asMode')?String($('asMode').value||'SPECIFIC').toUpperCase():'SPECIFIC';
+  if(mode==='SPECIFIC')return saveAssignmentUI(override);
+  return saveManualCalendarRuleUI_(mode);
+}
+
+async function saveManualCalendarRuleUI_(mode){
+  const date=$('asDate')?$('asDate').value:'';
+  const username=$('asUser')?$('asUser').value:'';
+
+  if(!date||!username){
+    toast('Select a date and pharmacist.','error');
+    return;
+  }
+
+  try{
+    const r=await server('saveManualCalendarRule',State.token,{
+      Mode:mode,
+      Date:date,
+      Username:username
+    });
+
+    closeModal();
+    toast(r&&r.message?r.message:'Manual calendar rule saved.','success');
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
+}
 
 function manualHoursWarningHtml(h){
   if(!h)return '';
