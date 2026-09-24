@@ -767,35 +767,41 @@
       'Generate Schedule — Select Date Range',
       body,
       [
-        {text:'Cancel',cls:'btn-secondary',fn:closeModal},
+        {label:'Cancel',cls:'btn-secondary',action:'closeModal()'},
         {
-          text:'Run Algorithm',
+          label:'Run Algorithm',
           cls:'btn-primary',
-          fn:function(){
-            var startInput=$('paperGenerateStart');
-            var endInput=$('paperGenerateEnd');
-            var selectedStart=startInput?String(startInput.value||''):'';
-            var selectedEnd=endInput?String(endInput.value||''):'';
-
-            if(!selectedStart||!selectedEnd){
-              toast('Select both a start date and an end date.','error');
-              return;
-            }
-            if(selectedStart<monthStart||selectedStart>monthEnd||selectedEnd<monthStart||selectedEnd>monthEnd){
-              toast('The selected dates must stay inside '+monthTitle(month)+'.','error');
-              return;
-            }
-            if(selectedEnd<selectedStart){
-              toast('End date must be on or after the start date.','error');
-              return;
-            }
-
-            closeModal();
-            paperRunScheduleRange_(selectedStart,selectedEnd);
-          }
+          action:'paperSubmitGenerateRange_()'
         }
       ]
     );
+  };
+
+  window.paperSubmitGenerateRange_=function(){
+    var cfg=window.__paperGenerateRange||{};
+    var startInput=$('paperGenerateStart');
+    var endInput=$('paperGenerateEnd');
+    var selectedStart=startInput?String(startInput.value||''):'';
+    var selectedEnd=endInput?String(endInput.value||''):'';
+
+    if(!selectedStart||!selectedEnd){
+      toast('Select both a start date and an end date.','error');
+      return;
+    }
+
+    if(selectedStart<(cfg.monthStart||'')||selectedStart>(cfg.monthEnd||'')||
+       selectedEnd<(cfg.monthStart||'')||selectedEnd>(cfg.monthEnd||'')){
+      toast('The selected dates must stay inside the displayed month.','error');
+      return;
+    }
+
+    if(selectedEnd<selectedStart){
+      toast('End date must be on or after the start date.','error');
+      return;
+    }
+
+    closeModal();
+    paperRunScheduleRange_(selectedStart,selectedEnd);
   };
 
   window.paperSetGenerateRangePreset_=function(which){
@@ -933,7 +939,7 @@
       openModal(
         'Paper Schedule Generation',
         body,
-        [{text:'Close',cls:'btn-secondary',fn:closeModal}]
+        [{label:'Close',cls:'btn-secondary',action:'closeModal()'}]
       );
     }catch(e){
       toast(e&&e.message?e.message:String(e),'error');
