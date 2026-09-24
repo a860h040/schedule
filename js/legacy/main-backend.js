@@ -28,7 +28,7 @@ const APP = Object.freeze({
     ADMINS: ['Admin ID','Admin Name','Username','Temporary Password','Password Hash','Password Salt','Active','Must Change Password','Updated At','Updated By'],
     USERS: [
       'Employee ID','Pharmacist Name','Username','Temporary Password','Password Hash','Password Salt','Active','Role',
-      'Schedule Type','Employment Type','Preceptor','Resident','Weekend Group','Weekly Hour Maximum','Target Weekly Hours',
+      'Schedule Type','Employment Type','Preceptor','Resident','Weekend Group','Weekly Hour Maximum','Target Weekly Hours','40 Hour Week Rule',
       'Maximum Evening Shifts Per Month','Preferred Start Time','Preferred End Time','Custom Hours Enabled',
       'Custom Hours Mode','Preferred Shift Type','Off-Day Coverage Skills','Weekend Eligible','Evening Eligible','Night Eligible',
       'Resident Covers Regular','Resident Weekends','Resident Evenings','Resident Nights','Rotation Anchor Date',
@@ -5212,6 +5212,16 @@ function saveEmployee(token,data) {
     if (!values['Employment Type']) values['Employment Type'] = 'Regular';
     if (!values['Weekly Hour Maximum']) values['Weekly Hour Maximum'] = num_(getSettingsMap_()['Weekly Hours Limit'],40);
     if (!values['Target Weekly Hours']) values['Target Weekly Hours'] = 40;
+    if (!values['40 Hour Week Rule']) {
+      const employment=clean_(values['Employment Type']||'Regular').toUpperCase();
+      const scheduleType=clean_(values['Schedule Type']||'Regular').toLowerCase();
+      values['40 Hour Week Rule']=
+        employment!=='PRN' &&
+        scheduleType.indexOf('7')<0 &&
+        !yes_(values.Resident)
+          ? 'Yes'
+          : 'No';
+    }
     if (!values['Maximum Evening Shifts Per Month']) values['Maximum Evening Shifts Per Month'] = 7;
     if (!values['Weekend Eligible']) values['Weekend Eligible'] = 'Yes';
     if (!values['Evening Eligible']) values['Evening Eligible'] = 'Yes';
@@ -6571,11 +6581,13 @@ function sevenOnSlotMatches_(u,slot,model) {
 function regularFiveDayRuleApplies_(u){
   if(!u || isSevenOn_(u) || isPrnEmployee_(u) || yes_(u.Resident)) return false;
 
-  // The exact 5-day / 40-hour rule is for full-time Regular pharmacists.
-  // Part-time Regular pharmacists (for example a 20-hour/week supervisor) keep
-  // their own Target Weekly Hours / Weekly Hour Maximum instead of being forced
-  // to five 8-hour shifts. Residents are governed by the resident E2/weekend
-  // rules and are not part of the regular-staff five-day pool.
+  // Administrator-facing switch. Yes = enforce the Sunday-Saturday
+  // 5-workday / 40-hour full-time rule. No = do not force this employee to
+  // exactly five workdays. Blank legacy rows keep the prior behavior.
+  const explicit=clean_(u['40 Hour Week Rule']).toUpperCase();
+  if(explicit==='NO') return false;
+  if(explicit==='YES') return true;
+
   const target=num_(u['Target Weekly Hours'],40);
   const maximum=num_(u['Weekly Hour Maximum'],40);
   return target>=39.999 && maximum>=39.999;
