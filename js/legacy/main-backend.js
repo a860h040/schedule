@@ -1230,9 +1230,20 @@ function generateSchedule(token, options) {
 
     const contextStart = generationContextStart_(start, model.settings.weekStart);
     const contextEnd = generationContextEnd_(end, model.settings.weekStart);
+    const monthContextStart = firstOfMonth_(start);
+    const monthContextEnd = lastOfMonth_(end);
+
+    // For a partial-month run, preserve neighboring week context for rest/hour
+    // rules AND load every existing filled assignment in the touched calendar
+    // month(s). Monthly Evening totals must include dates outside the selected
+    // regeneration range; otherwise a second-half run could incorrectly give
+    // somebody another seven evenings after they already worked evenings in
+    // the first half of the month.
     const fixedContext = existing.filter(r => {
       const d = asDate_(r.Date);
-      return d && !inDateRange_(d,start,end) && inDateRange_(d,contextStart,contextEnd) && clean_(r.Status) !== 'UNFILLED' && clean_(r.Username);
+      if(!d || inDateRange_(d,start,end) || clean_(r.Status) === 'UNFILLED' || !clean_(r.Username)) return false;
+      return inDateRange_(d,contextStart,contextEnd) ||
+             inDateRange_(d,monthContextStart,monthContextEnd);
     }).concat(preserved);
     const state = createState_(model, fixedContext, start, end);
     const slotResults = preserved.map(r => scheduleRowToAssignment_(r, model)).filter(Boolean);
@@ -1760,34 +1771,19 @@ function eligibility_(u, slot, model, state, manualMode) {
     if (preceptorEveningBlocked_(u,slot,model)) reasons.push('PRECEPTOR_WEEKDAY_EVENING');
     if (!yesDefault_(u['Evening Eligible'],true) && !residentE2) reasons.push('EVENING_NOT_ELIGIBLE');
     const mk = username+'|'+monthKey_(slot.date);
-    // Dedicated 7-on E employees and the mandatory resident E2 shift are not
-    // broken by the ordinary monthly evening-shift cap.
+    // Hard monthly Evening maximum.
+    // The only exception is a true 7-on/7-off employee working the dedicated
+    // 7-on shift, because that work pattern intentionally contains more than
+    // seven Evening shifts in some calendar months.
     //
-    // Full-time Regular pharmacists are different: their 5-day / 40-hour weekly
-    // obligation is the higher-priority rule. If the only reason an otherwise
-    // eligible full-time Regular would stay below five workdays is the monthly
-    // evening cap, allow the evening assignment and preserve a warning. This
-    // prevents E1/EDE from sitting UNFILLED while a 40-hour Regular pharmacist
-    // is sitting at 16/24/32 hours.
+    // Residents, full-time Regular pharmacists, PRNs, and preceptors do NOT
+    // bypass this cap. If someone reaches seven Evening shifts, the scheduler
+    // must use another eligible pharmacist or leave the shift UNFILLED.
     const eveningWouldExceed =
       !sevenDedicated &&
-      !residentE2 &&
       num_(state.monthlyEvenings[mk],0) + 1 > employeeEveningMax_(u,model);
 
-    if (eveningWouldExceed) {
-      const fullTimeNeedsWorkday =
-        regularFiveDayRuleApplies_(u) &&
-        num_(state.weeklyDays[weekKey],0) <
-          regularRequiredWorkdaysForWeek_(u,slot.date,model);
-
-      if (fullTimeNeedsWorkday) {
-        warnings.push(
-          'EVENING LIMIT OVERRIDE: full-time Regular pharmacist is below the required 5 workdays / 40 hours this week.'
-        );
-      } else {
-        reasons.push('EVENING_LIMIT');
-      }
-    }
+    if (eveningWouldExceed) reasons.push('EVENING_LIMIT');
   }
   if (type === 'night' && !yesDefault_(u['Night Eligible'],true)) reasons.push('NIGHT_NOT_ELIGIBLE');
 
@@ -2283,7 +2279,20 @@ function scoreCandidate_(u,slot,model,state,elig) {
 
   score -= num_(state.totalAssignments[username],0)*1.5;
 
-  if (type==='evening') score -= num_(state.monthlyEvenings[username+'|'+monthKey_(slot.date)],0)*10;
+  if (type==='evening') {
+    const eveningCount=num_(state.monthlyEvenings[username+'|'+monthKey_(slot.date)],0);
+
+    // Fairness is intentionally much stronger than ordinary preference/skill
+    // tie-breakers. Among pharmacists who are all legally eligible for the
+    // same Evening slot, the person with fewer Evening shifts this month must
+    // be considered first. This prevents one or two pharmacists from absorbing
+    // nearly all E1/EDE/WEDE/WMC assignments.
+    score -= eveningCount*250000;
+
+    // Small additional pressure toward unused capacity while preserving the
+    // hard maximum enforced by eligibility_().
+    score += Math.max(0,employeeEveningMax_(u,model)-eveningCount)*250;
+  }
   if (type==='night') score -= num_(state.nightAssignments[username],0)*5;
   if (slot.weekend || isWeekendDate_(slot.date)) score -= num_(state.weekendAssignments[username],0)*4;
 
@@ -2877,7 +2886,7 @@ function explainUnfilled_(slot,model,state) {
       const primary=e.reasons[0]||'OTHER'; counts[primary]=num_(counts[primary],0)+1;
     }
   });
-  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at evening limit after the full-time 40-hour obligation is already satisfied',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
+  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at the hard 7-evening-shift monthly maximum',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
   const pieces=Object.keys(counts).map(k=>counts[k]+' '+(labels[k]||k.toLowerCase().replace(/_/g,' ')));
   return 'UNFILLED — '+skillQualified.length+' active employees have the skill: '+pieces.join('; ')+'.';
 }
@@ -2896,7 +2905,18 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
   const errors=[],warnings=[];
   const generatedAssigned=assignments.filter(a=>a.status!=='UNFILLED'&&a.username);
   const contextStart=generationContextStart_(start,model.settings.weekStart),contextEnd=generationContextEnd_(end,model.settings.weekStart);
-  const external=readTable_(APP.SHEETS.SCHEDULE).filter(r=>{const d=asDate_(r.Date);return d&&!inDateRange_(d,start,end)&&inDateRange_(d,contextStart,contextEnd)&&clean_(r.Status)!=='UNFILLED'&&clean_(r.Username);}).map(r=>scheduleRowToAssignment_(r,model)).filter(Boolean);
+  const monthContextStart=firstOfMonth_(start),monthContextEnd=lastOfMonth_(end);
+  const external=readTable_(APP.SHEETS.SCHEDULE)
+    .filter(r=>{
+      const d=asDate_(r.Date);
+      return d &&
+        !inDateRange_(d,start,end) &&
+        (inDateRange_(d,contextStart,contextEnd) || inDateRange_(d,monthContextStart,monthContextEnd)) &&
+        clean_(r.Status)!=='UNFILLED' &&
+        clean_(r.Username);
+    })
+    .map(r=>scheduleRowToAssignment_(r,model))
+    .filter(Boolean);
   const assigned=generatedAssigned.concat(external);
   generatedAssigned.forEach(a=>{
     const u=model.usersByUsername[a.username];
@@ -2945,8 +2965,10 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
     if (clean_(a.shiftType).toLowerCase()==='evening') {
       const mk=a.username+'|'+monthKey_(a.date); evenings[mk]=num_(evenings[mk],0)+1;
       const vaSlot=assignmentAsSlot_(a);
-      const bypassEvening=isSevenOn_(u)&&sevenOnSlotMatches_(u,vaSlot,model) || isResidentMandatoryE2_(u,vaSlot,model);
-      if (!bypassEvening && evenings[mk] > employeeEveningMax_(u,model) && !a.manual) errors.push(a.pharmacist+' exceeds evening maximum in '+mk.split('|')[1]+'.');
+      const bypassEvening=isSevenOn_(u)&&sevenOnSlotMatches_(u,vaSlot,model);
+      if (!bypassEvening && evenings[mk] > employeeEveningMax_(u,model) && !a.manual) {
+        errors.push(a.pharmacist+' exceeds the hard 7-Evening-shift monthly maximum in '+mk.split('|')[1]+'.');
+      }
     }
     if (!byEmp[a.username]) byEmp[a.username]=[];
     const iv=assignmentInterval_(a.date,a.shift); if(iv) byEmp[a.username].push({a,iv});
@@ -4874,6 +4896,18 @@ function saveEmployee(token,data) {
   values['Password Salt'] = '';
   values['Must Change Password'] = 'No';
 
+  // Seven Evening shifts is the absolute monthly maximum for every pharmacist
+  // except the dedicated shift of a true 7-on/7-off employee. Keep the stored
+  // profile value consistent with the scheduling rule as well.
+  if (values['Maximum Evening Shifts Per Month'] !== undefined) {
+    values['Maximum Evening Shifts Per Month'] = Math.max(
+      0,
+      Math.min(7,num_(values['Maximum Evening Shifts Per Month'],7))
+    );
+  } else if (old && num_(old['Maximum Evening Shifts Per Month'],7) > 7) {
+    values['Maximum Evening Shifts Per Month'] = 7;
+  }
+
   // Weekend Rotation Anchor Date is system-managed. Selecting A/B/C is enough;
   // the backend calculates the correct Saturday in the repeating 21-day cycle.
   const mergedScheduleType = clean_(values['Schedule Type'] !== undefined ? values['Schedule Type'] : (old ? old['Schedule Type'] : 'Regular'));
@@ -6194,7 +6228,10 @@ function isPatternProtectedAssignment_(a){
 function isSevenOn_(u){return clean_(u['Schedule Type']).toLowerCase().replace(/\s/g,'').indexOf('7-on')>=0 || clean_(u['Schedule Type']).toLowerCase().indexOf('7 on')>=0 || clean_(u['Schedule Type']).toLowerCase()==='7on7off';}
 function sevenOnIsOnDay_(u,date){const a=startOfDay_(asDate_(u['Rotation Anchor Date']));if(!a)return false;const diff=daysBetween_(a,startOfDay_(date));const mod=((diff%14)+14)%14;return mod<7;}
 function employeeWeeklyMax_(u,model){return num_(u['Weekly Hour Maximum'],model.settings.weeklyDefault);}
-function employeeEveningMax_(u,model){return num_(u['Maximum Evening Shifts Per Month'],model.settings.eveningDefault);}
+function employeeEveningMax_(u,model){
+  const configured=num_(u['Maximum Evening Shifts Per Month'],model.settings.eveningDefault);
+  return Math.max(0,Math.min(7,configured));
+}
 function creditedHours_(shift){const c=numOrNull_(shift['Credited Hours']);return c===null?num_(shift.Hours,0):c;}
 
 function normalizeTimeString_(v) {
