@@ -720,10 +720,23 @@
     var btn=$('paperGenerateScheduleBtn');
     var users=paperVisibleUsers_();
     var manualTotal=users.reduce(function(sum,u){return sum+paperManualAssignmentsForUserMonth_(u,month).length;},0);
+    var visiblePrnUsers=new Set(
+      users
+        .filter(function(u){return paperPharmacistType_(u)==='PRN';})
+        .map(function(u){return String(u.Username==null?'':u.Username).trim().toLowerCase();})
+    );
+    var prnAvailableDates=new Set();
+    (State.data.prnAvailability||[]).forEach(function(r){
+      var username=String(r.Username==null?'':r.Username).trim().toLowerCase();
+      var dk=String(r.Date||'').slice(0,10);
+      if(!visiblePrnUsers.has(username)||dk<start||dk>end||!yes(r.Available===undefined?'Yes':r.Available))return;
+      prnAvailableDates.add(username+'|'+dk);
+    });
 
     if(!confirm(
       'Generate the remaining schedule for '+monthTitle(month)+'?\n\n'+
       manualTotal+' visible manual assignment(s) will be treated as fixed scheduling constraints. '+
+      prnAvailableDates.size+' PRN available date(s) from My Availability will be counted and used as scheduling constraints. '+
       'Approved PTO (P), approved Regular Off (R), and all manual/locked assignments will not be overwritten.'
     ))return;
 
