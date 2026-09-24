@@ -5248,6 +5248,51 @@ function reviewRequest(token,recordId,status,comment) {
   return{ok:true,ptoAutoApprovalsUpdated:rebalance.updated};
 }
 
+function deleteTimeOffRequest(token,recordId) {
+  const ctx=requireAdmin_(token);
+  const id=clean_(recordId);
+  if(!id)throw new Error('Request ID is required.');
+
+  const row=findRowByKey_(APP.SHEETS.REQUESTS,'Record ID',id);
+  if(!row)throw new Error('Time-off request not found.');
+
+  const type=clean_(row['Record Type']).toUpperCase();
+  if(type!=='PTO'&&!isRegularOffRecordType_(type)){
+    throw new Error('Only PTO or Regular Off requests can be deleted from this action.');
+  }
+
+  const pharmacist=clean_(row.Pharmacist);
+  const requestDate=dateKey_(row['Start Date']||row.Date||row['End Date']);
+
+  deleteRowByKey_(APP.SHEETS.REQUESTS,'Record ID',id);
+
+  // Deleting one of the first two approved requests frees a queue position.
+  // Recalculate immediately so the next eligible Pending request is promoted.
+  const rebalance=reconcilePtoAutoApprovals_('SYSTEM');
+
+  audit_(
+    'TIME_OFF_REQUEST_DELETED',
+    requestDate,
+    pharmacist,
+    '',
+    '',
+    clean_(row.Status),
+    'Deleted',
+    'No',
+    '',
+    type+' '+id,
+    ctx.username
+  );
+
+  return {
+    ok:true,
+    recordId:id,
+    recordType:type,
+    pharmacist:pharmacist,
+    ptoAutoApprovalsUpdated:rebalance.updated
+  };
+}
+
 function saveEmployeeRequest(token,data) {
   const ctx = requireAdmin_(token);
   data = data || {};
