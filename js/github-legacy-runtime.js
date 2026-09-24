@@ -627,6 +627,7 @@
 
 
   const GOOGLE_PTO_SHEET='PTO / Availability Requests';
+  const GOOGLE_PRN_AVAILABILITY_SHEET='My Availability';
 
   function requestMatrixToObjects_(matrix){
     if(!Array.isArray(matrix)||!matrix.length)return [];
@@ -921,6 +922,100 @@
     throw lastError||new Error('Could not sync Google PTO into neochrono-data.');
   }
 
+  async function syncGooglePrnAvailabilityMatrix_(matrix,reason){
+    if(!Array.isArray(matrix)||!matrix.length){
+      throw new Error('Google My Availability returned no sheet data.');
+    }
+
+    let lastError=null;
+
+    for(let attempt=0;attempt<4;attempt++){
+      const loaded=await loadWorkbook(true);
+      const data=clone(loaded.data);
+      data.sheets=data.sheets||{};
+
+      const localSheet=data.sheets[GOOGLE_PRN_AVAILABILITY_SHEET]||{values:[]};
+      const localMatrix=Array.isArray(localSheet.values)?localSheet.values:[];
+
+      if(JSON.stringify(localMatrix)===JSON.stringify(matrix)){
+        return {ok:true,changed:false,rows:Math.max(0,matrix.length-1)};
+      }
+
+      data.sheets[GOOGLE_PRN_AVAILABILITY_SHEET]={values:matrix};
+      data.meta=data.meta||{};
+      data.meta.googlePrnAvailabilitySyncedAt=new Date().toISOString();
+      data.meta.googlePrnAvailabilitySource='Google Sheet -> neochrono-data (My Availability)';
+
+      try{
+        const result=await saveWorkbook(
+          data,
+          loaded.sha,
+          reason||'Sync My Availability from Google Sheet'
+        );
+        cache={data,sha:(result&&result.content&&result.content.sha)||loaded.sha,loadedAt:Date.now()};
+        return {ok:true,changed:true,rows:Math.max(0,matrix.length-1)};
+      }catch(e){
+        lastError=e;
+        const conflict=
+          e&&(
+            e.status===409||
+            e.status===422||
+            /does not match|sha mismatch|conflict/i.test(String(e.message||''))
+          );
+
+        if(conflict&&attempt<3){
+          cache={data:null,sha:null,loadedAt:0};
+          await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));
+          continue;
+        }
+
+        throw e;
+      }
+    }
+
+    throw lastError||new Error('Could not sync My Availability into neochrono-data.');
+  }
+
+  let googlePrnAvailabilityPollBusy_=false;
+  let googlePrnAvailabilityPollTimer_=null;
+
+  async function pollGooglePrnAvailabilityToGithub_(){
+    if(googlePrnAvailabilityPollBusy_)return;
+    if(!window.__neoPrnAvailabilitySource||typeof window.__neoPrnAvailabilitySource.fetchSnapshot!=='function')return;
+
+    try{cfg();}catch(_e){return;}
+
+    googlePrnAvailabilityPollBusy_=true;
+
+    try{
+      const snapshot=await window.__neoPrnAvailabilitySource.fetchSnapshot();
+      const synced=await syncGooglePrnAvailabilityMatrix_(
+        snapshot.matrix,
+        'Sync My Availability from Google Sheet'
+      );
+
+      if(synced&&synced.changed){
+        cache={data:null,sha:null,loadedAt:0};
+
+        try{
+          window.dispatchEvent(new CustomEvent('neochrono:prn-availability-synced',{
+            detail:{rows:synced.rows,at:new Date().toISOString()}
+          }));
+        }catch(_e){}
+      }
+    }catch(e){
+      console.warn('NeoChrono Google My Availability sync failed:',e);
+    }finally{
+      googlePrnAvailabilityPollBusy_=false;
+    }
+  }
+
+  function startGooglePrnAvailabilitySync_(){
+    if(googlePrnAvailabilityPollTimer_)return;
+    setTimeout(pollGooglePrnAvailabilityToGithub_,1250);
+    googlePrnAvailabilityPollTimer_=setInterval(pollGooglePrnAvailabilityToGithub_,10000);
+  }
+
   let googlePtoPollBusy_=false;
   let googlePtoPollTimer_=null;
 
@@ -989,6 +1084,7 @@
   window.__neoRuntime={
     cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,getEmployeePhotoDataUrl,uploadEmployeePhoto,deleteEmployeePhoto,employeePhotoPath:employeePhotoPath_,
     syncGooglePtoMatrix:syncGooglePtoMatrix_,
+    syncGooglePrnAvailabilityMatrix:syncGooglePrnAvailabilityMatrix_,
     currentBook:()=>currentBook(),
     workbookCacheStatus:()=>({
       loaded:!!cache.data,
@@ -1191,6 +1287,7 @@
   };
 
   startGooglePtoFiveSecondSync_();
+  startGooglePrnAvailabilitySync_();
 
   function chain(state){
     return new Proxy({},{
