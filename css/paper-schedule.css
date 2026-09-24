@@ -7,6 +7,8 @@
   --paper-off:#ffffff;
   --paper-pto:#e2f0d9;
   --paper-regular-off:#ddebf7;
+  --paper-prn-available:#e2f0d9;
+  --paper-prn-unavailable:#f2f2f2;
   --paper-locked:#1f4e78;
   --paper-evening:#fce4d6;
   --paper-night:#fff2cc;
@@ -372,6 +374,16 @@ body:has(.paper-page-shell) .content{
   background:var(--paper-regular-off);
   font-weight:900;
   color:#1f4e78;
+}
+.paper-table td.paper-prn-available{
+  background:var(--paper-prn-available);
+  color:#2f641c;
+  font-weight:900;
+}
+.paper-table td.paper-prn-unavailable{
+  background:var(--paper-prn-unavailable);
+  color:#9ca3af;
+  font-weight:700;
 }
 .paper-table td.paper-evening{
   background:var(--paper-evening);
