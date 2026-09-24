@@ -643,6 +643,7 @@
           '<button class="btn btn-secondary btn-sm paper-filter-action-btn" onclick="paperScheduleChangeMonth_(1)">Next →</button>'+
           '<button class="btn btn-primary btn-sm paper-filter-action-btn" onclick="printPaperSchedule_()">Print / Save PDF</button>'+
           (d.isAdmin?'<button class="btn btn-primary btn-sm paper-filter-action-btn" onclick="openAssignmentModal(null)">+ Manual assignment</button>':'')+
+          (d.isAdmin?'<button class="btn btn-secondary btn-sm paper-filter-action-btn" onclick="openAssignmentModal(null,\'\',\'\',1,\'\',\'X\')">Set X</button>':'')+
           (d.isAdmin?'<button id="paperGenerateScheduleBtn" class="btn btn-primary btn-sm paper-filter-action-btn" onclick="paperGenerateSchedule_()">Generate Schedule</button>':'')+
         '</div>'+
       '</div>';
