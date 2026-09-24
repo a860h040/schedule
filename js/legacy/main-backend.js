@@ -3439,12 +3439,13 @@ function buildPeriodHourSummary_(assignments,model,start,end) {
   model.users
     .filter(u=>yes_(u.Active))
     .forEach(u=>{
+      const fortyRule=regularFiveDayRuleApplies_(u);
       totals[clean_(u.Username)]={
         username:clean_(u.Username),
         pharmacist:clean_(u['Pharmacist Name']),
         hours:0,
-        target:isPrnEmployee_(u)?null:num_(model.settings.periodHoursTarget,320),
-        exact:isPrnEmployee_(u)
+        target:fortyRule?num_(model.settings.periodHoursTarget,320):null,
+        exact:!fortyRule
       };
     });
 
@@ -3459,8 +3460,9 @@ function buildPeriodHourSummary_(assignments,model,start,end) {
     const x=totals[k];
     x.hours=Math.round(x.hours*10)/10;
     const u=model.usersByUsername[x.username];
-    x.exact=(isSevenOn_(u)||isPrnEmployee_(u))?true:Math.abs(x.hours-x.target)<0.0001;
-    x.pattern=isSevenOn_(u)?'7-on/7-off':isPrnEmployee_(u)?'PRN availability':'5 days/week';
+    const fortyRule=regularFiveDayRuleApplies_(u);
+    x.exact=fortyRule?Math.abs(x.hours-x.target)<0.0001:true;
+    x.pattern=isSevenOn_(u)?'7-on/7-off':isPrnEmployee_(u)?'PRN availability':fortyRule?'40H Sun-Sat':'custom weekly rule';
     return x;
   });
 }
