@@ -5155,6 +5155,7 @@ function isRequiredSlot_(date,shiftCode,slot) {
 function saveEmployee(token,data) {
   const ctx = requireAdmin_(token);
   data = data || {};
+  ensureSheet_(getDb_(),APP.SHEETS.USERS,APP.HEADERS.USERS);
   const rows = readTable_(APP.SHEETS.USERS);
   const id = clean_(data['Employee ID']) || ('EMP-' + Utilities.getUuid().slice(0,8).toUpperCase());
   const old = rows.find(r => clean_(r['Employee ID']) === id);
