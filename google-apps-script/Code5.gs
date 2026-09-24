@@ -1013,6 +1013,14 @@ function neoChronoReviewPto_(sheet, recordId, status, comment, actor) {
   if (!found) throw new Error('Request not found: ' + id);
 
   var row = found.object;
+
+  if (
+    String(row.Status || '').trim().toLowerCase() === 'approved' &&
+    key === 'pending'
+  ) {
+    throw new Error('An approved PTO / Regular Off request cannot be returned to Pending. Use Reject or Delete if the approval must be removed.');
+  }
+
   row.Status = allowed[key];
   row.Comment = comment === undefined
     ? row.Comment
