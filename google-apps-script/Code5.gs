@@ -1514,7 +1514,19 @@ function neoChronoReconcilePtoAutoApprovals_(sheet, updatedBy) {
      * Pending. Only an explicit administrator Reject/Delete action may remove
      * an approval. This also means approving request #3+ never steals approval
      * from an already-approved request.
+     *
+     * Rows entered directly in Google Sheets can have a blank Status. If they
+     * are outside the first-two queue and are not already Approved, normalize
+     * them to Pending so the admin sees the correct review state.
      */
+    if (!q.autoEligible && status !== 'approved' && status !== 'pending') {
+      row.Status = 'Pending';
+      row['Reviewed By'] = '';
+      row['Reviewed At'] = '';
+      row['Updated At'] = now;
+      row['Updated By'] = updatedBy || 'SYSTEM';
+      changed = true;
+    }
 
     if (changed) {
       neoChronoWritePtoObject_(
