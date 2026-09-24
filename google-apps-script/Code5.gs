@@ -810,14 +810,17 @@ function neoChronoPrnAvailabilitySnapshot_(ss) {
     .getRange(1, 1, lastRow, lastColumn)
     .getValues();
 
-  var headers = values[0].map(function(value) {
-    return String(value || '').trim();
-  });
-
   var timezone =
     ss.getSpreadsheetTimeZone() ||
     Session.getScriptTimeZone() ||
     'America/New_York';
+
+  var headers = values[0].map(function(value) {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      return Utilities.formatDate(value, timezone, 'yyyy-MM-dd');
+    }
+    return String(value || '').trim();
+  });
 
   var rows = [];
 
