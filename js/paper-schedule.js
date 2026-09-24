@@ -584,6 +584,19 @@
     }).join('');
   }
 
+  function paperFortyHourRule_(user){
+    var explicit=String(user&&user['40 Hour Week Rule']||'').trim().toUpperCase();
+    if(explicit==='YES')return true;
+    if(explicit==='NO')return false;
+
+    var employment=String(user&&user['Employment Type']||'Regular').trim().toUpperCase();
+    var scheduleType=String(user&&user['Schedule Type']||'Regular').trim().toLowerCase();
+    if(employment==='PRN'||scheduleType.indexOf('7')>=0||yes(user&&user.Resident))return false;
+
+    return Number(user&&user['Target Weekly Hours']||40)>=40 &&
+      Number(user&&user['Weekly Hour Maximum']||40)>=40;
+  }
+
   function paperUserMonthSummary_(user,month){
     var start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
     var end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
@@ -673,6 +686,7 @@
         '<col class="paper-stat-column">'+
         '<col class="paper-stat-column">'+
         '<col class="paper-group-column">'+
+        '<col class="paper-rule-column">'+
         dates.map(function(){return '<col class="paper-date-column">';}).join('')+
       '</colgroup><thead>';
 
@@ -682,6 +696,7 @@
         '<th class="paper-summary-col">E</th>'+
         '<th class="paper-summary-col">D</th>'+
         '<th class="paper-summary-col">G</th>'+
+        '<th class="paper-summary-col paper-rule-head" title="40-hour Sunday-Saturday rule">40H</th>'+
         '<th colspan="'+dates.length+'">'+esc(monthTitle(m))+'</th>'+
       '</tr>';
 
@@ -691,6 +706,7 @@
         '<th class="paper-summary-col">E</th>'+
         '<th class="paper-summary-col">D</th>'+
         '<th class="paper-summary-col">G</th>'+
+        '<th class="paper-summary-col paper-rule-head">40H</th>'+
         dates.map(function(dt){
           var dk=dateKey(dt);
           var g=paperWeekendGroupForDate_(dk);
@@ -705,9 +721,10 @@
         '<th class="paper-summary-col" title="Evening shifts this month">E</th>'+
         '<th class="paper-summary-col" title="Day shifts this month">D</th>'+
         '<th class="paper-summary-col" title="Assigned weekend group">G</th>'+
+        '<th class="paper-summary-col paper-rule-head" title="40-hour Sunday-Saturday rule">40H</th>'+
         dates.map(function(dt){
           var dk=dateKey(dt);
-          return '<th class="date-col '+(paperDateIsHoliday_(dk)?'holiday-col':'')+'">'+
+          return '<th class="date-col '+(isWeekend(dt)?'weekend-head ':'')+(paperDateIsHoliday_(dk)?'holiday-col':'')+'">'+
             (dt.getMonth()+1)+'/'+dt.getDate()+
           '</th>';
         }).join('')+
@@ -719,9 +736,10 @@
         '<th class="paper-summary-col">E</th>'+
         '<th class="paper-summary-col">D</th>'+
         '<th class="paper-summary-col">G</th>'+
+        '<th class="paper-summary-col paper-rule-head">40H</th>'+
         dates.map(function(dt){
           var dk=dateKey(dt);
-          return '<th class="date-col '+(paperDateIsHoliday_(dk)?'holiday-col':'')+'">'+
+          return '<th class="date-col '+(isWeekend(dt)?'weekend-head ':'')+(paperDateIsHoliday_(dk)?'holiday-col':'')+'">'+
             ['SUN','MON','TUE','WED','THU','FRI','SAT'][dt.getDay()]+
           '</th>';
         }).join('')+
@@ -738,7 +756,7 @@
 
           html+=
             '<tr class="paper-category-row">'+
-              '<td colspan="'+(dates.length+4)+'">'+
+              '<td colspan="'+(dates.length+5)+'">'+
                 esc(group.label)+
               '</td>'+
             '</tr>';
@@ -749,7 +767,8 @@
           '<td class="name-col">'+esc(user['Pharmacist Name']||'')+'</td>'+
           '<td class="paper-summary-cell paper-evening-count" title="Evening shifts this month">'+esc(String(monthSummary.evening))+'</td>'+
           '<td class="paper-summary-cell paper-day-count" title="Day shifts this month">'+esc(String(monthSummary.day))+'</td>'+
-          '<td class="paper-summary-cell paper-weekend-group" title="Assigned weekend group">'+esc(monthSummary.group)+'</td>';
+          '<td class="paper-summary-cell paper-weekend-group" title="Assigned weekend group">'+esc(monthSummary.group)+'</td>'+
+          '<td class="paper-summary-cell paper-forty-rule" title="40-hour work week rule (Sunday-Saturday)">'+(paperFortyHourRule_(user)?'Yes':'No')+'</td>';
 
         dates.forEach(function(dt){
           var dk=dateKey(dt);
@@ -791,6 +810,7 @@
     if(showUnfilled){
       html+='<tr class="unfilled-row">'+
         '<td class="name-col">UNFILLED</td>'+
+        '<td class="paper-summary-cell">—</td>'+
         '<td class="paper-summary-cell">—</td>'+
         '<td class="paper-summary-cell">—</td>'+
         '<td class="paper-summary-cell">—</td>';
