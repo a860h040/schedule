@@ -159,10 +159,23 @@
     });
   }
 
+  function queuedTimeOffType_(value){
+    const type=String(value||'')
+      .trim()
+      .toUpperCase()
+      .replace(/[\-_]+/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+
+    if(type==='PTO')return 'PTO';
+    if(type==='REGULAR OFF'||type==='REGULAR OFF REQUEST'||type==='REGULAROFF')return 'REGULAR OFF';
+    return '';
+  }
+
   async function saveRequest(data){
     const row={...(data||{})};
-    row['Record Type']=String(row['Record Type']||'PTO').trim().toUpperCase();
-    if(row['Record Type']!=='PTO')throw new Error('Google PTO bridge only accepts PTO records.');
+    row['Record Type']=queuedTimeOffType_(row['Record Type']||'PTO');
+    if(!row['Record Type'])throw new Error('Google time-off bridge accepts only PTO or Regular Off records.');
     row['Record ID']=String(row['Record ID']||'').trim()||makeRecordId_();
     row.Pharmacist=pharmacistName_(row.Username,row.Pharmacist);
     row['Updated By']=String(row['Updated By']||actor_()).trim()||actor_();
@@ -175,7 +188,7 @@
       autoApproved:!!result.autoApproved,
       blockedDates:Array.isArray(result.blockedDates)?result.blockedDates:[],
       matrix:result.matrix,
-      message:result.message||'PTO saved to Google Sheet and ready to sync to neochrono-data.'
+      message:result.message||'Time-off request saved to Google Sheet and ready to sync to neochrono-data.'
     };
   }
 
@@ -194,7 +207,7 @@
       recordId:id,
       status:String(result.status||status||''),
       matrix:result.matrix,
-      message:result.message||'PTO review saved to Google Sheet and ready to sync to neochrono-data.'
+      message:result.message||'Time-off review saved to Google Sheet and ready to sync to neochrono-data.'
     };
   }
 
@@ -206,7 +219,7 @@
       ok:true,
       recordId:id,
       matrix:result.matrix,
-      message:result.message||'PTO deleted from Google Sheet and ready to sync to neochrono-data.'
+      message:result.message||'Time-off request deleted from Google Sheet and ready to sync to neochrono-data.'
     };
   }
 
@@ -217,7 +230,7 @@
       matrix:result.matrix,
       rowCount:Number(result.rowCount||Math.max(0,(result.matrix||[]).length-1)),
       generatedAt:String(result.generatedAt||''),
-      message:result.message||'PTO snapshot loaded from Google Sheet.'
+      message:result.message||'PTO / Regular Off snapshot loaded from Google Sheet.'
     };
   }
 
