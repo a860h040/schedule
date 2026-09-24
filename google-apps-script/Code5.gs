@@ -732,7 +732,7 @@ function neoChronoHandlePtoRead_(requestId, requestedSheet) {
       rows: snapshot.rows,
       rowCount: snapshot.rowCount,
       generatedAt: snapshot.generatedAt,
-      message: 'PTO data loaded from Google Sheets.'
+      message: 'PTO / Regular Off data loaded from Google Sheets.'
     });
   } finally {
     lock.releaseLock();
@@ -759,7 +759,7 @@ function neoChronoHandlePtoExport_(requestedSheet) {
       rows: snapshot.rows,
       rowCount: snapshot.rowCount,
       generatedAt: snapshot.generatedAt,
-      message: 'PTO export generated for neochrono-data.'
+      message: 'PTO / Regular Off export generated for neochrono-data.'
     });
   } catch (error) {
     return neoChronoJsonResponse_({
@@ -851,7 +851,7 @@ function neoChronoHandlePtoWrite_(requestId, requestedSheet, payload) {
       rows: snapshot.rows,
       rowCount: snapshot.rowCount,
       generatedAt: snapshot.generatedAt,
-      message: result.message || 'PTO change saved to Google Sheets.'
+      message: result.message || 'Time-off change saved to Google Sheets.'
     });
 
   } finally {
@@ -871,9 +871,9 @@ function neoChronoSavePto_(sheet, incoming, actor) {
     row[header] = value === null || value === undefined ? '' : value;
   });
 
-  row['Record Type'] = String(row['Record Type'] || 'PTO').trim().toUpperCase();
-  if (row['Record Type'] !== 'PTO') {
-    throw new Error('Code5.gs only accepts PTO rows for this endpoint.');
+  row['Record Type'] = neoChronoQueuedTimeOffType_(row['Record Type'] || 'PTO');
+  if (!row['Record Type']) {
+    throw new Error('This endpoint accepts only PTO or Regular Off requests.');
   }
 
   row['Record ID'] = String(row['Record ID'] || '').trim();
@@ -885,12 +885,12 @@ function neoChronoSavePto_(sheet, incoming, actor) {
   row.Username = String(row.Username || '').trim();
 
   if (!row.Pharmacist && !row.Username) {
-    throw new Error('PTO request is missing Pharmacist / Username.');
+    throw new Error('Time-off request is missing Pharmacist / Username.');
   }
 
   var requestedDates = neoChronoPtoDateKeys_(row);
   if (!requestedDates.length) {
-    throw new Error('PTO requires a Single Date or a Start Date / End Date.');
+    throw new Error('PTO / Regular Off requires a Single Date or a Start Date / End Date.');
   }
 
   var existing = neoChronoFindPtoRow_(table, row['Record ID']);
@@ -899,7 +899,7 @@ function neoChronoSavePto_(sheet, incoming, actor) {
   var duplicate = neoChronoFindDuplicatePto_(table, row, row['Record ID']);
   if (duplicate) {
     throw new Error(
-      'This pharmacist already has a PTO request that overlaps ' +
+      'This pharmacist already has a PTO / Regular Off request that overlaps ' +
       duplicate.date +
       ' (Record ' +
       duplicate.recordId +
@@ -945,7 +945,7 @@ function neoChronoSavePto_(sheet, incoming, actor) {
   var saved = neoChronoFindPtoRow_(refreshed, row['Record ID']);
 
   if (!saved) {
-    throw new Error('PTO verification failed after saving.');
+    throw new Error('Time-off verification failed after saving.');
   }
 
   var queue = neoChronoBuildPtoQueueState_(
@@ -968,9 +968,9 @@ function neoChronoSavePto_(sheet, incoming, actor) {
     message =
       'AUTO APPROVED: this request is within the first ' +
       NEOCHRONO_RECEIVER.PTO_AUTO_APPROVE_LIMIT +
-      ' PTO request(s) on every requested OFF date.';
+      ' combined PTO / Regular Off request(s) on every requested OFF date.';
   } else if (savedStatus.toLowerCase() === 'approved') {
-    message = 'PTO request is approved.';
+    message = row['Record Type'] + ' request is approved by an administrator.';
   } else {
     message =
       'PENDING ADMIN REVIEW: this request is number 3 or later on ' +
@@ -1038,7 +1038,7 @@ function neoChronoReviewPto_(sheet, recordId, status, comment, actor) {
   return {
     recordId: id,
     status: saved ? String(saved.object.Status || '') : allowed[key],
-    message: 'PTO review saved to Google Sheets.'
+    message: 'Time-off review saved to Google Sheets.'
   };
 }
 
@@ -1056,7 +1056,7 @@ function neoChronoDeletePto_(sheet, recordId, actor) {
   return {
     recordId: id,
     status: 'Deleted',
-    message: 'PTO request deleted from Google Sheets.'
+    message: 'Time-off request deleted from Google Sheets.'
   };
 }
 
@@ -1231,8 +1231,23 @@ function neoChronoIsPtoDateOnlyHeader_(header) {
 }
 
 /* =========================
-   PTO BUSINESS RULES
+   TIME-OFF BUSINESS RULES
    ========================= */
+
+function neoChronoQueuedTimeOffType_(value) {
+  var type = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (type === 'PTO') return 'PTO';
+  if (type === 'REGULAR OFF' || type === 'REGULAR OFF REQUEST' || type === 'REGULAROFF') {
+    return 'REGULAR OFF';
+  }
+  return '';
+}
 
 function neoChronoPtoDateKeys_(row) {
   var start = neoChronoDateKey_(row['Start Date']);
@@ -1252,7 +1267,7 @@ function neoChronoPtoDateKeys_(row) {
     while (current.getTime() <= finalDate.getTime()) {
       out.push(neoChronoUtcDateKey_(current));
       if (out.length > 370) {
-        throw new Error('PTO request is too long.');
+        throw new Error('Time-off request is too long.');
       }
       current.setUTCDate(current.getUTCDate() + 1);
     }
@@ -1325,10 +1340,7 @@ function neoChronoFindDuplicatePto_(table, row, excludeRecordId) {
       String(excludeRecordId || '').trim()
     ) continue;
 
-    if (
-      String(existing['Record Type'] || '').trim().toUpperCase() !==
-      'PTO'
-    ) continue;
+    if (!neoChronoQueuedTimeOffType_(existing['Record Type'])) continue;
 
     if (
       String(existing.Status || '').trim().toLowerCase() ===
@@ -1377,7 +1389,7 @@ function neoChronoBuildPtoQueueState_(rows, limit) {
   }).filter(function(item) {
     return (
       item.id &&
-      String(item.row['Record Type'] || '').trim().toUpperCase() === 'PTO' &&
+      !!neoChronoQueuedTimeOffType_(item.row['Record Type']) &&
       String(item.row.Status || '').trim().toLowerCase() !== 'rejected' &&
       item.dates.length > 0
     );
@@ -1468,10 +1480,7 @@ function neoChronoReconcilePtoAutoApprovals_(sheet, updatedBy) {
   table.rows.forEach(function(item) {
     var row = item.object;
 
-    if (
-      String(row['Record Type'] || '').trim().toUpperCase() !==
-      'PTO'
-    ) return;
+    if (!neoChronoQueuedTimeOffType_(row['Record Type'])) return;
 
     var id = String(row['Record ID'] || '').trim();
     if (!id) return;
@@ -1500,7 +1509,7 @@ function neoChronoReconcilePtoAutoApprovals_(sheet, updatedBy) {
 
     /*
      * Approval is sticky.
-     * Once a PTO request reaches Approved status (whether automatically or by
+     * Once a PTO / Regular Off request reaches Approved status (whether automatically or by
      * an administrator), queue reconciliation must NEVER move it back to
      * Pending. Only an explicit administrator Reject/Delete action may remove
      * an approval. This also means approving request #3+ never steals approval
