@@ -253,6 +253,12 @@ body:has(.paper-page-shell) .content{
 .paper-table col.paper-name-column{
   width:145px;
 }
+.paper-table col.paper-stat-column{
+  width:28px;
+}
+.paper-table col.paper-group-column{
+  width:34px;
+}
 .paper-table col.paper-date-column{
   width:auto;
 }
@@ -325,6 +331,53 @@ body:has(.paper-page-shell) .content{
 }
 .paper-table thead .name-col{
   z-index:14;
+}
+.paper-table .paper-summary-col,
+.paper-table .paper-summary-cell{
+  width:28px;
+  min-width:28px;
+  max-width:28px;
+  text-align:center!important;
+  font-weight:850;
+  background:#f7f9fc;
+  border-right:1px solid var(--paper-line)!important;
+  font-size:clamp(7px,.53vw,9px);
+}
+.paper-table .paper-weekend-group{
+  width:34px;
+  min-width:34px;
+  max-width:34px;
+}
+.paper-table .paper-summary-col:nth-child(2),
+.paper-table .paper-summary-cell:nth-child(2){
+  position:sticky;
+  left:145px;
+  z-index:7;
+}
+.paper-table .paper-summary-col:nth-child(3),
+.paper-table .paper-summary-cell:nth-child(3){
+  position:sticky;
+  left:173px;
+  z-index:7;
+}
+.paper-table .paper-summary-col:nth-child(4),
+.paper-table .paper-summary-cell:nth-child(4){
+  position:sticky;
+  left:201px;
+  z-index:7;
+  border-right:2px solid #000!important;
+}
+.paper-table thead .paper-summary-col{
+  z-index:13;
+}
+.paper-table .paper-evening-count{
+  background:var(--paper-evening);
+}
+.paper-table .paper-day-count{
+  background:#eef6ff;
+}
+.paper-table .paper-weekend-group{
+  background:#fff7ef;
 }
 .paper-table .date-col{
   width:auto;
@@ -508,4 +561,33 @@ body:has(.paper-page-shell) .content{
   body.printing-paper-schedule .paper-table th,
   body.printing-paper-schedule .paper-table td{height:18px!important;padding:1px!important;overflow:hidden!important}
   body.printing-paper-schedule *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+}
+
+/* Compact E/D/G summary columns next to pharmacist name. */
+@media(max-width:1250px){
+  .paper-table .paper-summary-col:nth-child(2),
+  .paper-table .paper-summary-cell:nth-child(2){left:125px}
+  .paper-table .paper-summary-col:nth-child(3),
+  .paper-table .paper-summary-cell:nth-child(3){left:153px}
+  .paper-table .paper-summary-col:nth-child(4),
+  .paper-table .paper-summary-cell:nth-child(4){left:181px}
+}
+@media(max-width:950px){
+  .paper-table .paper-summary-col:nth-child(2),
+  .paper-table .paper-summary-cell:nth-child(2){left:105px}
+  .paper-table .paper-summary-col:nth-child(3),
+  .paper-table .paper-summary-cell:nth-child(3){left:133px}
+  .paper-table .paper-summary-col:nth-child(4),
+  .paper-table .paper-summary-cell:nth-child(4){left:161px}
+}
+@media print{
+  body.printing-paper-schedule .paper-table col.paper-stat-column{width:.25in!important}
+  body.printing-paper-schedule .paper-table col.paper-group-column{width:.28in!important}
+  body.printing-paper-schedule .paper-table .paper-summary-col,
+  body.printing-paper-schedule .paper-table .paper-summary-cell{
+    position:static!important;
+    width:.25in!important;
+    min-width:.25in!important;
+    max-width:.28in!important;
+  }
 }
