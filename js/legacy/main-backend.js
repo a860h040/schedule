@@ -1247,11 +1247,14 @@ function generateSchedule(token, options) {
       else slotResults.push(makeUnfilledAssignment_(slot, model, state, ctx.username));
     }
 
-    runRepairPasses_(slotResults, model, state, ctx.username);
-
-    // Regular pharmacists are primary staffing. Before optional backup coverage,
-    // fill their required weekly workload from UNFILLED slots or PRN-held slots.
+    // MANDATORY workload pass: Regular pharmacists are the primary workforce.
+    // Do this BEFORE optional deep repair so the performance deadline can never
+    // prevent an eligible Regular pharmacist from receiving required workdays.
     rebalanceRegularWeeklyWorkload_(slotResults,model,state,ctx.username,start,end);
+
+    // Optional deep repair can improve remaining coverage after the required
+    // Regular workload has been satisfied as far as skills/rules allow.
+    runRepairPasses_(slotResults, model, state, ctx.username);
 
     // v15: OFF-day coverage skills live ONLY on the Users sheet. They are not
     // ordinary Employee Skills and therefore never make a pharmacist eligible
@@ -1271,8 +1274,9 @@ function generateSchedule(token, options) {
     // repair after every coverage pass, which was the main timeout multiplier.
     if(coverageChanged && Date.now()<=model.runtimeDeadline) runRepairPasses_(slotResults,model,state,ctx.username);
 
-    // A coverage repair may move assignments, so do one final regular-workload
-    // pass before validation.
+    // A coverage repair may move assignments, so do one final MANDATORY
+    // regular-workload pass before validation. This pass is not skipped by the
+    // optional performance safeguard.
     rebalanceRegularWeeklyWorkload_(slotResults,model,state,ctx.username,start,end);
 
     refreshUnfilledReasons_(slotResults, model, state);
@@ -1303,7 +1307,7 @@ function generateSchedule(token, options) {
             ? 'Schedule generated successfully. Regular pharmacists meet the five-day weekly pattern and required weekend rotation.'
             : 'Regular pharmacists meet the five-day weekly pattern where feasible; some required shifts remain UNFILLED.')
         : 'Schedule generated, but one or more five-day, required-weekend, evening-to-morning transition, consecutive-day, skill, or regular-hours rules could not be satisfied.',
-      warnings:cfg.warnings.concat(postValidation.warnings).concat(Date.now()>model.runtimeDeadline?['Performance safeguard: optional deep repair stopped early for this week-sized generation chunk. Required slots not solved by that point remain UNFILLED with an explanation.']:[]),
+      warnings:cfg.warnings.concat(postValidation.warnings).concat(Date.now()>model.runtimeDeadline?['Performance safeguard: optional deep repair stopped early. Mandatory Regular pharmacist workload balancing still ran; any remaining UNFILLED shifts could not be assigned without violating an applicable hard rule or skill requirement.']:[]),
       errors:postValidation.errors,
       generationMs:Date.now()-generationStartedAt,
       exactHoursTarget:num_(model.settings.periodHoursTarget,320),
@@ -2675,8 +2679,6 @@ function runRepairPasses_(results,model,state,actor) {
 }
 
 function rebalanceRegularWeeklyWorkload_(results,model,state,actor,start,end) {
-  const deadline=num_(model.runtimeDeadline,0);
-  const timedOut=()=>deadline>0&&Date.now()>deadline;
   const regularUsers=model.users.filter(u=>yes_(u.Active)&&regularFiveDayRuleApplies_(u));
   if(!regularUsers.length)return 0;
 
@@ -2684,7 +2686,6 @@ function rebalanceRegularWeeklyWorkload_(results,model,state,actor,start,end) {
   const weeks=weekStartsInRange_(start,end,model.settings.weekStart);
 
   for(const ws of weeks){
-    if(timedOut())break;
     const we=addDays_(ws,6);
 
     // For a monthly/custom range, only enforce dates actually inside the
@@ -2693,13 +2694,12 @@ function rebalanceRegularWeeklyWorkload_(results,model,state,actor,start,end) {
     if(!complete)continue;
 
     for(const u of regularUsers){
-      if(timedOut())break;
       const username=clean_(u.Username);
       const wk=username+'|'+weekStartKey_(ws,model.settings.weekStart);
       const target=regularRequiredWorkdaysForWeek_(u,ws,model);
       let current=num_(state.weeklyDays[wk],0);
 
-      while(current<target&&!timedOut()){
+      while(current<target){
         let filled=false;
 
         // First use an actually UNFILLED required slot.
