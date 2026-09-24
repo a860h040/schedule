@@ -3741,19 +3741,27 @@ function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,pre
   const initialShift=r?r.Shift:(locatorShift||'');
   const initialUsername=r?r.Username:(prefillUsername||'');
   const requestedMode=r?'SPECIFIC':String(prefillMode||'SPECIFIC').toUpperCase();
-  const initialMode=['SPECIFIC','DAY','EVENING','REGULAR_OFF','PRN_AVAILABILITY'].includes(requestedMode)
+  const initialMode=['SPECIFIC','X','DAY','EVENING','REGULAR_OFF','PRN_AVAILABILITY'].includes(requestedMode)
     ? requestedMode
     : 'SPECIFIC';
 
-  const modeOptions=r
-    ? '<option value="SPECIFIC" selected>Specific shift</option>'
+  const modeChoices=r
+    ? [
+        ['SPECIFIC','Specific shift'],
+        ['X','X / Unassigned']
+      ]
     : [
         ['SPECIFIC','Specific shift'],
+        ['X','X / Unassigned'],
         ['DAY','Day shift — algorithm chooses exact shift'],
         ['EVENING','Evening shift — algorithm chooses exact shift'],
         ['REGULAR_OFF','Regular day off'],
         ['PRN_AVAILABILITY','PRN availability']
-      ].map(x=>`<option value="${x[0]}" ${initialMode===x[0]?'selected':''}>${esc(x[1])}</option>`).join('');
+      ];
+
+  const modeOptions=modeChoices
+    .map(x=>`<option value="${x[0]}" ${initialMode===x[0]?'selected':''}>${esc(x[1])}</option>`)
+    .join('');
 
   const body=`
     <input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}">
@@ -3762,10 +3770,10 @@ function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,pre
     <div class="form-grid">
       <div class="field span-2">
         <label>Assignment type</label>
-        <select id="asMode" class="control" onchange="manualAssignmentModeChanged_()" ${r?'disabled':''}>
+        <select id="asMode" class="control" onchange="manualAssignmentModeChanged_()">
           ${modeOptions}
         </select>
-        ${r?'<div class="small muted mt6">To replace an existing assigned shift with Day/Evening/Regular Off, first use <b>Set to X</b>, then add the new manual rule.</div>':''}
+        ${r?'<div class="small muted mt6">Choose <b>X / Unassigned</b> and Save to clear this shift immediately.</div>':''}
       </div>
 
       <div class="field">
@@ -3852,6 +3860,7 @@ function manualAssignmentModeChanged_(){
 
   const messages={
     SPECIFIC:'Choose the exact shift code and pharmacist. This creates or edits a specific schedule assignment.',
+    X:'Choose the pharmacist and date, then Save. Any assigned shift on that date will be changed directly to <b>X / unassigned</b>. X does not reserve the day off; a future schedule generation may assign the pharmacist again. Use Regular day off if the pharmacist must stay off.',
     DAY:'Choose the pharmacist and date only. NeoChrono will assign that pharmacist to a qualified <b>Day/Morning</b> shift when the algorithm runs.',
     EVENING:'Choose the pharmacist and date only. NeoChrono will assign that pharmacist to a qualified <b>Evening</b> shift when the algorithm runs. The 7-evening monthly maximum still applies.',
     REGULAR_OFF:'Choose the pharmacist and date. The date is saved as an approved <b>Regular Off</b> and the scheduling algorithm will keep that pharmacist off.',
@@ -3864,7 +3873,58 @@ function manualAssignmentModeChanged_(){
 async function saveManualAssignmentRouter_(override){
   const mode=$('asMode')?String($('asMode').value||'SPECIFIC').toUpperCase():'SPECIFIC';
   if(mode==='SPECIFIC')return saveAssignmentUI(override);
+  if(mode==='X')return saveAssignmentAsXUI_();
   return saveManualCalendarRuleUI_(mode);
+}
+
+async function saveAssignmentAsXUI_(){
+  const date=$('asDate')?String($('asDate').value||''):'';
+  const username=$('asUser')?String($('asUser').value||''):'';
+  const directId=$('asId')?String($('asId').value||''):'';
+
+  if(!date||!username){
+    toast('Select a date and pharmacist.','error');
+    return;
+  }
+
+  const user=(State.data.users||[]).find(u=>String(u.Username||'')===username);
+  const pharmacist=user?String(user['Pharmacist Name']||''):'Pharmacist';
+
+  let rows=(State.data.schedule||[]).filter(r=>
+    String(r.Date||'').slice(0,10)===date &&
+    String(r.Username||'')===username &&
+    String(r.Status||'').toUpperCase()!=='UNFILLED' &&
+    String(r['Assigned Pharmacist']||'').toUpperCase()!=='UNFILLED'
+  );
+
+  if(directId){
+    const direct=(State.data.schedule||[]).find(r=>String(r['Assignment ID']||'')===directId);
+    if(direct)rows=[direct];
+  }
+
+  if(!rows.length){
+    closeModal();
+    toast(pharmacist+' is already X / unassigned on '+date+'.','success');
+    return;
+  }
+
+  if(!confirm(
+    'Set '+pharmacist+' to X / unassigned on '+date+'?\n\n'+
+    'This will remove '+rows.length+' assigned shift'+(rows.length===1?'':'s')+
+    ' from the pharmacist for that date. Required staffing slots will remain UNFILLED.'
+  ))return;
+
+  try{
+    for(const row of rows){
+      await server('setAssignmentToX',State.token,row['Assignment ID']);
+    }
+
+    closeModal();
+    toast(pharmacist+' changed to X on '+date+'.','success');
+    await refreshData();
+  }catch(e){
+    toast(e.message,'error');
+  }
 }
 
 async function saveManualCalendarRuleUI_(mode){
