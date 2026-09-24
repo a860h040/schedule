@@ -441,6 +441,18 @@ body:has(.paper-page-shell) .content{
 .paper-table td.paper-evening{
   background:var(--paper-evening);
 }
+.paper-table td.paper-manual-day{
+  background:#dceeff;
+  color:#17384d;
+  font-weight:900;
+  box-shadow:inset 0 0 0 1px #6d9eeb;
+}
+.paper-table td.paper-manual-evening{
+  background:var(--paper-evening);
+  color:#7a3e00;
+  font-weight:900;
+  box-shadow:inset 0 0 0 1px #d6a15a;
+}
 .paper-table td.paper-night{
   background:var(--paper-night);
 }
