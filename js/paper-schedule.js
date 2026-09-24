@@ -501,6 +501,36 @@
     }).join('');
   }
 
+  function paperUserMonthSummary_(user,month){
+    var start=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+    var end=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+    var username=String(user&&user.Username==null?'':user.Username);
+
+    var rows=(State.data.schedule||[]).filter(function(r){
+      var dk=String(r.Date||'').slice(0,10);
+      var status=String(r.Status||'').toUpperCase();
+      return dk>=start && dk<=end &&
+        status!=='UNFILLED' &&
+        String(r['Assigned Pharmacist']||'').toUpperCase()!=='UNFILLED' &&
+        String(r.Username==null?'':r.Username)===username;
+    });
+
+    var evening=0;
+    var day=0;
+
+    rows.forEach(function(r){
+      var type=String(r['Shift Type']||'').trim().toLowerCase();
+      if(type==='evening') evening++;
+      if(type==='day' || type==='morning') day++;
+    });
+
+    return {
+      evening:evening,
+      day:day,
+      group:String(user&&user['Weekend Group']||'').trim()||'—'
+    };
+  }
+
   window.renderPaperSchedule=function(){
     var m=State.month;
     var d=State.data;
@@ -552,19 +582,29 @@
       '</div>';
 
     html+='<div id="paperPrintArea" class="paper-shell"><table class="paper-table">'+
-      '<colgroup><col class="paper-name-column">'+
-      dates.map(function(){return '<col class="paper-date-column">';}).join('')+
+      '<colgroup>'+
+        '<col class="paper-name-column">'+
+        '<col class="paper-stat-column">'+
+        '<col class="paper-stat-column">'+
+        '<col class="paper-group-column">'+
+        dates.map(function(){return '<col class="paper-date-column">';}).join('')+
       '</colgroup><thead>';
 
     html+=
       '<tr class="paper-title-row">'+
         '<th class="name-col">SCHEDULE PERIOD</th>'+
+        '<th class="paper-summary-col">E</th>'+
+        '<th class="paper-summary-col">D</th>'+
+        '<th class="paper-summary-col">G</th>'+
         '<th colspan="'+dates.length+'">'+esc(monthTitle(m))+'</th>'+
       '</tr>';
 
     html+=
       '<tr class="paper-group-row">'+
         '<th class="name-col">Weekend Group</th>'+
+        '<th class="paper-summary-col">E</th>'+
+        '<th class="paper-summary-col">D</th>'+
+        '<th class="paper-summary-col">G</th>'+
         dates.map(function(dt){
           var dk=dateKey(dt);
           var g=paperWeekendGroupForDate_(dk);
@@ -576,6 +616,9 @@
     html+=
       '<tr class="paper-date-row">'+
         '<th class="name-col">Pharmacist</th>'+
+        '<th class="paper-summary-col" title="Evening shifts this month">E</th>'+
+        '<th class="paper-summary-col" title="Day shifts this month">D</th>'+
+        '<th class="paper-summary-col" title="Assigned weekend group">G</th>'+
         dates.map(function(dt){
           var dk=dateKey(dt);
           return '<th class="date-col '+(paperDateIsHoliday_(dk)?'holiday-col':'')+'">'+
@@ -587,6 +630,9 @@
     html+=
       '<tr class="paper-day-row">'+
         '<th class="name-col">Name</th>'+
+        '<th class="paper-summary-col">E</th>'+
+        '<th class="paper-summary-col">D</th>'+
+        '<th class="paper-summary-col">G</th>'+
         dates.map(function(dt){
           var dk=dateKey(dt);
           return '<th class="date-col '+(paperDateIsHoliday_(dk)?'holiday-col':'')+'">'+
@@ -606,13 +652,18 @@
 
           html+=
             '<tr class="paper-category-row">'+
-              '<td colspan="'+(dates.length+1)+'">'+
+              '<td colspan="'+(dates.length+4)+'">'+
                 esc(group.label)+
               '</td>'+
             '</tr>';
         }
 
-        html+='<tr><td class="name-col">'+esc(user['Pharmacist Name']||'')+'</td>';
+        var monthSummary=paperUserMonthSummary_(user,m);
+        html+='<tr>'+
+          '<td class="name-col">'+esc(user['Pharmacist Name']||'')+'</td>'+
+          '<td class="paper-summary-cell paper-evening-count" title="Evening shifts this month">'+esc(String(monthSummary.evening))+'</td>'+
+          '<td class="paper-summary-cell paper-day-count" title="Day shifts this month">'+esc(String(monthSummary.day))+'</td>'+
+          '<td class="paper-summary-cell paper-weekend-group" title="Assigned weekend group">'+esc(monthSummary.group)+'</td>';
 
         dates.forEach(function(dt){
           var dk=dateKey(dt);
@@ -646,7 +697,11 @@
       (selected.length && State.calendarFilters.showUnfilledWithSelected && State.calendarFilters.status!=='FILLED');
 
     if(showUnfilled){
-      html+='<tr class="unfilled-row"><td class="name-col">UNFILLED</td>';
+      html+='<tr class="unfilled-row">'+
+        '<td class="name-col">UNFILLED</td>'+
+        '<td class="paper-summary-cell">—</td>'+
+        '<td class="paper-summary-cell">—</td>'+
+        '<td class="paper-summary-cell">—</td>';
 
       dates.forEach(function(dt){
         var dk=dateKey(dt);
