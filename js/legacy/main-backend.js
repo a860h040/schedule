@@ -2726,6 +2726,10 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
       if (isBlockedByRegularOff_(u,a.date,model)) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' has an approved Regular Off request.');
       const wa=weeklyAvailabilityStatus_(u,a.date,a.shift,model);
       if(wa.blocked&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' violates recurring weekly availability.');
+
+      const prnAvail=prnAvailabilityStatus_(u,a.date,a.shift,model);
+      if(prnAvail.blocked&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' is PRN and is not available for this date/shift in My Availability.');
+
       if (preceptorEveningBlocked_(u,validationSlot,model)) errors.push(a.dateKey+' '+a.shiftCode+': preceptor assigned a weekday evening shift; preceptors may work evening shifts on weekends only.');
       if (isSevenOn_(u)&&!sevenOnIsOnDay_(u,a.date)&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': 7-on/7-off employee scheduled during OFF period.');
       if (isSevenOn_(u)&&sevenOnIsOnDay_(u,a.date)&&!sevenOnSlotMatches_(u,validationSlot,model)&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': 7-on/7-off employee '+a.pharmacist+' must stay on dedicated shift '+sevenOnAssignedShiftCode_(u,model)+'.');
@@ -2954,7 +2958,7 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
   assignments.filter(a=>a.status==='UNFILLED').forEach(a=>warnings.push(a.dateKey+' '+a.shiftCode+' slot '+a.slot+' is UNFILLED.'));
   // Weekend-team structural rules. Every non-7-on/7-off employee with an
   // A/B/C group must have a Saturday anchor that belongs to that same group.
-  model.users.filter(u=>yes_(u.Active)&&!isSevenOn_(u)&&clean_(u['Weekend Group'])).forEach(u=>{
+  model.users.filter(u=>yes_(u.Active)&&!isSevenOn_(u)&&!isPrnEmployee_(u)&&clean_(u['Weekend Group'])).forEach(u=>{
     const group=clean_(u['Weekend Group']);
     if(!model.settings.weekendRotation.includes(group)){
       errors.push((yes_(u.Resident)?'Resident ':'Employee ')+u['Pharmacist Name']+' must have Weekend Group '+model.settings.weekendRotation.join('/')+'.');
