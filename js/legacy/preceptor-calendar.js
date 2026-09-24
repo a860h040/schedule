@@ -13,10 +13,13 @@
  * IMPORTANT DESIGN
  * - Users -> Preceptor = Yes means the pharmacist IS CAPABLE of precepting.
  * - Preceptor Calendar controls WHEN that pharmacist is ACTIVELY precepting.
- * - During an OFF calendar week, the scheduler treats that pharmacist as a
- *   normal pharmacist for preceptor-specific scheduling restrictions.
- * - New calendar rows default to Yes so installing this add-on does not
- *   unexpectedly change the behavior of existing preceptors.
+ * - Preceptor=Yes is a weekday teaching-coverage rule: the pharmacist must
+ *   be scheduled on a Day/Morning shift when working Monday-Friday.
+ * - If a Preferred / Home Unit is configured, weekday assignments stay there.
+ *   Without a preferred unit, any qualified Day/Morning shift may be used.
+ * - Preceptor Calendar ON/OFF remains visible for planning/history, but OFF no
+ *   longer rotates a preceptor into weekday evening shifts.
+ * - New calendar rows default to Yes for backward-compatible display behavior.
  *
  * Week boundaries follow the scheduler's Sunday–Saturday week. The first and
  * last week displayed in a month may therefore be partial calendar weeks.
@@ -363,6 +366,26 @@ function preceptorCalendarIsEveningSlot_(slot,model) {
   );
 }
 
+function preceptorCalendarIsDaySlot_(slot,model) {
+  if (!slot) return false;
+
+  var code = clean_(
+    slot.shiftCode ||
+    slot.Shift ||
+    (slot.shift && slot.shift.Shift)
+  ).toUpperCase();
+
+  var shift =
+    slot.shift ||
+    (model && model.shiftMap && model.shiftMap[code]) ||
+    null;
+
+  if (!shift) return false;
+
+  var type = clean_(shift.Type).toLowerCase();
+  return type === 'day' || type === 'morning';
+}
+
 /**
  * Preceptor evening restriction:
  * ON/precepting week -> every Evening-type shift is blocked.
@@ -373,17 +396,13 @@ function preceptorCalendarAwarePreceptorEveningBlocked_(u,slot,model) {
   if (!u || !slot || !yes_(u.Preceptor)) return false;
   if (!preceptorCalendarIsEveningSlot_(slot,model)) return false;
 
-  // Hard rule: no evening shift anywhere in a Sunday-Saturday week when the
-  // pharmacist is actively precepting during that week.
-  if (preceptorCalendarIsPreceptingWeek_(u,slot.date)) return true;
+  // v7: Preceptor=Yes pharmacists teach students during weekday work.
+  // Therefore Monday-Friday evening shifts are never automatic options for
+  // a preceptor. Weekend evening eligibility continues to follow the existing
+  // weekend rule because the student/precepting requirement is weekday based.
+  if (!isWeekendDate_(slot.date)) return true;
 
-  // During non-precepting weeks, preserve the legacy weekend/weekday settings
-  // for any evening work that is otherwise eligible.
-  if (isWeekendDate_(slot.date)) {
-    return !model.settings.preceptorWeekendEveningAllowed;
-  }
-
-  return !model.settings.preceptorWeekdayEveningAllowed;
+  return !model.settings.preceptorWeekendEveningAllowed;
 }
 
 /**
@@ -407,32 +426,22 @@ function preceptorCalendarAwareEligibilityReason_(u,shift,date,model) {
   if (baseReason) return baseReason;
   if (!preceptorCalendarIsManagedWeekday_(u,date)) return '';
 
-  var mode = preceptorCalendarModeForDate_(u,date);
   var code = clean_(shift && shift.Shift).toUpperCase();
+  var preferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
+  var slot = {shiftCode:code,shift:shift};
 
-  if (mode === 'OFF') {
-    var offPreferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
-    var isEveningOption = preceptorCalendarIsEveningSlot_(
-      {shiftCode:code,shift:shift},
-      model
-    );
-    var isPreferredOption = offPreferredCodes.indexOf(code) >= 0;
-
-    if (!isEveningOption && !isPreferredOption) {
-      return 'PRECEPTOR_OFF_EVENING_OR_PREFERRED_ONLY';
-    }
-    return '';
+  // Every weekday assignment for a preceptor must be a morning/day shift.
+  if (!preceptorCalendarIsDaySlot_(slot,model)) {
+    return 'PRECEPTOR_WEEKDAY_DAY_SHIFT_ONLY';
   }
 
-  if (mode === 'ON') {
-    var preferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
-
-    // Exact unit configured -> enforce it.
-    if (preferredCodes.length && preferredCodes.indexOf(code) < 0) {
-      return 'PRECEPTOR_ON_PREFERRED_UNIT_ONLY';
-    }
+  // If a Preferred / Home Unit is configured, keep the preceptor there so the
+  // student stays with the pharmacist in the intended teaching unit.
+  if (preferredCodes.length && preferredCodes.indexOf(code) < 0) {
+    return 'PRECEPTOR_PREFERRED_UNIT_ONLY';
   }
 
+  // No preferred unit configured: any qualified Day/Morning shift is allowed.
   return '';
 }
 
@@ -447,48 +456,14 @@ function preceptorCalendarAwareScoreCandidate_(u,slot,model,state,elig) {
 
   if (!preceptorCalendarIsManagedWeekday_(u,slot && slot.date)) return score;
 
-  var mode = preceptorCalendarModeForDate_(u,slot.date);
+  var preferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
 
-  if (
-    mode === 'ON' &&
-    preceptorCalendarPreferredUnitMatches_(u,slot,model)
-  ) {
+  if (preferredCodes.length && preceptorCalendarPreferredUnitMatches_(u,slot,model)) {
     score += 300000;
-  }
-
-  if (mode === 'OFF') {
-    var offCode = clean_(slot && slot.shiftCode).toUpperCase();
-    var offPreferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
-
-    if (preceptorCalendarIsEveningSlot_(slot,model)) {
-      if (preceptorCalendarIsPreceptingWeek_(u,slot.date)) {
-        return score - 1000000;
-      }
-
-      var monthDate = firstOfMonth_(slot.date);
-      var target = preceptorCalendarMonthlyEveningTarget_(u,monthDate,model);
-      var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthDate,model);
-      var have = preceptorCalendarCountEveningInMonth_(clean_(u.Username),monthDate,state,model);
-
-      if (have < target) {
-        // Strongly prioritize the normal target of five.
-        score += 300000;
-      } else if (have < maxAllowed) {
-        // This branch is normally unreachable because target and hard maximum
-        // are both 5. Keep it defensive if a future configuration differs.
-        if (preceptorCalendarOtherEligibleEveningCovererExists_(u,slot,model,state)) {
-          score -= 1000000;
-        } else {
-          score -= 1000000;
-        }
-      } else {
-        // The eligibility wrapper below enforces the hard ceiling. Keep this
-        // score penalty as an additional safety measure.
-        score -= 1000000;
-      }
-    } else if (offPreferredCodes.indexOf(offCode) >= 0) {
-      score += 300000;
-    }
+  } else if (!preferredCodes.length && preceptorCalendarIsDaySlot_(slot,model)) {
+    // A preceptor without a configured home unit still needs a weekday
+    // morning/day assignment. Normal skill priority decides which one.
+    score += 250000;
   }
 
   return score;
@@ -507,8 +482,7 @@ function preceptorCalendarPreassignOnPreferredUnits_(
     .filter(function(u){
       return yes_(u.Active) &&
              yes_(u.Preceptor) &&
-             !isSevenOn_(u) &&
-             preceptorCalendarPreferredUnitCodes_(u,model).length > 0;
+             !isSevenOn_(u);
     })
     .sort(function(a,b){
       return clean_(a['Pharmacist Name']).localeCompare(clean_(b['Pharmacist Name']));
@@ -529,45 +503,50 @@ function preceptorCalendarPreassignOnPreferredUnits_(
 
     var dk = formatDateKey_(day);
 
-    var onToday = users.filter(function(u){
-      return preceptorCalendarModeForDate_(u,day) === 'ON';
-    });
-
-    onToday.forEach(function(u){
+    users.forEach(function(u){
       var username = clean_(u.Username);
       if (state.byEmployeeDate[username+'|'+dk]) return;
+
+      // PTO / approved Regular Off remain legitimate protected off days.
+      if (isBlockedByPto_(u,day,model) || isBlockedByRegularOff_(u,day,model)) return;
 
       var preferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
 
       var candidates = slots
         .filter(function(s){
-          return s &&
-                 s.dateKey === dk &&
-                 !reserved.has(s.slotKey) &&
-                 preferredCodes.indexOf(clean_(s.shiftCode).toUpperCase()) >= 0;
+          if (!s || s.dateKey !== dk || reserved.has(s.slotKey)) return false;
+          if (!preceptorCalendarIsDaySlot_(s,model)) return false;
+
+          var code = clean_(s.shiftCode).toUpperCase();
+          if (preferredCodes.length && preferredCodes.indexOf(code) < 0) return false;
+
+          var e = eligibility_(u,s,model,state,false);
+          return !!(e && e.ok);
         })
         .sort(function(a,b){
-          return a.slot-b.slot ||
-                 clean_(a.shiftCode).localeCompare(clean_(b.shiftCode));
+          var ap = num_(a.shift && a.shift.Priority,50);
+          var bp = num_(b.shift && b.shift.Priority,50);
+          return ap-bp ||
+                 clean_(a.shiftCode).localeCompare(clean_(b.shiftCode)) ||
+                 a.slot-b.slot;
         });
 
-      for (var i=0;i<candidates.length;i++) {
-        var slot = candidates[i];
+      if (!candidates.length) return;
 
-        var assigned = assignSpecificUser_(
-          slot,
-          u,
-          model,
-          state,
-          actor,
-          'PRECEPTOR CALENDAR ON — PREFERRED UNIT'
-        );
+      var assigned = assignSpecificUser_(
+        candidates[0],
+        u,
+        model,
+        state,
+        actor,
+        preferredCodes.length
+          ? 'PRECEPTOR WEEKDAY DAY — PREFERRED UNIT'
+          : 'PRECEPTOR WEEKDAY DAY — MORNING/DAY SHIFT'
+      );
 
-        if (assigned) {
-          results.push(assigned);
-          reserved.add(slot.slotKey);
-          break;
-        }
+      if (assigned) {
+        results.push(assigned);
+        reserved.add(candidates[0].slotKey);
       }
     });
   }
@@ -840,149 +819,11 @@ function preceptorCalendarRemoveNewCoverage_(coverage, results, model, state, re
 function preceptorCalendarPreassignOffEvenings_(
   slots, results, model, state, actor, reserved, start, end
 ) {
-  if (!slots || !slots.length || !model || !state || !reserved) return;
-
-  var users = (model.users || [])
-    .filter(function(u) {
-      return yes_(u.Active) &&
-             yes_(u.Preceptor) &&
-             !isSevenOn_(u) &&
-             preceptorCalendarPreferredUnitCodes_(u,model).length > 0;
-    })
-    .sort(function(a,b) {
-      return clean_(a['Pharmacist Name']).localeCompare(clean_(b['Pharmacist Name']));
-    });
-
-  if (!users.length) return;
-
-  var rangeStart = startOfDay_(asDate_(start));
-  var rangeEnd = startOfDay_(asDate_(end));
-  if (!rangeStart || !rangeEnd) return;
-
-  users.forEach(function(u) {
-    var username = clean_(u.Username);
-
-    // Find every calendar month touched by this generation chunk.
-    var months = {};
-    for (
-      var md = new Date(rangeStart);
-      md.getTime() <= rangeEnd.getTime();
-      md = addDays_(md,1)
-    ) {
-      months[monthKey_(md)] = firstOfMonth_(md);
-    }
-
-    Object.keys(months).sort().forEach(function(monthKey) {
-      var monthDate = months[monthKey];
-      var target = preceptorCalendarMonthlyEveningTarget_(u,monthDate,model);
-
-      // Full month ON -> target 0. Nothing to rotate.
-      if (target < 1) return;
-
-      var have = preceptorCalendarCountEveningInMonth_(username,monthDate,state,model);
-      if (have >= target) return;
-
-      var eligibleDays = [];
-      for (
-        var d = new Date(rangeStart);
-        d.getTime() <= rangeEnd.getTime();
-        d = addDays_(d,1)
-      ) {
-        if (monthKey_(d) !== monthKey) continue;
-        if (isWeekendDate_(d)) continue;
-        if (preceptorCalendarModeForDate_(u,d) !== 'OFF') continue;
-        if (preceptorCalendarIsPreceptingWeek_(u,d)) continue;
-        eligibleDays.push(new Date(d));
-      }
-
-      eligibleDays.sort(function(a,b){ return a.getTime()-b.getTime(); });
-
-      for (var di=0; di<eligibleDays.length && have<target; di++) {
-        var day = eligibleDays[di];
-        var dk = formatDateKey_(day);
-
-        if (state.byEmployeeDate[username+'|'+dk]) continue;
-
-        var eveningSlots = (slots || [])
-          .filter(function(s) {
-            return s &&
-              s.dateKey === dk &&
-              !reserved.has(s.slotKey) &&
-              preceptorCalendarIsEveningSlot_(s,model);
-          })
-          .sort(function(a,b) {
-            // Preserve familiar E1/E2 ordering first, then any other
-            // Evening-type shifts by configured shift priority/code.
-            var ac = clean_(a.shiftCode).toUpperCase();
-            var bc = clean_(b.shiftCode).toUpperCase();
-            var ar = ac === 'E1' ? 0 : ac === 'E2' ? 1 : 2;
-            var br = bc === 'E1' ? 0 : bc === 'E2' ? 1 : 2;
-            return ar-br ||
-              num_(a.shift && a.shift.Priority,50)-num_(b.shift && b.shift.Priority,50) ||
-              ac.localeCompare(bc) ||
-              a.slot-b.slot;
-          });
-
-        if (!eveningSlots.length) continue;
-
-        var preferredSlots = preceptorCalendarPreferredUnitSlotsForDate_(
-          u,dk,slots,model
-        );
-
-        var freePreferred = preferredSlots.filter(function(s) {
-          return !reserved.has(s.slotKey);
-        });
-
-        var assignedEvening = null;
-
-        for (var ei=0; ei<eveningSlots.length; ei++) {
-          var eveningSlot = eveningSlots[ei];
-
-          // Confirm the preceptor can take this Evening-type shift under all hard rules.
-          var e = eligibility_(u,eveningSlot,model,state,false);
-          if (!e.ok) continue;
-
-          var coverage = null;
-
-          // If the preferred/home unit is required and currently free,
-          // secure a qualified coverer before moving the preceptor to evening.
-          if (freePreferred.length) {
-            var coverageSlot = freePreferred[0];
-            coverage = preceptorCalendarAssignHomeCoverage_(
-              u,coverageSlot,results,model,state,actor,reserved
-            );
-
-            if (!coverage) {
-              // Do not pull the preceptor away from the home unit when nobody
-              // with the normal skill can cover that required unit.
-              continue;
-            }
-          }
-
-          assignedEvening = assignSpecificUser_(
-            eveningSlot,
-            u,
-            model,
-            state,
-            actor,
-            'PRECEPTOR CALENDAR OFF — MONTHLY EVENING ROTATION'
-          );
-
-          if (!assignedEvening) {
-            preceptorCalendarRemoveNewCoverage_(
-              coverage,results,model,state,reserved
-            );
-            continue;
-          }
-
-          results.push(assignedEvening);
-          reserved.add(eveningSlot.slotKey);
-          have++;
-          break;
-        }
-      }
-    });
-  });
+  // v7: disabled. Preceptor=Yes pharmacists are no longer automatically
+  // rotated into weekday evening shifts when their calendar is OFF.
+  // They remain weekday Day/Morning pharmacists so students are not left
+  // without a preceptor.
+  return;
 }
 
 /**
@@ -1024,10 +865,9 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
       )
     : {errors:[],warnings:[]};
 
-  report = report || {errors:[],warnings:[]};  report.errors = Array.isArray(report.errors) ? report.errors.slice() : [];
+  report = report || {errors:[],warnings:[]};
+  report.errors = Array.isArray(report.errors) ? report.errors.slice() : [];
   report.warnings = Array.isArray(report.warnings) ? report.warnings.slice() : [];
-
-  var warnedMissingPreferred = {};
 
   (assignments || [])
     .filter(function(a){
@@ -1038,175 +878,35 @@ function preceptorCalendarAwareValidateGeneratedAssignments_(
         ? model.usersByUsername[clean_(a.username)]
         : null;
 
-      if (!u) return;
+      if (!u || !yes_(u.Preceptor)) return;
+      if (!preceptorCalendarIsManagedWeekday_(u,a.date)) return;
 
-      if (
-        yes_(u.Preceptor) &&
-        preceptorCalendarIsEveningSlot_(
-          {shiftCode:a.shiftCode,shift:model && model.shiftMap ? model.shiftMap[clean_(a.shiftCode).toUpperCase()] : null},
-          model
-        ) &&
-        preceptorCalendarIsPreceptingWeek_(u,a.date)
-      ) {
+      var code = clean_(a.shiftCode).toUpperCase();
+      var slot = {
+        shiftCode:code,
+        shift:model && model.shiftMap ? model.shiftMap[code] : null
+      };
+      var preferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
+
+      if (!preceptorCalendarIsDaySlot_(slot,model)) {
         report.errors.push(
           a.dateKey+' '+a.shiftCode+': '+
           clean_(u['Pharmacist Name'])+
-          ' is actively precepting during this Sunday-Saturday week and cannot be scheduled for an evening shift.'
+          ' is a preceptor and must work a weekday Day/Morning shift so the student has preceptor coverage.'
         );
         return;
       }
 
-      if (!preceptorCalendarIsManagedWeekday_(u,a.date)) return;
-
-      var mode = preceptorCalendarModeForDate_(u,a.date);
-
-      if (mode === 'OFF') {
-        var offPreferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
-        var offCode = clean_(a.shiftCode).toUpperCase();
-
-        var offIsEvening = preceptorCalendarIsEveningSlot_(
-          {
-            shiftCode:a.shiftCode,
-            shift:model && model.shiftMap
-              ? model.shiftMap[offCode]
-              : null
-          },
-          model
+      if (preferredCodes.length && preferredCodes.indexOf(code) < 0) {
+        report.errors.push(
+          a.dateKey+' '+a.shiftCode+': '+
+          clean_(u['Pharmacist Name'])+
+          ' is a preceptor with Preferred / Home Unit '+
+          preferredCodes.join('/')+
+          ' and must remain in that unit on weekdays.'
         );
-
-        if (
-          !offIsEvening &&
-          offPreferredCodes.indexOf(offCode) < 0
-        ) {
-          report.errors.push(
-            a.dateKey+' '+a.shiftCode+': '+
-            clean_(u['Pharmacist Name'])+
-            ' has Preceptor Calendar OFF and may work only an Evening-type shift or preferred unit '+
-            (offPreferredCodes.length ? offPreferredCodes.join('/') : '(not configured)')+
-            ' on this weekday.'
-          );
-        }
-        return;
-      }
-
-      if (mode === 'ON') {
-        var preferredCodes = preceptorCalendarPreferredUnitCodes_(u,model);
-
-        if (!preferredCodes.length) {
-          var userKey = clean_(u.Username);
-          if (!warnedMissingPreferred[userKey]) {
-            report.warnings.push(
-              clean_(u['Pharmacist Name'])+
-              ' is Preceptor Calendar ON but Skills tab does not have an active Preferred / Home Unit skill. Open Skills and set the pharmacist Preferred / Home Unit, for example IM, CC1, CC2, ONC, CARD, etc.'
-            );
-            warnedMissingPreferred[userKey] = true;
-          }
-          return;
-        }
-
-        if (preferredCodes.indexOf(clean_(a.shiftCode).toUpperCase()) < 0) {
-          report.errors.push(
-            a.dateKey+' '+a.shiftCode+': '+
-            clean_(u['Pharmacist Name'])+
-            ' has Preceptor Calendar ON and must work preferred unit '+
-            preferredCodes.join('/')+'.'
-          );
-        }
       }
     });
-
-  // Monthly total-Evening target validation.
-  // Build a combined month view from the assignments being validated plus
-  // saved schedule rows outside the current validation range.
-  var combined = [];
-  var seenSlots = {};
-
-  function addCombined_(a) {
-    if (!a || a.status === 'UNFILLED') return;
-    var key = a.dateKey+'|'+clean_(a.shiftCode)+'|'+num_(a.slot,1);
-    if (seenSlots[key]) return;
-    seenSlots[key] = true;
-    combined.push(a);
-  }
-
-  (assignments || []).forEach(addCombined_);
-
-  var rangeStart = startOfDay_(asDate_(start));
-  var rangeEnd = startOfDay_(asDate_(end));
-
-  if (rangeStart && rangeEnd) {
-    readTable_(APP.SHEETS.SCHEDULE).forEach(function(r) {
-      var d = startOfDay_(asDate_(r.Date));
-      if (!d || inDateRange_(d,rangeStart,rangeEnd)) return;
-      var a = scheduleRowToAssignment_(r,model);
-      if (a) addCombined_(a);
-    });
-
-    (model.users || [])
-      .filter(function(u) {
-        return yes_(u.Active) && yes_(u.Preceptor) && !isSevenOn_(u);
-      })
-      .forEach(function(u) {
-        var monthCursor = firstOfMonth_(rangeStart);
-        var lastMonth = firstOfMonth_(rangeEnd);
-
-        while (monthCursor.getTime() <= lastMonth.getTime()) {
-          var target = preceptorCalendarMonthlyEveningTarget_(u,monthCursor,model);
-
-          if (target > 0) {
-            var mk = monthKey_(monthCursor);
-            var count = combined.filter(function(a) {
-              if (
-                clean_(a.username) !== clean_(u.Username) ||
-                monthKey_(a.date) !== mk
-              ) {
-                return false;
-              }
-
-              return preceptorCalendarIsEveningSlot_(
-                {
-                  shiftCode:a.shiftCode,
-                  shift:model && model.shiftMap
-                    ? model.shiftMap[clean_(a.shiftCode).toUpperCase()]
-                    : null
-                },
-                model
-              );
-            }).length;
-
-            var fullMonthInValidation =
-              rangeStart.getTime() <= firstOfMonth_(monthCursor).getTime() &&
-              rangeEnd.getTime() >= lastOfMonth_(monthCursor).getTime();
-
-            var msg =
-              clean_(u['Pharmacist Name'])+
-              ' has Preceptor Calendar OFF during '+mk+
-              ' and needs '+target+' total Evening shift(s); currently '+count+'.';
-
-            var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthCursor,model);
-
-            if (count < target) {
-              if (fullMonthInValidation) report.errors.push(msg);
-              else report.warnings.push(msg+' The validation range does not contain the full month.');
-            } else if (count > maxAllowed) {
-              report.errors.push(
-                clean_(u['Pharmacist Name'])+' has '+count+
-                ' total Evening shifts during '+mk+
-                ', above the allowed maximum of '+maxAllowed+'.'
-              );
-            } else if (count > target) {
-              report.errors.push(
-                clean_(u['Pharmacist Name'])+' has '+count+
-                ' total Evening shifts during '+mk+
-                '. The hard monthly maximum is '+maxAllowed+'.'
-              );
-            }
-          }
-
-          monthCursor = firstOfMonth_(addDays_(lastOfMonth_(monthCursor),1));
-        }
-      });
-  }
 
   if (typeof unique_ === 'function') {
     report.errors = unique_(report.errors);
@@ -1225,58 +925,48 @@ function preceptorCalendarAwareEligibility_(u,slot,model,state,manualMode) {
   e.reasons = Array.isArray(e.reasons) ? e.reasons.slice() : [];
   e.warnings = Array.isArray(e.warnings) ? e.warnings.slice() : [];
 
+  // The residentEligibilityReason_ wrapper already enforces the weekday
+  // preferred-unit/day-shift rule. Keep this additional guard so an older base
+  // eligibility implementation cannot accidentally allow a weekday evening.
   if (
     e.ok &&
     u &&
     slot &&
     yes_(u.Preceptor) &&
-    preceptorCalendarIsEveningSlot_(slot,model) &&
-    preceptorCalendarIsPreceptingWeek_(u,slot.date)
+    preceptorCalendarIsManagedWeekday_(u,slot.date) &&
+    !preceptorCalendarIsDaySlot_(slot,model)
   ) {
-    e.reasons.push('PRECEPTOR_PRECEPTING_WEEK_NO_EVENING');
+    e.reasons.push('PRECEPTOR_WEEKDAY_DAY_SHIFT_ONLY');
     e.ok = false;
-  }
-
-  if (
-    e.ok &&
-    u &&
-    slot &&
-    yes_(u.Preceptor) &&
-    preceptorCalendarIsEveningSlot_(slot,model)
-  ) {
-    var monthDate = firstOfMonth_(slot.date);
-    var maxAllowed = preceptorCalendarMonthlyEveningMaximum_(u,monthDate,model);
-    var have = preceptorCalendarCountEveningInMonth_(
-      clean_(u.Username),
-      monthDate,
-      state,
-      model
-    );
-
-    if (maxAllowed <= 0 || have + 1 > maxAllowed) {
-      e.reasons.push('PRECEPTOR_MONTHLY_EVENING_MAX');
-      e.ok = false;
-    }
   }
 
   return e;
 }
 
 function preceptorCalendarAwareReasonToWarning_(reason) {
+  if (reason === 'PRECEPTOR_WEEKDAY_DAY_SHIFT_ONLY') {
+    return 'Preceptor weekday rule: pharmacist must work a Day/Morning shift so the student has preceptor coverage.';
+  }
+
+  if (reason === 'PRECEPTOR_PREFERRED_UNIT_ONLY') {
+    return 'Preceptor weekday rule: pharmacist must work the Skills → Preferred / Home Unit.';
+  }
+
+  // Backward-compatible messages for older saved warnings.
   if (reason === 'PRECEPTOR_OFF_EVENING_OR_PREFERRED_ONLY') {
-    return 'Preceptor Calendar OFF: pharmacist may work an Evening-type shift or the Skills → Preferred / Home Unit on this weekday.';
+    return 'Preceptor weekday rule updated: weekday evening rotation is no longer used; schedule a Day/Morning shift instead.';
   }
 
   if (reason === 'PRECEPTOR_ON_PREFERRED_UNIT_ONLY') {
-    return 'Preceptor Calendar ON: pharmacist must remain in the Skills → Preferred / Home Unit.';
+    return 'Preceptor weekday rule: pharmacist must work the Skills → Preferred / Home Unit.';
   }
 
   if (reason === 'PRECEPTOR_MONTHLY_EVENING_MAX') {
-    return 'Preceptor monthly Evening-shift maximum reached: target and hard maximum are both 5.';
+    return 'Preceptor weekday evening rotation is disabled under the current teaching-coverage rule.';
   }
 
   if (reason === 'PRECEPTOR_PRECEPTING_WEEK_NO_EVENING') {
-    return 'Preceptor Calendar ON week: pharmacist cannot work an evening shift anywhere in that Sunday-Saturday week.';
+    return 'Preceptor weekday rule: pharmacist cannot work an evening shift while providing student coverage.';
   }
 
   return _PC11_BASE_REASON_TO_WARNING_
@@ -1355,9 +1045,9 @@ function verifyPreceptorCalendarIntegration(token) {
     ok:true,
     connected:connected,
     sheetExists:!!getDb_().getSheetByName(PRECEPTOR_CALENDAR_SHEET_),
-    behavior:'ON = Skills Preferred/Home Unit. No evening shifts are allowed anywhere in a Sunday-Saturday week that contains active precepting. Months with eligible OFF weekdays target 5 Evening shifts during non-precepting weeks; the hard monthly maximum is also 5.',
+    behavior:'Preceptor=Yes requires weekday Day/Morning work. Preferred/Home Unit is mandatory when configured; otherwise any qualified Day/Morning shift may be used. Preceptor Calendar OFF no longer triggers weekday evening rotation.',
     message:connected
-      ? 'Code11 is connected. ON weeks stay in the preferred unit and cannot contain evening shifts. Eligible non-precepting OFF weeks target 5 total Evening-type shifts per month, and 5 is the hard maximum.'
+      ? 'Code11 is connected. Preceptors stay on weekday Day/Morning shifts; configured Preferred/Home Units are enforced, and OFF weeks no longer create weekday evening rotations.'
       : 'Code11 loaded, but one or more scheduling hooks are not connected. Replace the old Code11.gs with this version and redeploy.'
   };
 }
