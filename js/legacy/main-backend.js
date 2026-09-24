@@ -698,16 +698,19 @@ function getAppData(token) {
   // This also upgrades legacy Pending rows created before v27.
   reconcilePtoAutoApprovals_('SYSTEM');
   const users = readTable_(APP.SHEETS.USERS).filter(r => clean_(r.Role).toLowerCase() !== 'administrator');
-  const prnAvailabilitySourceLoaded = !!getDb_().getSheetByName('My Availability');
-  const prnAvailability = normalizePrnAvailabilityRows_(
-    readTable_('My Availability'),
-    users
-  );
   const admins = readTable_(APP.SHEETS.ADMINS).map(publicAdmin_);
   const skills = readTable_(APP.SHEETS.SKILLS);
   const shifts = readTable_(APP.SHEETS.SHIFTS);
   const requirements = readTable_(APP.SHEETS.REQUIREMENTS);
   const requests = readTable_(APP.SHEETS.REQUESTS);
+  const manualPrnAvailability=manualPrnAvailabilityRowsFromRequests_(requests,users);
+  const prnAvailabilitySourceLoaded =
+    !!getDb_().getSheetByName('My Availability') ||
+    manualPrnAvailability.length>0;
+  const prnAvailability = normalizePrnAvailabilityRows_(
+    readTable_('My Availability'),
+    users
+  ).concat(manualPrnAvailability);
   const weeklyAvailability = readTable_(APP.SHEETS.WEEKLY_AVAILABILITY);
   // v30 migration: v17-v29 chunked generation could create duplicate
   // Assignment IDs because the per-request sequence restarted each week.
@@ -946,6 +949,80 @@ function normalizePrnAvailabilityRows_(rawRows, users) {
     clean_(a.Date).localeCompare(clean_(b.Date)) ||
     clean_(a.Pharmacist).localeCompare(clean_(b.Pharmacist))
   );
+}
+
+
+function manualShiftTypeRecord_(value) {
+  const t=clean_(value).toUpperCase().replace(/[\-_]+/g,' ').replace(/\s+/g,' ').trim();
+  if(t==='MANUAL DAY'||t==='DAY SHIFT'||t==='MANUAL DAY SHIFT')return 'DAY';
+  if(t==='MANUAL EVENING'||t==='EVENING SHIFT'||t==='MANUAL EVENING SHIFT')return 'EVENING';
+  return '';
+}
+
+function isManualPrnAvailabilityRecord_(value) {
+  const t=clean_(value).toUpperCase().replace(/[\-_]+/g,' ').replace(/\s+/g,' ').trim();
+  return t==='PRN AVAILABILITY'||t==='MANUAL PRN AVAILABILITY';
+}
+
+function manualShiftTypeForDate_(u,date,model) {
+  if(!u||!date||!model)return '';
+  const username=clean_(u.Username);
+  const rows=(model.requestsByUser&&model.requestsByUser[username])||model.requests||[];
+  for(const r of rows){
+    if(clean_(r.Status).toLowerCase()!=='approved')continue;
+    if((!model.requestsByUser)&&!requestMatchesUser_(r,u))continue;
+    if(!requestCoversDate_(r,date))continue;
+    const type=manualShiftTypeRecord_(r['Record Type']);
+    if(type)return type;
+  }
+  return '';
+}
+
+function manualPrnAvailabilityRowsFromRequests_(requests,users) {
+  requests=Array.isArray(requests)?requests:[];
+  users=Array.isArray(users)?users:[];
+  const byUsername={};
+  const byName={};
+
+  users.filter(isPrnEmployee_).forEach(u=>{
+    const username=clean_(u.Username);
+    const name=clean_(u['Pharmacist Name']);
+    if(username)byUsername[username.toLowerCase()]=u;
+    if(name)byName[name.toLowerCase()]=u;
+  });
+
+  const out=[];
+  requests.forEach(r=>{
+    if(clean_(r.Status).toLowerCase()!=='approved')return;
+    if(!isManualPrnAvailabilityRecord_(r['Record Type']))return;
+
+    const username=clean_(r.Username).toLowerCase();
+    const name=clean_(r.Pharmacist).toLowerCase();
+    const u=(username&&byUsername[username])||(name&&byName[name])||null;
+    if(!u)return;
+
+    let start=startOfDay_(asDate_(r['Start Date']||r.Date||r['End Date']));
+    let end=startOfDay_(asDate_(r['End Date']||r.Date||r['Start Date']));
+    if(!start||!end)return;
+    if(end<start){const x=start;start=end;end=x;}
+
+    let guard=0;
+    for(let d=new Date(start);d<=end&&guard<370;d=addDays_(d,1),guard++){
+      out.push({
+        'Pharmacist':clean_(u['Pharmacist Name']),
+        'Username':clean_(u.Username),
+        'Employee ID':clean_(u['Employee ID']),
+        'Date':formatDateKey_(d),
+        'Available':'Yes',
+        'Shift':'',
+        'Start Time':'',
+        'End Time':'',
+        'Source':'Manual Assignment'
+      });
+    }
+  });
+
+  return out;
 }
 
 /** ------------------------- CONFIG VALIDATION --------------------- */
@@ -1261,6 +1338,20 @@ function generateSchedule(token, options) {
     if (model.settings.sevenOnBlockScheduling) {
       preassignSevenOnSevenOff_(generatedSlots,slotResults,model,state,ctx.username,reservedSlotKeys);
     }
+
+    // Administrator generic Day/Evening pre-assignments are hard date-level
+    // constraints. NeoChrono chooses the actual qualified shift code.
+    preassignManualShiftTypeRequests_(
+      generatedSlots,
+      slotResults,
+      model,
+      state,
+      ctx.username,
+      reservedSlotKeys,
+      start,
+      end
+    );
+
     if (model.settings.requiredWeekendAssignment) {
       if (model.settings.residentsRequiredAssignedWeekend) {
         preassignResidentWeekendsPriority_(generatedSlots,slotResults,model,state,ctx.username,reservedSlotKeys,start,end);
@@ -1383,8 +1474,11 @@ function loadSchedulingModel_() {
   const requirements = readTable_(APP.SHEETS.REQUIREMENTS);
   const requests = readTable_(APP.SHEETS.REQUESTS);
   const weeklyAvailability = readTable_(APP.SHEETS.WEEKLY_AVAILABILITY);
-  const prnAvailabilitySourceLoaded = !!getDb_().getSheetByName('My Availability');
   const rawPrnAvailability = readTable_('My Availability');
+  const manualPrnAvailability=manualPrnAvailabilityRowsFromRequests_(requests,users);
+  const prnAvailabilitySourceLoaded =
+    !!getDb_().getSheetByName('My Availability') ||
+    manualPrnAvailability.length>0;
   const rawSettings = getSettingsMap_();
   const shiftMap = {};
   shifts.forEach(sh => shiftMap[clean_(sh.Shift)] = sh);
@@ -1443,7 +1537,8 @@ function loadSchedulingModel_() {
     weeklyAvailabilityByUser[username].push(r);
   });
 
-  const prnAvailability=normalizePrnAvailabilityRows_(rawPrnAvailability,users);
+  const prnAvailability=normalizePrnAvailabilityRows_(rawPrnAvailability,users)
+    .concat(manualPrnAvailability);
   const prnAvailabilityByUser={};
   const prnAvailabilityDateCountByUser={};
 
@@ -1477,8 +1572,13 @@ function loadSchedulingModel_() {
     if(username && requestsByUser[username]) requestsByUser[username].push(r);
   });
 
+  const manualShiftTypeRequests=requests.filter(r=>
+    clean_(r.Status).toLowerCase()==='approved' &&
+    !!manualShiftTypeRecord_(r['Record Type'])
+  );
+
   const model={
-    users,skills,shifts,requirements,requests,requestsByUser,
+    users,skills,shifts,requirements,requests,requestsByUser,manualShiftTypeRequests,
     weeklyAvailability,weeklyAvailabilityByUser,
     prnAvailability,prnAvailabilityByUser,prnAvailabilityDateCountByUser,prnAvailabilitySourceLoaded,
     shiftMap,usersByUsername,usersByName,skillsByUser,settings,
@@ -1715,6 +1815,16 @@ function eligibility_(u, slot, model, state, manualMode) {
 
   const prnAvail = prnAvailabilityStatus_(u,slot.date,slot.shift,model);
   if (prnAvail.blocked) reasons.push(prnAvail.reason || 'PRN_NOT_AVAILABLE');
+
+  const manualShiftType=manualShiftTypeForDate_(u,slot.date,model);
+  if(manualShiftType){
+    const proposedType=clean_(slot.shift&&slot.shift.Type).toUpperCase();
+    const matches=
+      manualShiftType==='DAY'
+        ? (proposedType==='DAY'||proposedType==='MORNING')
+        : proposedType==='EVENING';
+    if(!matches)reasons.push('MANUAL_SHIFT_TYPE');
+  }
 
   if (state.byEmployeeDate[username+'|'+slot.dateKey]) reasons.push('ALREADY_SCHEDULED');
   if (hasTimeConflict_(username,slot,state)) reasons.push('TIME_CONFLICT');
@@ -2592,6 +2702,72 @@ function preassignResidentWeekendsPriority_(slots,results,model,state,actor,rese
   });
 }
 
+function preassignManualShiftTypeRequests_(slots,results,model,state,actor,reserved,start,end) {
+  const requests=(model.manualShiftTypeRequests||[]).slice().sort((a,b)=>{
+    const ad=formatDateKey_(startOfDay_(asDate_(a['Start Date']||a.Date||a['End Date']))||new Date(0));
+    const bd=formatDateKey_(startOfDay_(asDate_(b['Start Date']||b.Date||b['End Date']))||new Date(0));
+    return ad.localeCompare(bd)||clean_(a.Pharmacist).localeCompare(clean_(b.Pharmacist));
+  });
+
+  requests.forEach(r=>{
+    const desired=manualShiftTypeRecord_(r['Record Type']);
+    if(!desired)return;
+
+    const username=clean_(r.Username);
+    const u=model.usersByUsername[username]||model.usersByName[clean_(r.Pharmacist)];
+    if(!u||!yes_(u.Active))return;
+
+    let d=startOfDay_(asDate_(r['Start Date']||r.Date||r['End Date']));
+    let finish=startOfDay_(asDate_(r['End Date']||r.Date||r['Start Date']));
+    if(!d||!finish)return;
+    if(finish<d){const x=d;d=finish;finish=x;}
+
+    let guard=0;
+    for(let day=new Date(d);day<=finish&&guard<370;day=addDays_(day,1),guard++){
+      if(day<start||day>end)continue;
+      const dk=formatDateKey_(day);
+      if(state.byEmployeeDate[clean_(u.Username)+'|'+dk])continue;
+
+      const candidates=slots
+        .filter(s=>{
+          if(!s||s.dateKey!==dk||reserved.has(s.slotKey))return false;
+          const type=clean_(s.shift&&s.shift.Type).toUpperCase();
+          return desired==='DAY'
+            ? (type==='DAY'||type==='MORNING')
+            : type==='EVENING';
+        })
+        .map(s=>{
+          const e=eligibility_(u,s,model,state,false);
+          return {slot:s,elig:e,score:e&&e.ok?scoreCandidate_(u,s,model,state,e):-Infinity};
+        })
+        .filter(x=>x.elig&&x.elig.ok)
+        .sort((a,b)=>
+          b.score-a.score ||
+          countStaticCandidates_(a.slot,model)-countStaticCandidates_(b.slot,model) ||
+          num_(a.slot.shift.Priority,50)-num_(b.slot.shift.Priority,50) ||
+          a.slot.shiftCode.localeCompare(b.slot.shiftCode)
+        );
+
+      if(!candidates.length)continue;
+
+      const picked=candidates[0].slot;
+      const assigned=assignSpecificUser_(
+        picked,
+        u,
+        model,
+        state,
+        actor,
+        'MANUAL '+desired+' ASSIGNMENT — algorithm selected '+picked.shiftCode
+      );
+
+      if(assigned){
+        results.push(assigned);
+        reserved.add(picked.slotKey);
+      }
+    }
+  });
+}
+
 function preassignPairedEdCoverage_(slots,results,model,state,actor,reserved,start,end) {
   const dayCode=clean_(model.settings.edDayShiftCode||'EDD').toUpperCase();
   const eveCode=clean_(model.settings.edEveningShiftCode||'EDE').toUpperCase();
@@ -2886,7 +3062,7 @@ function explainUnfilled_(slot,model,state) {
       const primary=e.reasons[0]||'OTHER'; counts[primary]=num_(counts[primary],0)+1;
     }
   });
-  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at the hard 7-evening-shift monthly maximum',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
+  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at the hard 7-evening-shift monthly maximum',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',MANUAL_SHIFT_TYPE:'does not match the administrator-selected Day/Evening assignment type',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
   const pieces=Object.keys(counts).map(k=>counts[k]+' '+(labels[k]||k.toLowerCase().replace(/_/g,' ')));
   return 'UNFILLED — '+skillQualified.length+' active employees have the skill: '+pieces.join('; ')+'.';
 }
@@ -2940,6 +3116,36 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
       if (regularFiveDayRuleApplies_(u)&&clean_(u['Weekend Group'])&&isWeekendDate_(a.date)&&clean_(u['Weekend Group'])!==a.weekendGroup) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' is scheduled outside required Weekend Group '+clean_(u['Weekend Group'])+'.');
     }
   });
+  (model.manualShiftTypeRequests||[]).forEach(r=>{
+    const desired=manualShiftTypeRecord_(r['Record Type']);
+    if(!desired)return;
+    const u=model.usersByUsername[clean_(r.Username)]||model.usersByName[clean_(r.Pharmacist)];
+    if(!u)return;
+
+    let d=startOfDay_(asDate_(r['Start Date']||r.Date||r['End Date']));
+    let finish=startOfDay_(asDate_(r['End Date']||r.Date||r['Start Date']));
+    if(!d||!finish)return;
+    if(finish<d){const x=d;d=finish;finish=x;}
+
+    let guard=0;
+    for(let day=new Date(d);day<=finish&&guard<370;day=addDays_(day,1),guard++){
+      if(!inDateRange_(day,start,end))continue;
+      const dk=formatDateKey_(day);
+      const a=assigned.find(x=>x.username===clean_(u.Username)&&x.dateKey===dk);
+      if(!a){
+        errors.push(clean_(u['Pharmacist Name'])+' has a manual '+desired+' assignment on '+dk+' but no qualifying shift could be assigned.');
+        continue;
+      }
+      const actual=clean_(a.shiftType||(a.shift||{}).Type).toUpperCase();
+      const ok=desired==='DAY'
+        ? (actual==='DAY'||actual==='MORNING')
+        : actual==='EVENING';
+      if(!ok){
+        errors.push(clean_(u['Pharmacist Name'])+' must work a '+desired+' shift on '+dk+' under the manual assignment rule.');
+      }
+    }
+  });
+
   // Validate v15 OFF-day coverage relationships against the completed schedule.
   const completedState=createState_(model,[],start,end);
   assigned.forEach(a=>addAssignmentToState_(completedState,a,model));
@@ -5809,6 +6015,147 @@ function submitRequest(token,data) {
   return saveEmployeeRequest(token,data);
 }
 
+function saveManualCalendarRule(token,data) {
+  const ctx=requireAdmin_(token);
+  data=data||{};
+
+  const u=findUser_(data.Username||data['Employee ID'],data.Pharmacist||data['Pharmacist Name']);
+  if(!u)throw new Error('Select a pharmacist.');
+
+  const date=startOfDay_(asDate_(data.Date));
+  if(!date)throw new Error('Select a date.');
+
+  const dk=formatDateKey_(date);
+  const mode=clean_(data.Mode).toUpperCase();
+  const allowed=['DAY','EVENING','REGULAR_OFF','PRN_AVAILABILITY'];
+  if(!allowed.includes(mode))throw new Error('Choose Day shift, Evening shift, Regular Off, or PRN Availability.');
+
+  if((mode==='DAY'||mode==='EVENING')&&isPrnEmployee_(u)){
+    throw new Error('For a PRN pharmacist, choose PRN Availability. The algorithm will then use the PRN only on an available date.');
+  }
+
+  if(mode==='PRN_AVAILABILITY'&&!isPrnEmployee_(u)){
+    throw new Error('PRN Availability can only be added for a pharmacist whose Employment Type is PRN.');
+  }
+
+  const existing=readTable_(APP.SHEETS.REQUESTS);
+  const sameUser=r=>
+    clean_(r.Username)===clean_(u.Username) ||
+    clean_(r.Pharmacist).toLowerCase()===clean_(u['Pharmacist Name']).toLowerCase();
+  const covers=r=>requestCoversDate_(r,date);
+
+  if(mode==='DAY'||mode==='EVENING'){
+    const protectedTimeOff=existing.find(r=>
+      sameUser(r) &&
+      clean_(r.Status).toLowerCase()==='approved' &&
+      covers(r) &&
+      (clean_(r['Record Type']).toUpperCase()==='PTO'||isRegularOffRecordType_(r['Record Type']))
+    );
+    if(protectedTimeOff){
+      throw new Error('This pharmacist already has approved '+clean_(protectedTimeOff['Record Type'])+' on '+dk+'. Remove that time-off rule before assigning a Day or Evening shift.');
+    }
+
+    deleteRowsMatching_(APP.SHEETS.REQUESTS,r=>
+      sameUser(r) &&
+      covers(r) &&
+      !!manualShiftTypeRecord_(r['Record Type'])
+    );
+  }
+
+  if(mode==='REGULAR_OFF'){
+    const pto=existing.find(r=>
+      sameUser(r) &&
+      clean_(r.Status).toLowerCase()==='approved' &&
+      covers(r) &&
+      clean_(r['Record Type']).toUpperCase()==='PTO'
+    );
+    if(pto)throw new Error('This pharmacist already has approved PTO on '+dk+'.');
+
+    deleteRowsMatching_(APP.SHEETS.REQUESTS,r=>
+      sameUser(r) &&
+      covers(r) &&
+      !!manualShiftTypeRecord_(r['Record Type'])
+    );
+
+    const already=existing.find(r=>
+      sameUser(r) &&
+      clean_(r.Status).toLowerCase()==='approved' &&
+      covers(r) &&
+      isRegularOffRecordType_(r['Record Type'])
+    );
+    if(already)return serialize_({ok:true,mode:mode,date:dk,pharmacist:u['Pharmacist Name'],recordId:already['Record ID'],message:'Regular Off already exists for this date.'});
+  }
+
+  if(mode==='PRN_AVAILABILITY'){
+    deleteRowsMatching_(APP.SHEETS.REQUESTS,r=>
+      sameUser(r) &&
+      covers(r) &&
+      isManualPrnAvailabilityRecord_(r['Record Type'])
+    );
+  }
+
+  const recordType=
+    mode==='DAY'?'MANUAL DAY':
+    mode==='EVENING'?'MANUAL EVENING':
+    mode==='REGULAR_OFF'?'REGULAR OFF':
+    'PRN AVAILABILITY';
+
+  const id='REQ-MANUAL-'+Utilities.getUuid().slice(0,8).toUpperCase();
+  const row={
+    'Record Type':recordType,
+    'Record ID':id,
+    'Pharmacist':u['Pharmacist Name'],
+    'Username':u.Username,
+    'Date':date,
+    'Start Date':date,
+    'End Date':date,
+    'Weekend Saturday':'',
+    'Weekend Sunday':'',
+    'Available':mode==='PRN_AVAILABILITY'?'Yes':'',
+    'Status':'Approved',
+    'Comment':'[MANUAL ASSIGNMENT] '+(
+      mode==='DAY'?'Day shift; algorithm chooses exact shift':
+      mode==='EVENING'?'Evening shift; algorithm chooses exact shift':
+      mode==='REGULAR_OFF'?'Regular day off':
+      'PRN available; any qualified shift'
+    ),
+    'Submitted At':new Date(),
+    'Reviewed By':ctx.username,
+    'Reviewed At':new Date(),
+    'Updated At':new Date(),
+    'Updated By':ctx.username
+  };
+
+  appendObjectRow_(APP.SHEETS.REQUESTS,row);
+
+  audit_(
+    'MANUAL_CALENDAR_RULE_ADDED',
+    dk,
+    u['Pharmacist Name'],
+    '',
+    mode,
+    '',
+    recordType,
+    'Yes',
+    '',
+    row.Comment,
+    ctx.username
+  );
+
+  return serialize_({
+    ok:true,
+    mode:mode,
+    date:dk,
+    pharmacist:u['Pharmacist Name'],
+    recordId:id,
+    message:
+      mode==='DAY'?'Day assignment saved. The scheduling algorithm will choose the exact Day/Morning shift.':
+      mode==='EVENING'?'Evening assignment saved. The scheduling algorithm will choose the exact Evening shift.':
+      mode==='REGULAR_OFF'?'Regular Off saved and approved.':
+      'PRN availability saved for this date.'
+  });
+}
+
 function saveWeeklyAvailability(token,data) {
   const ctx=requireAdmin_(token); data=data||{};
   let targetUser=findUser_(data.Username||data['Employee ID'],data['Pharmacist Name']);
@@ -6360,7 +6707,7 @@ function employeeWeekendIsOn_(u,date,settings){
 function weekendSaturday_(date){const d=startOfDay_(date),day=dayIndex_(d);if(day===6)return d;if(day===0)return addDays_(d,-1);return addDays_(d,6-day);}
 function isWeekendDate_(date){const d=dayIndex_(date);return d===0||d===6;}
 
-function reasonToWarning_(r){const m={INACTIVE:'Employee is inactive.',MISSING_SKILL:'Employee does not possess the required skill.',PTO:'Employee is on approved PTO.',REGULAR_OFF:'Employee has an approved Regular Off request.',UNAVAILABLE:'Employee is unavailable on this date.',ALREADY_SCHEDULED:'Employee already has a shift on this date.',TIME_CONFLICT:'Assignment overlaps another scheduled shift.',WEEKLY_HOURS:'Assignment would exceed the employee weekly-hour maximum.',WEEKLY_DAYS:'Assignment would exceed the required five workdays in this Sunday-Saturday week.',CONSECUTIVE_DAYS:'Assignment would create more than five consecutive workdays.',EVENING_TO_MORNING:'Evening-to-morning transition is not allowed. If the pharmacist works an evening shift, the next calendar day must be OFF or another evening shift, not a Day/Morning shift.',TWO_MONTH_HOURS:'Assignment would push the pharmacist above the exact 320-hour target for the generated schedule period.',PRECEPTOR_WEEKDAY_EVENING:'Preceptor cannot work evening shifts Monday-Friday; evening shifts are allowed for preceptors only on Saturday/Sunday.',PRECEPTOR_EVENING:'Preceptor cannot normally work evening shifts.',EVENING_LIMIT:'Assignment would exceed the monthly evening-shift maximum.',WRONG_WEEKEND_GROUP:'Employee is not in the scheduled weekend group.',RESIDENT_WRONG_WEEKEND_GROUP:'Resident is not in the weekend group scheduled for this date.',WEEKEND_ANCHOR_OFF:'Employee is outside the assigned one-weekend-every-three-weeks rotation.',SEVEN_OFF:'7-on/7-off employee is in an OFF period.',SEVEN_WRONG_SHIFT:'7-on/7-off employee must remain on the dedicated N1, N2, or E shift during the ON block.',RESIDENT_E2_WEEKLY_LIMIT:'Resident already has the required E2 shift for this week.',CUSTOM_HOURS:'Shift is outside the employee hard custom work hours.',WEEKLY_AVAILABILITY_DAY:'Employee is not available on this weekday under recurring weekly availability.',WEEKLY_AVAILABILITY_TIME:'Shift is outside the employee recurring weekly available hours.',PRN_NOT_AVAILABLE:'PRN pharmacist is not available for this date/shift in My Availability.',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded, so PRN scheduling is blocked.',WEEKEND_NOT_ELIGIBLE:'Employee is not weekend eligible.',EVENING_NOT_ELIGIBLE:'Employee is not evening eligible.',NIGHT_NOT_ELIGIBLE:'Employee is not night eligible.',RESIDENT_RESTRICTION:'Resident settings do not allow this assignment.'};return m[r]||r;}
+function reasonToWarning_(r){const m={INACTIVE:'Employee is inactive.',MISSING_SKILL:'Employee does not possess the required skill.',PTO:'Employee is on approved PTO.',REGULAR_OFF:'Employee has an approved Regular Off request.',UNAVAILABLE:'Employee is unavailable on this date.',ALREADY_SCHEDULED:'Employee already has a shift on this date.',TIME_CONFLICT:'Assignment overlaps another scheduled shift.',WEEKLY_HOURS:'Assignment would exceed the employee weekly-hour maximum.',WEEKLY_DAYS:'Assignment would exceed the required five workdays in this Sunday-Saturday week.',CONSECUTIVE_DAYS:'Assignment would create more than five consecutive workdays.',EVENING_TO_MORNING:'Evening-to-morning transition is not allowed. If the pharmacist works an evening shift, the next calendar day must be OFF or another evening shift, not a Day/Morning shift.',TWO_MONTH_HOURS:'Assignment would push the pharmacist above the exact 320-hour target for the generated schedule period.',PRECEPTOR_WEEKDAY_EVENING:'Preceptor cannot work evening shifts Monday-Friday; evening shifts are allowed for preceptors only on Saturday/Sunday.',PRECEPTOR_EVENING:'Preceptor cannot normally work evening shifts.',EVENING_LIMIT:'Assignment would exceed the monthly evening-shift maximum.',WRONG_WEEKEND_GROUP:'Employee is not in the scheduled weekend group.',RESIDENT_WRONG_WEEKEND_GROUP:'Resident is not in the weekend group scheduled for this date.',WEEKEND_ANCHOR_OFF:'Employee is outside the assigned one-weekend-every-three-weeks rotation.',SEVEN_OFF:'7-on/7-off employee is in an OFF period.',SEVEN_WRONG_SHIFT:'7-on/7-off employee must remain on the dedicated N1, N2, or E shift during the ON block.',RESIDENT_E2_WEEKLY_LIMIT:'Resident already has the required E2 shift for this week.',CUSTOM_HOURS:'Shift is outside the employee hard custom work hours.',MANUAL_SHIFT_TYPE:'Assignment does not match the administrator-selected Day/Evening manual assignment type.',WEEKLY_AVAILABILITY_DAY:'Employee is not available on this weekday under recurring weekly availability.',WEEKLY_AVAILABILITY_TIME:'Shift is outside the employee recurring weekly available hours.',PRN_NOT_AVAILABLE:'PRN pharmacist is not available for this date/shift in My Availability.',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded, so PRN scheduling is blocked.',WEEKEND_NOT_ELIGIBLE:'Employee is not weekend eligible.',EVENING_NOT_ELIGIBLE:'Employee is not evening eligible.',NIGHT_NOT_ELIGIBLE:'Employee is not night eligible.',RESIDENT_RESTRICTION:'Resident settings do not allow this assignment.'};return m[r]||r;}
 
 /** ---------------------- DASHBOARD / REPORTING -------------------- */
 
