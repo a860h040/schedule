@@ -2925,13 +2925,24 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
       const wk=username+'|'+weekStartKey_(ws,model.settings.weekStart);
       const count=num_(days[wk],0);
       const requiredDays=regularRequiredWorkdaysForWeek_(u,ws,model);
+      const protectedDays=regularProtectedOffDaysForWeek_(u,ws,model);
       if(count!==requiredDays){
-        const protectedDays=regularProtectedOffDaysForWeek_(u,ws,model);
         errors.push(
           clean_(u['Pharmacist Name'])+' has '+count+
           ' workday(s) in week '+formatDateKey_(ws)+' through '+formatDateKey_(we)+
           '; exactly '+requiredDays+' workday(s) are required'+
           (protectedDays?' after '+protectedDays+' approved PTO/Regular Off day(s)':'')+'.'
+        );
+      }
+
+      const actualHours=Math.round(num_(hours[wk],0)*10)/10;
+      const expectedHours=Math.round(requiredDays*8*10)/10;
+      if(Math.abs(actualHours-expectedHours)>0.0001){
+        errors.push(
+          clean_(u['Pharmacist Name'])+' has '+actualHours+
+          ' scheduled hour(s) in week '+formatDateKey_(ws)+' through '+formatDateKey_(we)+
+          '; '+expectedHours+' scheduled hour(s) are required'+
+          (protectedDays?' after approved PTO/Regular Off':'')+'.'
         );
       }
     });
