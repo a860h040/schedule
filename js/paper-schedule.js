@@ -252,6 +252,58 @@
     });
   }
 
+  function paperPrnAvailabilityForDate_(user,dk){
+    if(paperPharmacistType_(user)!=='PRN')return null;
+
+    var sourceLoaded=!!(State.data&&State.data.prnAvailabilitySourceLoaded);
+    var all=State.data&&Array.isArray(State.data.prnAvailability)
+      ? State.data.prnAvailability
+      : [];
+
+    if(!sourceLoaded && !all.length)return null;
+
+    var wantedUser=String(user.Username==null?'':user.Username).trim().toLowerCase();
+    var wantedName=String(user['Pharmacist Name']||'').trim().toLowerCase();
+
+    var mine=all.filter(function(r){
+      var rowUser=String(r.Username==null?'':r.Username).trim().toLowerCase();
+      var rowName=String(r.Pharmacist||r['Pharmacist Name']||'').trim().toLowerCase();
+      return (!!wantedUser&&rowUser===wantedUser) || (!!wantedName&&rowName===wantedName);
+    });
+
+    var rows=mine.filter(function(r){
+      return String(r.Date||'').slice(0,10)===String(dk);
+    });
+
+    var available=rows.filter(function(r){
+      return yes(r.Available===undefined?'Yes':r.Available);
+    });
+
+    var shifts=[];
+    available.forEach(function(r){
+      String(r.Shift||'')
+        .split(/[,;|\/\s]+/)
+        .map(function(x){return x.trim().toUpperCase();})
+        .filter(Boolean)
+        .forEach(function(x){if(shifts.indexOf(x)<0)shifts.push(x);});
+    });
+
+    var times=available.map(function(r){
+      var s=String(r['Start Time']||'').trim();
+      var e=String(r['End Time']||'').trim();
+      return s&&e?s+'–'+e:'';
+    }).filter(Boolean);
+
+    return {
+      sourceLoaded:sourceLoaded,
+      totalAvailableDates:new Set(mine.filter(function(r){return yes(r.Available===undefined?'Yes':r.Available);}).map(function(r){return String(r.Date||'').slice(0,10);}).filter(Boolean)).size,
+      available:available.length>0,
+      rows:rows,
+      shifts:shifts,
+      times:times
+    };
+  }
+
   function paperCellData_(user,dk){
     var protectedDay=paperApprovedTimeOff_(user.Username,user['Pharmacist Name'],dk);
     var rows=calendarRowsForDate(dk).filter(function(r){
@@ -302,6 +354,34 @@
 
     if(protectedDay){
       return {text:protectedDay.code,cls:protectedDay.cls,title:protectedDay.title,id:'',protectedDay:protectedDay};
+    }
+
+    var prnAvailability=paperPrnAvailabilityForDate_(user,dk);
+    if(prnAvailability && !filtersActive){
+      if(prnAvailability.available){
+        var details=[];
+        if(prnAvailability.shifts.length)details.push('Shift(s): '+prnAvailability.shifts.join(', '));
+        if(prnAvailability.times.length)details.push('Time: '+prnAvailability.times.join(', '));
+        details.push('Available dates submitted: '+prnAvailability.totalAvailableDates);
+
+        return {
+          text:'A',
+          cls:'paper-prn-available paper-assignable',
+          title:'PRN available in My Availability. '+details.join(' | ')+' — click to pre-assign a shift',
+          id:'',
+          canAssign:true,
+          prnAvailable:true
+        };
+      }
+
+      return {
+        text:'—',
+        cls:'paper-prn-unavailable paper-assignable',
+        title:'PRN not listed as available in My Availability. The scheduling algorithm will not assign this date. Admin can still click to manually override.',
+        id:'',
+        canAssign:true,
+        prnAvailable:false
+      };
     }
 
     return {
@@ -424,7 +504,7 @@
       '<div class="calendar-head paper-page-head">'+
         '<div>'+
           '<div class="calendar-title">'+esc(monthTitle(m))+' — Paper Schedule</div>'+
-          '<div class="muted small">Excel-style view: pharmacists down the left, dates across the top. X = unassigned/available, P = approved PTO, R = approved Regular Off.</div>'+
+          '<div class="muted small">Excel-style view: pharmacists down the left, dates across the top. X = unassigned, A = PRN available from My Availability, P = approved PTO, R = approved Regular Off.</div>'+
         '</div>'+
       '</div>';
 
@@ -451,7 +531,8 @@
 
     html+=
       '<div class="paper-legend">'+
-        '<span class="key"><span class="swatch" style="background:#fff"></span>X = available</span>'+
+        '<span class="key"><span class="swatch" style="background:#fff"></span>X = unassigned</span>'+
+        '<span class="key"><span class="swatch" style="background:var(--paper-prn-available)"></span>A = PRN available</span>'+
         '<span class="key"><span class="swatch" style="background:var(--paper-pto)"></span>P = PTO</span>'+
         '<span class="key"><span class="swatch" style="background:var(--paper-regular-off)"></span>R = Regular Off</span>'+
         '<span class="key"><span class="swatch paper-locked-swatch"></span>Locked manual</span>'+
