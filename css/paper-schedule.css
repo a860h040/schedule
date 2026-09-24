@@ -259,6 +259,9 @@ body:has(.paper-page-shell) .content{
 .paper-table col.paper-group-column{
   width:34px;
 }
+.paper-table col.paper-rule-column{
+  width:40px;
+}
 .paper-table col.paper-date-column{
   width:auto;
 }
@@ -365,6 +368,15 @@ body:has(.paper-page-shell) .content{
   position:sticky;
   left:201px;
   z-index:7;
+}
+.paper-table .paper-summary-col:nth-child(5),
+.paper-table .paper-summary-cell:nth-child(5){
+  position:sticky;
+  left:235px;
+  z-index:7;
+  width:40px;
+  min-width:40px;
+  max-width:40px;
   border-right:2px solid #000!important;
 }
 .paper-table thead .paper-summary-col{
@@ -378,6 +390,13 @@ body:has(.paper-page-shell) .content{
 }
 .paper-table .paper-weekend-group{
   background:#fff7ef;
+}
+.paper-table .paper-forty-rule{
+  background:#eef3f7;
+  font-size:7px;
+}
+.paper-table .paper-rule-head{
+  font-size:7px;
 }
 .paper-table .date-col{
   width:auto;
@@ -411,7 +430,22 @@ body:has(.paper-page-shell) .content{
   background:#eef6ff;
 }
 .paper-table td.weekend{
-  background:#fff7ef;
+  background-color:#fff7ef;
+}
+.paper-table td.paper-cell.weekend::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  background:rgba(236,165,77,.18);
+  pointer-events:none;
+  z-index:0;
+}
+.paper-table th.weekend-head{
+  background:#f5d9b7!important;
+}
+.paper-table td.paper-cell.weekend{
+  border-left-color:#d5a25f;
+  border-right-color:#d5a25f;
 }
 .paper-table td.paper-off{
   background:var(--paper-off);
@@ -583,6 +617,8 @@ body:has(.paper-page-shell) .content{
   .paper-table .paper-summary-cell:nth-child(3){left:153px}
   .paper-table .paper-summary-col:nth-child(4),
   .paper-table .paper-summary-cell:nth-child(4){left:181px}
+  .paper-table .paper-summary-col:nth-child(5),
+  .paper-table .paper-summary-cell:nth-child(5){left:215px}
 }
 @media(max-width:950px){
   .paper-table .paper-summary-col:nth-child(2),
@@ -591,10 +627,13 @@ body:has(.paper-page-shell) .content{
   .paper-table .paper-summary-cell:nth-child(3){left:133px}
   .paper-table .paper-summary-col:nth-child(4),
   .paper-table .paper-summary-cell:nth-child(4){left:161px}
+  .paper-table .paper-summary-col:nth-child(5),
+  .paper-table .paper-summary-cell:nth-child(5){left:195px}
 }
 @media print{
   body.printing-paper-schedule .paper-table col.paper-stat-column{width:.25in!important}
   body.printing-paper-schedule .paper-table col.paper-group-column{width:.28in!important}
+  body.printing-paper-schedule .paper-table col.paper-rule-column{width:.34in!important}
   body.printing-paper-schedule .paper-table .paper-summary-col,
   body.printing-paper-schedule .paper-table .paper-summary-cell{
     position:static!important;
