@@ -525,10 +525,29 @@ export function employeeStats(db){
 export function fairnessReport(db){const stats=employeeStats(db),avg=stats.length?stats.reduce((s,x)=>s+x.totalHours,0)/stats.length:0;return{averageHours:Math.round(avg*10)/10,employees:stats.map(x=>({...x,hoursVsAverage:Math.round((x.totalHours-avg)*10)/10,workloadFlag:x.totalHours>avg*1.25?'HIGH':x.totalHours<avg*0.75?'LOW':'NORMAL'}))};}
 
 export function reconcilePto(db){
-  const limit=Math.max(1,num(db.settings?.ptoAutoApprovalLimitPerDate,2));const pto=(db.requests||[]).filter(r=>norm(r.recordType)==='PTO'&&norm(r.status)!=='REJECTED');const byDate={};
-  for(const r of pto){const start=dateKey(r.startDate||r.date),end=dateKey(r.endDate||r.startDate||r.date);for(const dk of datesBetween(start,end)){if(!byDate[dk])byDate[dk]=[];byDate[dk].push(r);}}
+  const limit=Math.max(1,num(db.settings?.ptoAutoApprovalLimitPerDate,2));
+  const queued=(db.requests||[]).filter(r=>{
+    const type=norm(r.recordType).replace(/[\-_]+/g,' ').replace(/\s+/g,' ').trim();
+    return (type==='PTO'||type==='REGULAR OFF'||type==='REGULAR OFF REQUEST')&&norm(r.status)!=='REJECTED';
+  });
+  const byDate={};
+  for(const r of queued){
+    const start=dateKey(r.startDate||r.date),end=dateKey(r.endDate||r.startDate||r.date);
+    for(const dk of datesBetween(start,end)){if(!byDate[dk])byDate[dk]=[];byDate[dk].push(r);}
+  }
   Object.values(byDate).forEach(list=>list.sort((a,b)=>String(a.submittedAt||'').localeCompare(String(b.submittedAt||''))||String(a.recordId).localeCompare(String(b.recordId))));
-  for(const r of pto){const ds=datesBetween(r.startDate||r.date,r.endDate||r.startDate||r.date);const auto=ds.length&&ds.every(d=>byDate[d].indexOf(r)<limit);const manuallyReviewed=clean(r.reviewedBy)&&norm(r.reviewedBy)!=='SYSTEM AUTO-APPROVAL';if(auto&&!manuallyReviewed&&norm(r.status)!=='APPROVED'){r.status='Approved';r.reviewedBy='SYSTEM AUTO-APPROVAL';r.reviewedAt=new Date().toISOString();}/* Approved is sticky: reconciliation promotes only; it never demotes. */}
+  for(const r of queued){
+    const ds=datesBetween(r.startDate||r.date,r.endDate||r.startDate||r.date);
+    const auto=ds.length&&ds.every(d=>byDate[d].indexOf(r)<limit);
+    const status=norm(r.status);
+    const manuallyReviewed=clean(r.reviewedBy)&&norm(r.reviewedBy)!=='SYSTEM AUTO-APPROVAL';
+    if(auto&&!manuallyReviewed&&status!=='APPROVED'){
+      r.status='Approved';r.reviewedBy='SYSTEM AUTO-APPROVAL';r.reviewedAt=new Date().toISOString();
+    }else if(!auto&&status!=='APPROVED'&&status!=='PENDING'){
+      r.status='Pending';r.reviewedBy='';r.reviewedAt='';
+    }
+    /* Approved is sticky: reconciliation promotes only; it never demotes. */
+  }
   return db;
 }
 
