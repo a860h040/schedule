@@ -1111,11 +1111,13 @@ function loadSchedulingModel_() {
   const rawSettings = getSettingsMap_();
   const shiftMap = {};
   shifts.forEach(sh => shiftMap[clean_(sh.Shift)] = sh);
-  const usersByUsername = {}, usersByName = {};
+  const usersByUsername = {}, usersByName = {}, usersByNameLower = {};
   users.forEach(u => {
     const username=clean_(u.Username);
+    const pharmacistName=clean_(u['Pharmacist Name']);
     usersByUsername[username] = u;
-    usersByName[clean_(u['Pharmacist Name'])] = u;
+    usersByName[pharmacistName] = u;
+    usersByNameLower[pharmacistName.toLowerCase()] = u;
     const prefRaw=clean_(u['Preferred Shift Type']);
     u._preferredShiftTokens = new Set(prefRaw.toLowerCase().split(/[\\/,;|]+/).map(x=>x.trim()).filter(Boolean));
     u._preferredShiftCodeTokens = new Set(prefRaw.toUpperCase().split(/[\\/,;|]+/).map(x=>x.trim()).filter(Boolean));
@@ -1170,7 +1172,11 @@ function loadSchedulingModel_() {
   users.forEach(u=>requestsByUser[clean_(u.Username)]=[]);
   requests.forEach(r=>{
     let username=clean_(r.Username);
-    if(!username || !usersByUsername[username]) username=clean_((usersByName[clean_(r.Pharmacist)]||{}).Username);
+    if(!username || !usersByUsername[username]){
+      const requestName=clean_(r.Pharmacist);
+      const matchedUser=usersByName[requestName]||usersByNameLower[requestName.toLowerCase()];
+      username=clean_((matchedUser||{}).Username);
+    }
     if(username && requestsByUser[username]) requestsByUser[username].push(r);
   });
 
@@ -5193,7 +5199,7 @@ function isBlockedByPto_(u,date,model) {
 
 function isRegularOffRecordType_(value) {
   const type=clean_(value).toUpperCase().replace(/[\-_]+/g,' ').replace(/\s+/g,' ').trim();
-  return type==='REGULAR OFF' || type==='REGULAR OFF REQUEST';
+  return type==='REGULAR OFF' || type==='REGULAR OFF REQUEST' || type==='REGULAROFF';
 }
 
 function isBlockedByRegularOff_(u,date,model) {
@@ -5275,13 +5281,26 @@ function weeklyRuleFitsShift_(rule,shift) {
   return intervalContains_(rs,re,ss,se);
 }
 
-function requestMatchesUser_(r,u){return clean_(r.Username)===clean_(u.Username)||clean_(r.Pharmacist)===clean_(u['Pharmacist Name']);}
+function requestMatchesUser_(r,u){
+  return clean_(r.Username).toLowerCase()===clean_(u.Username).toLowerCase() ||
+    clean_(r.Pharmacist).toLowerCase()===clean_(u['Pharmacist Name']).toLowerCase();
+}
 function requestCoversDate_(r,date){
-  const d=startOfDay_(date),single=startOfDay_(asDate_(r.Date)),s=startOfDay_(asDate_(r['Start Date'])),e=startOfDay_(asDate_(r['End Date']));
-  if(single&&sameDate_(single,d))return true;
-  if(s&&e&&d>=s&&d<=e)return true;
-  if(s&&!e&&sameDate_(s,d))return true;
-  return false;
+  const d=startOfDay_(date);
+  const s=startOfDay_(asDate_(r['Start Date']));
+  const e=startOfDay_(asDate_(r['End Date']));
+
+  // IMPORTANT: when Start/End exist, they are the requested OFF dates.
+  // Some legacy Google rows use Date as the date the request was entered.
+  // Do not accidentally block both the submission date and the actual request.
+  if(s||e){
+    const start=s||e;
+    const end=e||s;
+    return !!start&&!!end&&d>=start&&d<=end;
+  }
+
+  const single=startOfDay_(asDate_(r.Date));
+  return !!single&&sameDate_(single,d);
 }
 
 function residentEligibilityReason_(u,shift,date,model) {
