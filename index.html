@@ -1515,8 +1515,8 @@ function renderBulkOpenShiftCandidatePicker_(){
       '</table>'+
     '</div>'+
     '<div class="field mt12">'+
-      '<label>Administrator override reason <span style="color:var(--danger)">*</span></label>'+
-      '<textarea id="bulkForceOverrideReason" class="control" rows="3" placeholder="One reason will be saved with every selected override.">'+esc(savedReason)+'</textarea>'+
+      '<label>Administrator override reason <span class="small muted">(optional)</span></label>'+
+      '<textarea id="bulkForceOverrideReason" class="control" rows="3" placeholder="Optional — add a note if you want it saved with these overrides.">'+esc(savedReason)+'</textarea>'+
     '</div>';
 
   openModal(
@@ -1541,12 +1541,6 @@ async function previewBulkOpenShiftOverrides_(){
 
   if(!indexes.length){
     toast('No shifts are selected.','error');
-    return;
-  }
-
-  if(!reason){
-    toast('Enter an administrator override reason before continuing.','error');
-    $('bulkForceOverrideReason')?.focus();
     return;
   }
 
@@ -1629,7 +1623,9 @@ async function previewBulkOpenShiftOverrides_(){
           '</tbody>'+
         '</table>'+
       '</div>'+
-      '<div class="alert alert-warn mt12"><b>Override reason:</b> '+esc(reason)+'</div>';
+      (reason
+        ? '<div class="alert alert-warn mt12"><b>Override reason:</b> '+esc(reason)+'</div>'
+        : '<div class="small muted mt12">Override reason: not provided (optional).</div>');
 
     openModal(
       'Confirm '+items.length+' Bulk Override'+(items.length===1?'':'s'),
@@ -1744,8 +1740,8 @@ function reviewOpenShiftOverride_(shiftIndex){
     '</div>'+
     '<div id="forceCandidateDetails" class="mt12"></div>'+
     '<div class="field mt12">'+
-      '<label>Administrator override reason <span style="color:var(--danger)">*</span></label>'+
-      '<textarea id="forceOverrideReason" class="control" rows="3" placeholder="Explain why coverage is necessary and why you are accepting these rule violations."></textarea>'+
+      '<label>Administrator override reason <span class="small muted">(optional)</span></label>'+
+      '<textarea id="forceOverrideReason" class="control" rows="3" placeholder="Optional — add a note if you want it recorded in the audit trail."></textarea>'+
     '</div>';
 
   openModal(
@@ -1837,12 +1833,6 @@ async function forceOpenShiftAssignment_(shiftIndex){
 
   if(!candidate){
     toast('Select a pharmacist first.','error');
-    return;
-  }
-
-  if(!reason){
-    toast('Enter an administrator override reason before assigning this shift.','error');
-    $('forceOverrideReason')?.focus();
     return;
   }
 
@@ -3597,7 +3587,7 @@ function scheduleTable(rows){return `<div class="table-wrap"><table class="table
 function statusBadge2(s){const x=String(s||'').toUpperCase();return `<span class="badge ${x==='UNFILLED'?'badge-danger':x==='LOCKED'?'badge-lock':x==='MANUAL'?'badge-manual':'badge-ok'}">${esc(s)}</span>`}
 
 function openAssignmentModal(id,locatorDate='',locatorShift='',locatorSlot=1,prefillUsername=''){const admin=State.data.isAdmin;const schedule=State.data.schedule||[];let r=null;if(id){const idMatches=schedule.filter(x=>String(x['Assignment ID']||'')===String(id));if(locatorDate&&locatorShift){r=idMatches.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||schedule.find(x=>String(x.Date||'')===String(locatorDate)&&String(x.Shift||'')===String(locatorShift)&&num(x.Slot,1)===num(locatorSlot,1))||idMatches[0]||null}else r=idMatches[0]||null}if(!admin){if(!r)return;const sh=(State.data.shifts||[]).find(s=>s.Shift===r.Shift)||{};openModal('Assignment Details',`<div class="grid grid-2"><div><label>Date</label><b>${fmtDate(r.Date)}</b></div><div><label>Shift</label><b>${esc(r.Shift)}</b></div><div><label>Pharmacist</label><b>${esc(r['Assigned Pharmacist'])}</b></div><div><label>Type</label>${typeBadge(r['Shift Type'])}</div><div><label>Shift Time</label><b>${esc([sh.Start,sh.End].filter(Boolean).join(' – '))}</b></div><div><label>Credited Hours</label><b>${esc(r['Credited Hours'])}</b></div>${r['Coverage For Pharmacist']?`<div><label>Coverage for</label><b>${esc(r['Coverage For Pharmacist'])}</b></div><div><label>Coverage reason</label><b>${esc(r['Coverage Reason']||'')}</b></div>`:''}</div>${r.Warning?`<div class="alert alert-warn mt12">${esc(r.Warning)}</div>`:''}`,[{label:'Close',cls:'btn-secondary',action:'closeModal()'}]);return}
-const users=State.data.users.filter(u=>yes(u.Active));const shifts=State.data.shifts.filter(s=>yes(s.Active));const initialDate=r?r.Date:(locatorDate||dateKey(new Date()));const initialSlot=r?r.Slot:(locatorSlot||1);const initialShift=r?r.Shift:(locatorShift||'');const initialUsername=r?r.Username:(prefillUsername||'');const body=`<input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}"><input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}"><div class="form-grid"><div class="field"><label>Date</label><input id="asDate" type="date" class="control" value="${attr(initialDate)}"></div><div class="field"><label>Slot</label><input id="asSlot" type="number" min="1" class="control" value="${attr(initialSlot)}"></div><div class="field"><label>Shift</label><select id="asShift" class="control">${shifts.map(s=>`<option value="${attr(s.Shift)}" ${initialShift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}</select></div><div class="field"><label>Pharmacist</label><select id="asUser" class="control">${users.map(u=>`<option value="${attr(u.Username)}" ${String(initialUsername)===String(u.Username)?'selected':''}>${esc(u['Pharmacist Name'])}</option>`).join('')}</select></div><div class="field"><label>Lock after save</label><select id="asLocked" class="control"><option ${r&&yes(r.Locked)?'selected':''}>Yes</option><option ${!r||!yes(r.Locked)?'selected':''}>No</option></select></div>${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}<div class="field span-2 hidden" id="overrideBox"><div class="alert alert-warn" id="overrideWarnings"></div><label class="mt12">Override reason</label><textarea id="overrideReason" class="control" placeholder="Explain why this rule violation is acceptable."></textarea></div></div>`;
+const users=State.data.users.filter(u=>yes(u.Active));const shifts=State.data.shifts.filter(s=>yes(s.Active));const initialDate=r?r.Date:(locatorDate||dateKey(new Date()));const initialSlot=r?r.Slot:(locatorSlot||1);const initialShift=r?r.Shift:(locatorShift||'');const initialUsername=r?r.Username:(prefillUsername||'');const body=`<input type="hidden" id="asId" value="${attr(r?r['Assignment ID']:'')}"><input type="hidden" id="asGen" value="${attr(r?r['Generation ID']:'')}"><div class="form-grid"><div class="field"><label>Date</label><input id="asDate" type="date" class="control" value="${attr(initialDate)}"></div><div class="field"><label>Slot</label><input id="asSlot" type="number" min="1" class="control" value="${attr(initialSlot)}"></div><div class="field"><label>Shift</label><select id="asShift" class="control">${shifts.map(s=>`<option value="${attr(s.Shift)}" ${initialShift===s.Shift?'selected':''}>${esc(s.Shift)} — ${esc(s.Meaning)}</option>`).join('')}</select></div><div class="field"><label>Pharmacist</label><select id="asUser" class="control">${users.map(u=>`<option value="${attr(u.Username)}" ${String(initialUsername)===String(u.Username)?'selected':''}>${esc(u['Pharmacist Name'])}</option>`).join('')}</select></div><div class="field"><label>Lock after save</label><select id="asLocked" class="control"><option ${r&&yes(r.Locked)?'selected':''}>Yes</option><option ${!r||!yes(r.Locked)?'selected':''}>No</option></select></div>${r&&r['Coverage For Pharmacist']?`<div class="field span-2"><div class="alert alert-ok"><b>Off-day coverage:</b> ${esc(r['Assigned Pharmacist'])} is covering <b>${esc(r['Coverage For Pharmacist'])}</b> for ${esc(r['Coverage Reason']||'coverage')}.</div></div>`:''}<div class="field span-2 hidden" id="overrideBox"><div class="alert alert-warn" id="overrideWarnings"></div><label class="mt12">Override reason <span class="small muted">(optional)</span></label><textarea id="overrideReason" class="control" placeholder="Optional — add a note if you want it recorded."></textarea></div></div>`;
 const buttons=[{label:'Cancel',cls:'btn-secondary',action:'closeModal()'}];if(r){buttons.push({label:yes(r.Locked)?'Unlock':'Lock',cls:'btn-ghost',action:`toggleLockUI('${attr(r['Assignment ID'])}',${!yes(r.Locked)})`});buttons.push({label:'Remove',cls:'btn-danger',action:`removeAssignmentUI('${attr(r['Assignment ID'])}')`})}buttons.push({label:'Save',cls:'btn-primary',action:'saveAssignmentUI(false)',id:'normalSave'});openModal(r?'Edit Assignment':'Manual Assignment',body,buttons)}
 
 function manualHoursWarningHtml(h){
@@ -3647,13 +3637,6 @@ async function saveAssignmentUI(override){
         b.className='btn btn-warning';
         b.textContent='Override & Save';
         b.onclick=()=>{
-          const reason=String($('overrideReason')?.value||'').trim();
-          if(!reason){
-            toast('Enter an override reason before saving.','error');
-            $('overrideReason')?.focus();
-            return;
-          }
-
           if(!confirm(
             'This assignment violates one or more scheduling rules.\n\n'+
             'The automatic scheduler will still follow the normal rules.\n'+
