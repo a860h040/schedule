@@ -931,139 +931,127 @@
     if(!State.data||!State.data.isAdmin)return;
 
     var month=State.month;
-    var monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
-    var monthEnd=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
-    var midDay=Math.floor((new Date(month.getFullYear(),month.getMonth()+1,0).getDate())/2);
-    var firstHalfEnd=dateKey(new Date(month.getFullYear(),month.getMonth(),midDay));
-    var secondHalfStart=dateKey(new Date(month.getFullYear(),month.getMonth(),midDay+1));
+    var first=new Date(month.getFullYear(),month.getMonth(),1,12,0,0,0);
+    var defaultStart=new Date(first);
+    defaultStart.setDate(defaultStart.getDate()-defaultStart.getDay());
 
     var body=
       '<div class="alert alert-info">'+
-        '<b>Run the scheduling algorithm for only part of '+esc(monthTitle(month))+'.</b><br>'+
-        'Only dates inside the selected range will be regenerated. Dates before and after the range stay unchanged. '+
-        'Manual/locked assignments, approved PTO, and approved Regular Off remain protected.'+
+        '<b>Schedule generation now starts and stops on complete pay periods.</b><br>'+
+        'Choose the Sunday that begins the first 14-day pay period, then choose how many pay periods to generate. '+
+        'NeoChrono calculates the ending Saturday automatically.'+
       '</div>'+
       '<div class="form-grid two mt12">'+
         '<div class="field">'+
-          '<label>Start date</label>'+
-          '<input id="paperGenerateStart" class="control" type="date" min="'+attr(monthStart)+'" max="'+attr(monthEnd)+'" value="'+attr(monthStart)+'">'+
+          '<label>Pay period start (Sunday)</label>'+
+          '<input id="paperPayPeriodStart" class="control" type="date" value="'+attr(dateKey(defaultStart))+'" onchange="paperUpdatePayPeriodEnd_()">'+
         '</div>'+
         '<div class="field">'+
-          '<label>End date</label>'+
-          '<input id="paperGenerateEnd" class="control" type="date" min="'+attr(monthStart)+'" max="'+attr(monthEnd)+'" value="'+attr(monthEnd)+'">'+
+          '<label>Number of pay periods</label>'+
+          '<select id="paperPayPeriodCount" class="control" onchange="paperUpdatePayPeriodEnd_()">'+
+            '<option value="1">1 pay period (14 days)</option>'+
+            '<option value="2">2 pay periods (28 days)</option>'+
+            '<option value="3">3 pay periods (42 days)</option>'+
+            '<option value="4" selected>4 pay periods (56 days)</option>'+
+          '</select>'+
+        '</div>'+
+        '<div class="field span-2">'+
+          '<label>Schedule end</label>'+
+          '<div id="paperPayPeriodEndPreview" class="alert alert-ok" style="margin:0"></div>'+
         '</div>'+
       '</div>'+
-      '<div class="mt12" style="display:flex;gap:8px;flex-wrap:wrap">'+
-        '<button class="btn btn-secondary btn-sm" type="button" onclick="paperSetGenerateRangePreset_(\'FULL\')">Full month</button>'+
-        '<button class="btn btn-secondary btn-sm" type="button" onclick="paperSetGenerateRangePreset_(\'FIRST\')">First half</button>'+
-        '<button class="btn btn-secondary btn-sm" type="button" onclick="paperSetGenerateRangePreset_(\'SECOND\')">Second half</button>'+
-      '</div>'+
       '<div class="muted small mt12">'+
-        'For a partial Sunday-Saturday week, NeoChrono still counts neighboring existing assignments for weekly hours, rest rules, and one-shift-per-day checks. '+
-        'The algorithm will not change those neighboring dates unless they are inside the selected range.'+
+        'The 40-hour work week is still Sunday-Saturday. Manual/locked assignments, approved PTO, and approved Regular Off remain protected.'+
       '</div>';
 
-    window.__paperGenerateRange={
-      monthStart:monthStart,
-      monthEnd:monthEnd,
-      firstHalfEnd:firstHalfEnd,
-      secondHalfStart:secondHalfStart
-    };
-
     openModal(
-      'Generate Schedule — Select Date Range',
+      'Generate Schedule — Pay Periods',
       body,
       [
         {label:'Cancel',cls:'btn-secondary',action:'closeModal()'},
-        {
-          label:'Run Algorithm',
-          cls:'btn-primary',
-          action:'paperSubmitGenerateRange_()'
-        }
+        {label:'Run Algorithm',cls:'btn-primary',action:'paperSubmitPayPeriodRange_()'}
       ]
     );
+
+    setTimeout(paperUpdatePayPeriodEnd_,0);
   };
 
-  window.paperSubmitGenerateRange_=function(){
-    var cfg=window.__paperGenerateRange||{};
-    var startInput=$('paperGenerateStart');
-    var endInput=$('paperGenerateEnd');
-    var selectedStart=startInput?String(startInput.value||''):'';
-    var selectedEnd=endInput?String(endInput.value||''):'';
+  window.paperPayPeriodRange_=function(){
+    var input=$('paperPayPeriodStart');
+    var countInput=$('paperPayPeriodCount');
+    var start=input?String(input.value||''):'';
+    var count=Math.max(1,Math.min(4,Number(countInput&&countInput.value||4)));
 
-    if(!selectedStart||!selectedEnd){
-      toast('Select both a start date and an end date.','error');
+    if(!start)return null;
+
+    var d=new Date(start+'T12:00:00');
+    if(Number.isNaN(d.getTime()))return null;
+
+    var end=new Date(d);
+    end.setDate(end.getDate()+(count*14)-1);
+
+    return {
+      start:start,
+      end:dateKey(end),
+      count:count,
+      startDay:d.getDay()
+    };
+  };
+
+  window.paperUpdatePayPeriodEnd_=function(){
+    var preview=$('paperPayPeriodEndPreview');
+    if(!preview)return;
+
+    var range=paperPayPeriodRange_();
+    if(!range){
+      preview.innerHTML='Select a pay period start date.';
       return;
     }
 
-    if(selectedStart<(cfg.monthStart||'')||selectedStart>(cfg.monthEnd||'')||
-       selectedEnd<(cfg.monthStart||'')||selectedEnd>(cfg.monthEnd||'')){
-      toast('The selected dates must stay inside the displayed month.','error');
+    preview.innerHTML=
+      '<b>'+esc(range.start)+' through '+esc(range.end)+'</b> · '+
+      range.count+' pay period'+(range.count===1?'':'s')+
+      (range.startDay===0
+        ?' · Sunday → Saturday'
+        :' · <span style="color:#b42318">Start date must be a Sunday</span>');
+  };
+
+  window.paperSubmitPayPeriodRange_=function(){
+    var range=paperPayPeriodRange_();
+
+    if(!range){
+      toast('Select the start of the pay period.','error');
       return;
     }
 
-    if(selectedEnd<selectedStart){
-      toast('End date must be on or after the start date.','error');
+    if(range.startDay!==0){
+      toast('Pay periods must start on Sunday. Choose the Sunday that begins the pay period.','error');
       return;
     }
 
     closeModal();
-    paperRunScheduleRange_(selectedStart,selectedEnd);
+    paperRunScheduleRange_(range.start,range.end,range.count);
   };
 
-  window.paperSetGenerateRangePreset_=function(which){
-    var cfg=window.__paperGenerateRange||{};
-    var startInput=$('paperGenerateStart');
-    var endInput=$('paperGenerateEnd');
-    if(!startInput||!endInput)return;
-
-    which=String(which||'').toUpperCase();
-    if(which==='FIRST'){
-      startInput.value=cfg.monthStart||startInput.min;
-      endInput.value=cfg.firstHalfEnd||endInput.max;
-      return;
-    }
-    if(which==='SECOND'){
-      startInput.value=cfg.secondHalfStart||startInput.min;
-      endInput.value=cfg.monthEnd||endInput.max;
-      return;
-    }
-
-    startInput.value=cfg.monthStart||startInput.min;
-    endInput.value=cfg.monthEnd||endInput.max;
-  };
-
-  window.paperRunScheduleRange_=async function(start,end){
+  window.paperRunScheduleRange_=async function(start,end,payPeriodCount){
     if(!State.data||!State.data.isAdmin)return;
 
     var btn=$('paperGenerateScheduleBtn');
-    var month=State.month;
-    var monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
-    var monthEnd=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
-
     start=String(start||'');
     end=String(end||'');
+    payPeriodCount=Math.max(1,Number(payPeriodCount||1));
 
     if(!start||!end||end<start){
-      toast('Choose a valid schedule date range.','error');
+      toast('Choose a valid pay-period range.','error');
       return;
     }
-    if(start<monthStart||end>monthEnd){
-      toast('The selected range must stay inside '+monthTitle(month)+'.','error');
-      return;
-    }
-
-    var isFullMonth=start===monthStart&&end===monthEnd;
-    var rangeLabel=isFullMonth
-      ? monthTitle(month)
-      : start+' through '+end;
 
     if(!confirm(
-      'Run the scheduling algorithm for '+rangeLabel+'?\n\n'+
-      (isFullMonth
-        ? 'The displayed month will be regenerated.'
-        : 'ONLY '+start+' through '+end+' will be regenerated. Dates outside this range will stay unchanged.')+
-      '\n\nManual/locked assignments, approved PTO, and approved Regular Off will remain protected.'
+      'Run the scheduling algorithm for '+payPeriodCount+
+      ' pay period'+(payPeriodCount===1?'':'s')+'?\n\n'+
+      start+' through '+end+'\n\n'+
+      'Only dates inside these complete pay periods will be regenerated. '+
+      'Manual/locked assignments, approved PTO, and approved Regular Off remain protected.'
     ))return;
 
     try{
@@ -1084,10 +1072,9 @@
         var protectedCount=Number(pre.protectedCount||0);
 
         if(!confirm(
-          'The selected range contains '+replaceable+
+          'These pay periods contain '+replaceable+
           ' generated/unprotected schedule row(s) that will be regenerated.\n'+
-          protectedCount+' manual/locked row(s) will remain protected.\n\n'+
-          'Dates outside '+start+' through '+end+' will not be regenerated.\n\nContinue?'
+          protectedCount+' manual/locked row(s) will remain protected.\n\nContinue?'
         ))return;
 
         overwriteConfirmed=true;
@@ -1116,20 +1103,13 @@
       var body=
         '<div class="alert '+(errors.length?'alert-warn':'alert-ok')+'"><b>'+
           (errors.length
-            ? 'Selected date range generated with conflicts to review.'
-            : 'Selected date range generated successfully.')+
+            ?'Pay-period schedule generated with conflicts to review.'
+            :'Pay-period schedule generated successfully.')+
         '</b><br>'+
         'Range: '+esc(start)+' through '+esc(end)+'<br>'+
+        'Pay periods: '+esc(String(payPeriodCount))+'<br>'+
         esc(String(result.filled||0))+' of '+esc(String(result.required||0))+
         ' required shift positions filled.</div>';
-
-      if(!isFullMonth){
-        body+=
-          '<div class="alert alert-info">'+
-            'Only the selected dates were regenerated. The rest of '+esc(monthTitle(month))+
-            ' was left unchanged.'+
-          '</div>';
-      }
 
       if(errors.length){
         body+='<div class="alert alert-danger"><b>Conflicts</b><br>'+
