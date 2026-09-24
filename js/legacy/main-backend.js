@@ -4736,6 +4736,9 @@ function reviewRequest(token,recordId,status,comment) {
   const ctx=requireAdmin_(token);
   const row=findRowByKey_(APP.SHEETS.REQUESTS,'Record ID',recordId);
   if(!row)throw new Error('Request not found.');
+  if(clean_(row.Status).toLowerCase()==='approved' && clean_(status).toLowerCase()==='pending'){
+    throw new Error('An approved PTO / Regular Off request cannot be returned to Pending. Use Reject if the approval must be removed.');
+  }
   updateRowByKey_(APP.SHEETS.REQUESTS,'Record ID',recordId,{
     'Status':status,
     'Comment':comment!==undefined?comment:row.Comment,
