@@ -698,6 +698,11 @@ function getAppData(token) {
   // This also upgrades legacy Pending rows created before v27.
   reconcilePtoAutoApprovals_('SYSTEM');
   const users = readTable_(APP.SHEETS.USERS).filter(r => clean_(r.Role).toLowerCase() !== 'administrator');
+  const prnAvailabilitySourceLoaded = !!getDb_().getSheetByName('My Availability');
+  const prnAvailability = normalizePrnAvailabilityRows_(
+    readTable_('My Availability'),
+    users
+  );
   const admins = readTable_(APP.SHEETS.ADMINS).map(publicAdmin_);
   const skills = readTable_(APP.SHEETS.SKILLS);
   const shifts = readTable_(APP.SHEETS.SHIFTS);
@@ -726,6 +731,8 @@ function getAppData(token) {
     requirements:requirements,
     requests:requests,
     weeklyAvailability:weeklyAvailability,
+    prnAvailability:prnAvailability,
+    prnAvailabilitySourceLoaded:prnAvailabilitySourceLoaded,
     schedule:schedule,
     settings:settings,
     health:health,
@@ -740,6 +747,205 @@ function publicUser_(u) {
   delete x['Password Hash'];
   delete x['Password Salt'];
   return x;
+}
+
+/** ----------------------- PRN MY AVAILABILITY --------------------- */
+
+function isPrnEmployee_(u) {
+  return clean_(u && u['Employment Type']).toUpperCase()==='PRN' ||
+    clean_(u && u['Schedule Type']).toUpperCase()==='PRN';
+}
+
+function prnRowValue_(row, aliases) {
+  row=row||{};
+  const keys=Object.keys(row);
+  const map={};
+  keys.forEach(k=>map[clean_(k).toLowerCase()]=k);
+
+  for(const alias of aliases||[]){
+    const actual=map[clean_(alias).toLowerCase()];
+    if(actual!==undefined){
+      const value=row[actual];
+      if(value!==''&&value!==null&&value!==undefined)return value;
+    }
+  }
+
+  return '';
+}
+
+function prnAvailabilityDateKey_(value) {
+  const d=asDate_(value);
+  return d?formatDateKey_(startOfDay_(d)):'';
+}
+
+function prnAvailabilityHeaderDateKey_(header) {
+  const raw=clean_(header);
+  if(!raw)return '';
+
+  let m=raw.match(/^(\d{4})[-\/]([01]?\d)[-\/]([0-3]?\d)$/);
+  if(m)return m[1]+'-'+String(Number(m[2])).padStart(2,'0')+'-'+String(Number(m[3])).padStart(2,'0');
+
+  m=raw.match(/^([01]?\d)[-\/]([0-3]?\d)[-\/](\d{4})$/);
+  if(m)return m[3]+'-'+String(Number(m[1])).padStart(2,'0')+'-'+String(Number(m[2])).padStart(2,'0');
+
+  return '';
+}
+
+function prnAvailabilityTruth_(value, defaultValue) {
+  const raw=clean_(value).toLowerCase();
+  if(!raw)return !!defaultValue;
+  if(['no','n','false','0','off','unavailable','not available','cannot work','cant work'].includes(raw))return false;
+  if(['yes','y','true','1','available','avail','x','can work','open'].includes(raw))return true;
+  return !!defaultValue;
+}
+
+function prnAvailabilityCellShift_(value, shiftCodes) {
+  const raw=clean_(value).toUpperCase();
+  if(!raw)return '';
+
+  const direct=(shiftCodes||[]).find(code=>code===raw);
+  if(direct)return direct;
+
+  const tokens=raw.split(/[,;|\/\s]+/).map(x=>x.trim()).filter(Boolean);
+  const matches=tokens.filter(x=>(shiftCodes||[]).includes(x));
+  return matches.length?matches.join(','):'';
+}
+
+function normalizePrnAvailabilityRows_(rawRows, users) {
+  rawRows=Array.isArray(rawRows)?rawRows:[];
+  users=Array.isArray(users)?users:[];
+
+  const prnUsers=users.filter(isPrnEmployee_);
+  const byUsername={};
+  const byEmployeeId={};
+  const byName={};
+
+  prnUsers.forEach(u=>{
+    const username=clean_(u.Username);
+    const employeeId=clean_(u['Employee ID']);
+    const name=clean_(u['Pharmacist Name']);
+
+    if(username)byUsername[username.toLowerCase()]=u;
+    if(employeeId)byEmployeeId[employeeId.toLowerCase()]=u;
+    if(name)byName[name.toLowerCase()]=u;
+  });
+
+  const shiftCodes=readTable_(APP.SHEETS.SHIFTS)
+    .filter(s=>yesDefault_(s.Active,true))
+    .map(s=>clean_(s.Shift).toUpperCase())
+    .filter(Boolean);
+
+  function resolveUser(row){
+    const username=clean_(prnRowValue_(row,['Username','User Name','User','Email'])).toLowerCase();
+    const employeeId=clean_(prnRowValue_(row,['Employee ID','Employee Id','EmployeeID','ID'])).toLowerCase();
+    const name=clean_(prnRowValue_(row,['Pharmacist','Pharmacist Name','Employee','Employee Name','Name'])).toLowerCase();
+
+    return (username&&byUsername[username]) ||
+      (employeeId&&byEmployeeId[employeeId]) ||
+      (name&&byName[name]) ||
+      null;
+  }
+
+  const out=[];
+  const seen=new Set();
+
+  function pushAvailability(user, dateKey, row, available, shiftOverride){
+    if(!user||!dateKey)return;
+
+    const username=clean_(user.Username);
+    const shift=clean_(shiftOverride || prnRowValue_(row,[
+      'Shift','Shift Type','Preferred Shift','Available Shift','Preferred Shift Type'
+    ])).toUpperCase();
+
+    const start=clean_(prnRowValue_(row,['Start Time','Available Start','Start']));
+    const end=clean_(prnRowValue_(row,['End Time','Available End','End']));
+    const key=[
+      username.toLowerCase(),
+      dateKey,
+      shift,
+      start,
+      end,
+      available?'Y':'N'
+    ].join('|');
+
+    if(seen.has(key))return;
+    seen.add(key);
+
+    out.push({
+      'Pharmacist':clean_(user['Pharmacist Name']),
+      'Username':username,
+      'Employee ID':clean_(user['Employee ID']),
+      'Date':dateKey,
+      'Available':available?'Yes':'No',
+      'Shift':shift,
+      'Start Time':start,
+      'End Time':end,
+      'Source':'My Availability'
+    });
+  }
+
+  rawRows.forEach(row=>{
+    const user=resolveUser(row);
+    if(!user)return;
+
+    const activeValue=prnRowValue_(row,['Active','Enabled']);
+    if(activeValue!==''&&!prnAvailabilityTruth_(activeValue,true))return;
+
+    const status=clean_(prnRowValue_(row,['Status'])).toLowerCase();
+    if(['deleted','inactive','cancelled','canceled','rejected'].includes(status))return;
+
+    const explicitAvailable=prnRowValue_(row,['Available','Availability','Can Work','Can Work?','Working']);
+    const available=prnAvailabilityTruth_(explicitAvailable,true);
+
+    const single=prnRowValue_(row,['Availability Date','Available Date','Work Date','Shift Date','Date']);
+    let startDate=prnRowValue_(row,['Start Date','Available Start Date']);
+    let endDate=prnRowValue_(row,['End Date','Available End Date']);
+
+    if(single){
+      pushAvailability(user,prnAvailabilityDateKey_(single),row,available,'');
+      return;
+    }
+
+    if(startDate||endDate){
+      let start=prnAvailabilityDateKey_(startDate||endDate);
+      let end=prnAvailabilityDateKey_(endDate||startDate);
+
+      if(start&&end&&end>=start){
+        let d=startOfDay_(asDate_(start));
+        const finish=startOfDay_(asDate_(end));
+        let guard=0;
+
+        while(d&&finish&&d<=finish&&guard<370){
+          pushAvailability(user,formatDateKey_(d),row,available,'');
+          d=addDays_(d,1);
+          guard++;
+        }
+      }
+
+      return;
+    }
+
+    // Also support a wide monthly sheet where each date is a column and the
+    // cell contains Yes/Available/X or an optional shift code such as CC1.
+    Object.keys(row||{}).forEach(header=>{
+      const dateKey=prnAvailabilityHeaderDateKey_(header);
+      if(!dateKey)return;
+
+      const cell=row[header];
+      if(cell===''||cell===null||cell===undefined)return;
+
+      const cellText=clean_(cell);
+      const cellAvailable=prnAvailabilityTruth_(cellText,true);
+      const cellShift=prnAvailabilityCellShift_(cellText,shiftCodes);
+
+      pushAvailability(user,dateKey,row,cellAvailable,cellShift);
+    });
+  });
+
+  return out.sort((a,b)=>
+    clean_(a.Date).localeCompare(clean_(b.Date)) ||
+    clean_(a.Pharmacist).localeCompare(clean_(b.Pharmacist))
+  );
 }
 
 /** ------------------------- CONFIG VALIDATION --------------------- */
@@ -1108,6 +1314,8 @@ function loadSchedulingModel_() {
   const requirements = readTable_(APP.SHEETS.REQUIREMENTS);
   const requests = readTable_(APP.SHEETS.REQUESTS);
   const weeklyAvailability = readTable_(APP.SHEETS.WEEKLY_AVAILABILITY);
+  const prnAvailabilitySourceLoaded = !!getDb_().getSheetByName('My Availability');
+  const rawPrnAvailability = readTable_('My Availability');
   const rawSettings = getSettingsMap_();
   const shiftMap = {};
   shifts.forEach(sh => shiftMap[clean_(sh.Shift)] = sh);
@@ -1166,6 +1374,26 @@ function loadSchedulingModel_() {
     weeklyAvailabilityByUser[username].push(r);
   });
 
+  const prnAvailability=normalizePrnAvailabilityRows_(rawPrnAvailability,users);
+  const prnAvailabilityByUser={};
+  const prnAvailabilityDateCountByUser={};
+
+  prnAvailability.forEach(r=>{
+    const username=clean_(r.Username);
+    if(!username)return;
+    if(!prnAvailabilityByUser[username])prnAvailabilityByUser[username]=[];
+    prnAvailabilityByUser[username].push(r);
+  });
+
+  Object.keys(prnAvailabilityByUser).forEach(username=>{
+    prnAvailabilityDateCountByUser[username]=new Set(
+      prnAvailabilityByUser[username]
+        .filter(r=>yesDefault_(r.Available,true))
+        .map(r=>clean_(r.Date))
+        .filter(Boolean)
+    ).size;
+  });
+
   // v16 performance: index date/PTO rules by employee once instead of scanning
   // every request for every candidate/shift eligibility check.
   const requestsByUser={};
@@ -1182,8 +1410,10 @@ function loadSchedulingModel_() {
 
   const model={
     users,skills,shifts,requirements,requests,requestsByUser,
-    weeklyAvailability,weeklyAvailabilityByUser,shiftMap,usersByUsername,usersByName,skillsByUser,settings,
-    _ptoCache:{},_regularOffCache:{},_availabilityCache:{},_weeklyAvailabilityCache:{},_staticCandidateCache:{},
+    weeklyAvailability,weeklyAvailabilityByUser,
+    prnAvailability,prnAvailabilityByUser,prnAvailabilityDateCountByUser,prnAvailabilitySourceLoaded,
+    shiftMap,usersByUsername,usersByName,skillsByUser,settings,
+    _ptoCache:{},_regularOffCache:{},_availabilityCache:{},_weeklyAvailabilityCache:{},_prnAvailabilityCache:{},_staticCandidateCache:{},
     runtimeDeadline:0
   };
   model.activeUsers=users.filter(u=>yes_(u.Active));
