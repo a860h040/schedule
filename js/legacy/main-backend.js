@@ -1003,6 +1003,52 @@ function validateConfiguration_() {
     }
   });
 
+  // Weekend capacity diagnostic. 7-on/7-off dedicated shifts (N1/N2/E, etc.)
+  // are excluded because they are staffed by their own rotation. Everything
+  // else required on Saturday/Sunday must come from the active A/B/C weekend
+  // team unless PRN availability or an administrator override is used.
+  if(model.settings.requiredWeekendAssignment){
+    const sevenCodes=new Set(
+      Object.keys(model.sevenOnShiftByUser||{})
+        .map(k=>clean_(model.sevenOnShiftByUser[k]).toUpperCase())
+        .filter(Boolean)
+    );
+
+    const weekendTeamNeeded=Math.max(
+      model.requirements.reduce((sum,req)=>{
+        if(!yesDefault_(req.Active,true))return sum;
+        const code=clean_(req.Shift).toUpperCase();
+        if(sevenCodes.has(code))return sum;
+        return sum+Math.max(0,Math.floor(num_(req.Saturday,0)));
+      },0),
+      model.requirements.reduce((sum,req)=>{
+        if(!yesDefault_(req.Active,true))return sum;
+        const code=clean_(req.Shift).toUpperCase();
+        if(sevenCodes.has(code))return sum;
+        return sum+Math.max(0,Math.floor(num_(req.Sunday,0)));
+      },0)
+    );
+
+    groups.forEach(group=>{
+      const members=model.users.filter(u=>
+        yes_(u.Active) &&
+        !isSevenOn_(u) &&
+        clean_(u['Weekend Group'])===group &&
+        yesDefault_(u['Weekend Eligible'],true)
+      );
+
+      if(members.length<weekendTeamNeeded){
+        warnings.push(
+          'Weekend Group '+group+' has '+members.length+
+          ' active weekend-eligible pharmacist(s), but '+weekendTeamNeeded+
+          ' non-7-on/7-off weekend shift(s) are required each day. At least '+
+          (weekendTeamNeeded-members.length)+
+          ' weekend shift(s) per day cannot be covered without PRN availability, adding another pharmacist to this group, or overriding the one-weekend-in-three rotation.'
+        );
+      }
+    });
+  }
+
 
   if(model.settings.requirePairedEdCoverage){
     const dayCode=clean_(model.settings.edDayShiftCode||'EDD').toUpperCase();
@@ -1198,8 +1244,8 @@ function generateSchedule(token, options) {
     // 3) Remaining A/B/C weekend-team assignments are reserved and protected.
     // 4) EDD + EDE are treated as paired daily ED coverage using two different
     //    eligible pharmacists whenever both shifts are required.
-    // 5) Every resident receives one E2 per week; E2 counts as one of the five
-    //    workdays for regular residents.
+    // 5) Every resident receives one E2 per week. Residents follow resident
+    //    rotation rules and are separate from the full-time Regular 5-day pool.
     const reservedSlotKeys=new Set();
     if (model.settings.sevenOnBlockScheduling) {
       preassignSevenOnSevenOff_(generatedSlots,slotResults,model,state,ctx.username,reservedSlotKeys);
