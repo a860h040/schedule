@@ -714,7 +714,7 @@
     return row?String(row['Record Type']||'').trim().toUpperCase():'';
   }
 
-  async function preservePreviouslyApprovedPto_(localMatrix,googleMatrix){
+  async function preservePreviouslyApprovedTimeOff_(localMatrix,googleMatrix){
     if(!window.__neoGooglePtoSource||typeof window.__neoGooglePtoSource.reviewRequest!=='function'){
       return googleMatrix;
     }
@@ -722,7 +722,7 @@
     const localRows=requestMatrixToObjects_(localMatrix||[]);
     let currentMatrix=googleMatrix;
     const previouslyApproved=localRows.filter(row=>
-      String(row['Record Type']||'').trim().toUpperCase()==='PTO' &&
+      !!googleTimeOffType_(row['Record Type']) &&
       String(row.Status||'').trim().toUpperCase()==='APPROVED' &&
       String(row['Record ID']||'').trim()
     );
@@ -754,7 +754,7 @@
 
   async function syncGooglePtoMatrix_(googleMatrix,reason){
     if(!Array.isArray(googleMatrix)||!googleMatrix.length){
-      throw new Error('Google confirmed the PTO change but did not return a sheet snapshot for neochrono-data.');
+      throw new Error('Google confirmed the time-off change but did not return a sheet snapshot for neochrono-data.');
     }
 
     let lastError=null;
@@ -770,7 +770,7 @@
       // Older deployed Google bridge versions could recalculate the first-two
       // queue and silently turn an already Approved PTO back into Pending.
       // Repair that immediately before syncing so an approval is monotonic.
-      googleMatrix=await preservePreviouslyApprovedPto_(localMatrix,googleMatrix);
+      googleMatrix=await preservePreviouslyApprovedTimeOff_(localMatrix,googleMatrix);
 
       const merged=mergeGooglePtoIntoGithub_(localMatrix,googleMatrix);
 
@@ -827,7 +827,7 @@
       const snapshot=await window.__neoGooglePtoSource.fetchSnapshot();
       const synced=await syncGooglePtoMatrix_(
         snapshot.matrix,
-        'Sync PTO from Google Sheet (5-second poll)'
+        'Sync PTO / Regular Off from Google Sheet (5-second poll)'
       );
 
       if(synced&&synced.changed){
@@ -840,7 +840,7 @@
       }
     }catch(e){
       // Keep the scheduler usable from the last GitHub copy if Google is temporarily unavailable.
-      console.warn('NeoChrono 5-second Google PTO sync failed:',e);
+      console.warn('NeoChrono 5-second Google time-off sync failed:',e);
     }finally{
       googlePtoPollBusy_=false;
     }
@@ -910,7 +910,9 @@
             // sheet snapshot, which is then committed into neochrono-data.
             if(window.__neoGooglePtoSource&&String(fn)==='saveEmployeeRequest'){
               const payload={...((args||[])[1]||{})};
-              if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
+              const queuedType=googleTimeOffType_(payload['Record Type']||'PTO');
+              if(queuedType){
+                payload['Record Type']=queuedType;
                 // Always resolve the selected pharmacist from the authoritative Users
                 // sheet before sending the PTO row to Google. This prevents blank
                 // Pharmacist cells when the UI only supplies Username.
@@ -934,17 +936,33 @@
                     if(!payload['Employee ID']&&idIdx>=0)payload['Employee ID']=String(row[idIdx]??'').trim();
                   }
                 }
-                const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
-                await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO save from Google Sheet');
-                const result={...googleResult};
-                delete result.matrix;
-                return result;
+                try{
+                  const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
+                  await syncGooglePtoMatrix_(googleResult.matrix,'Sync time-off save from Google Sheet');
+                  const result={...googleResult};
+                  delete result.matrix;
+                  return result;
+                }catch(e){
+                  /*
+                   * Compatibility while an older Code5.gs deployment is still
+                   * live: old Google bridge versions accepted PTO only.
+                   * Regular Off falls through to the GitHub backend, where it is
+                   * still queued and enforced. After Code5 is redeployed, both
+                   * types are written to Google first.
+                   */
+                  const oldRegularOffBridge=
+                    queuedType==='REGULAR OFF' &&
+                    /only accepts PTO|accepts only PTO|PTO rows/i.test(String(e&&e.message||''));
+                  if(!oldRegularOffBridge)throw e;
+                }
               }
             }
 
             if(window.__neoGooglePtoSource&&String(fn)==='submitRequest'){
               const payload={...((args||[])[1]||{})};
-              if(String(payload['Record Type']||'PTO').trim().toUpperCase()==='PTO'){
+              const queuedType=googleTimeOffType_(payload['Record Type']||'PTO');
+              if(queuedType){
+                payload['Record Type']=queuedType;
                 // Compatibility path: if Username/Employee ID is present, resolve
                 // the Pharmacist name from Users before writing the Google row.
                 const usersMatrix=data&&data.sheets&&data.sheets.Users&&Array.isArray(data.sheets.Users.values)
@@ -967,11 +985,18 @@
                     if(!payload['Employee ID']&&idIdx>=0)payload['Employee ID']=String(row[idIdx]??'').trim();
                   }
                 }
-                const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
-                await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO submission from Google Sheet');
-                const result={...googleResult};
-                delete result.matrix;
-                return result;
+                try{
+                  const googleResult=await window.__neoGooglePtoSource.saveRequest(payload);
+                  await syncGooglePtoMatrix_(googleResult.matrix,'Sync time-off submission from Google Sheet');
+                  const result={...googleResult};
+                  delete result.matrix;
+                  return result;
+                }catch(e){
+                  const oldRegularOffBridge=
+                    queuedType==='REGULAR OFF' &&
+                    /only accepts PTO|accepts only PTO|PTO rows/i.test(String(e&&e.message||''));
+                  if(!oldRegularOffBridge)throw e;
+                }
               }
             }
 
@@ -983,14 +1008,22 @@
                 Array.isArray(data.sheets[GOOGLE_PTO_SHEET].values)
               )?data.sheets[GOOGLE_PTO_SHEET].values:[];
 
-              if(recordTypeForId_(localMatrix,recordId)==='PTO'){
+              const queuedType=googleTimeOffType_(recordTypeForId_(localMatrix,recordId));
+              if(queuedType){
                 const status=String((args||[])[2]||'');
                 const comment=(args||[])[3];
-                const googleResult=await window.__neoGooglePtoSource.reviewRequest(recordId,status,comment);
-                await syncGooglePtoMatrix_(googleResult.matrix,'Sync PTO review from Google Sheet');
-                const result={...googleResult};
-                delete result.matrix;
-                return result;
+                try{
+                  const googleResult=await window.__neoGooglePtoSource.reviewRequest(recordId,status,comment);
+                  await syncGooglePtoMatrix_(googleResult.matrix,'Sync time-off review from Google Sheet');
+                  const result={...googleResult};
+                  delete result.matrix;
+                  return result;
+                }catch(e){
+                  const localOnlyRegularOff=
+                    queuedType==='REGULAR OFF' &&
+                    /request not found|not found/i.test(String(e&&e.message||''));
+                  if(!localOnlyRegularOff)throw e;
+                }
               }
             }
 
