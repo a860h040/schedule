@@ -3812,9 +3812,6 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
   overrideReason=clean_(overrideReason);
   selections=Array.isArray(selections)?selections:[];
 
-  if(!overrideReason){
-    throw new Error('Enter an administrator override reason before saving multiple override assignments.');
-  }
   if(!selections.length){
     throw new Error('Select at least one shift to override.');
   }
@@ -3909,7 +3906,7 @@ function saveBulkOpenShiftOverrides(token,selections,overrideReason) {
       const coverage={};
 
       const warningParts=[
-        'ADMIN FORCE OVERRIDE: '+overrideReason,
+        overrideReason ? ('ADMIN FORCE OVERRIDE: '+overrideReason) : 'ADMIN FORCE OVERRIDE',
         'FORCED REGARDLESS OF SCHEDULING RULES'
       ];
 
@@ -4608,8 +4605,9 @@ function saveManualAssignment(token,payload) {
      *   1) validateManualAssignment_ reports every violated rule;
      *   2) first Save returns those warnings to the UI;
      *   3) the administrator must explicitly choose Override & Save;
-     *   4) an override reason is required;
-     *   5) the warnings and reason are preserved in the Schedule/Audit data.
+     *   4) an override reason is optional;
+     *   5) warnings are always preserved, and any optional reason is saved in
+     *      the Schedule/Audit data.
      *
      * Structural problems such as an invalid date, missing pharmacist/shift,
      * or trying to edit a finalized period are still blocked later because
@@ -4622,12 +4620,8 @@ function saveManualAssignment(token,payload) {
         warnings:check.warnings,
         reasonCodes:check.reasonCodes||[],
         hoursSummary:check.hoursSummary,
-        message:'This manual assignment violates one or more scheduling rules. Review the warnings, enter an override reason, then choose Override & Save if you still want this assignment.'
+        message:'This manual assignment violates one or more scheduling rules. Review the warnings, then choose Override & Save if you still want this assignment. An override reason is optional.'
       });
-    }
-
-    if (check.warnings.length && override && !clean_(payload.overrideReason)) {
-      throw new Error('Enter an override reason before saving a manual assignment that violates scheduling rules.');
     }
 
     const rows=readTable_(APP.SHEETS.SCHEDULE);
@@ -4659,7 +4653,8 @@ function saveManualAssignment(token,payload) {
     const coverage=check.coverage||{};
     const rowWarnings=(check.warnings||[]).slice();
     if(override && rowWarnings.length){
-      rowWarnings.unshift('ADMIN MANUAL OVERRIDE: '+clean_(payload.overrideReason));
+      const optionalReason=clean_(payload.overrideReason);
+      rowWarnings.unshift(optionalReason ? ('ADMIN MANUAL OVERRIDE: '+optionalReason) : 'ADMIN MANUAL OVERRIDE');
     }
     if(coverage.applies){
       rowWarnings.unshift('OFF-DAY COVERAGE ONLY: Covering '+clean_(coverage.coverageForPharmacist)+' on an algorithm-generated OFF day.');
