@@ -1232,6 +1232,31 @@
               }
             }
 
+            if(window.__neoGooglePtoSource&&String(fn)==='deleteTimeOffRequest'){
+              const recordId=String((args||[])[1]||'');
+              const localMatrix=(
+                data.sheets&&
+                data.sheets[GOOGLE_PTO_SHEET]&&
+                Array.isArray(data.sheets[GOOGLE_PTO_SHEET].values)
+              )?data.sheets[GOOGLE_PTO_SHEET].values:[];
+
+              const queuedType=googleTimeOffType_(recordTypeForId_(localMatrix,recordId));
+              if(queuedType){
+                try{
+                  const googleResult=await window.__neoGooglePtoSource.removeRequest(recordId);
+                  await syncGooglePtoMatrix_(googleResult.matrix,'Delete time-off request from Google Sheet');
+                  const result={...googleResult,recordType:queuedType};
+                  delete result.matrix;
+                  return result;
+                }catch(e){
+                  const localOnlyRegularOff=
+                    queuedType==='REGULAR OFF' &&
+                    /request not found|not found/i.test(String(e&&e.message||''));
+                  if(!localOnlyRegularOff)throw e;
+                }
+              }
+            }
+
             let result=callable.apply(window,args||[]);
             if(result&&typeof result.then==='function')result=await result;
 
