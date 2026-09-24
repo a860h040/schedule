@@ -1190,7 +1190,7 @@ function generateSchedule(token, options) {
     }).concat(preserved);
     const state = createState_(model, fixedContext, start, end);
     const slotResults = preserved.map(r => scheduleRowToAssignment_(r, model)).filter(Boolean);
-    const lockedSnapshot = preserved.filter(r=>yes_(r.Locked)).map(r => lockedFingerprint_(r));
+    const lockedSnapshot = preserved.filter(assignmentIsLocked_).map(r => lockedFingerprint_(r));
 
     // Mandatory-pattern passes happen before the normal fairness allocator.
     // 1) True 7-on/7-off employees stay on one dedicated shift for each ON block.
@@ -1271,7 +1271,7 @@ function generateSchedule(token, options) {
     applyGeneratedOffDayCoverageLabels_(slotResults, model, state, start, end);
 
     const postValidation = validateGeneratedAssignments_(slotResults, model, start, end, {skipPeriodHours:yes_(options.chunked)});
-    const lockedNow = slotResults.filter(r => yes_(r.Locked)).map(r => lockedFingerprint_(assignmentToScheduleObject_(r)));
+    const lockedNow = slotResults.filter(assignmentIsLocked_).map(r => lockedFingerprint_(r));
     const lockedErrors = compareLockedSnapshots_(lockedSnapshot, lockedNow);
     if (lockedErrors.length) throw new Error('Locked assignment protection failed: ' + lockedErrors.join('; '));
 
@@ -3057,12 +3057,38 @@ function assignmentToScheduleObject_(a) {
   };
 }
 
-function lockedFingerprint_(r) {
-  return [clean_(r['Assignment ID']),dateKey_(r.Date),clean_(r.Shift),String(num_(r.Slot,1)),clean_(r.Username),clean_(r['Assigned Pharmacist'])].join('|');
+function assignmentIsLocked_(r) {
+  if(!r)return false;
+  return yes_(r.Locked) ||
+    yes_(r.locked) ||
+    clean_(r.Status || r.status).toUpperCase()==='LOCKED';
 }
+
+function lockedFingerprint_(r) {
+  return [
+    clean_(r['Assignment ID'] || r.assignmentId),
+    dateKey_(r.Date || r.date),
+    clean_(r.Shift || r.shiftCode),
+    String(num_(r.Slot!==undefined?r.Slot:r.slot,1)),
+    clean_(r.Username || r.username),
+    clean_(r['Assigned Pharmacist'] || r.pharmacist)
+  ].join('|');
+}
+
 function compareLockedSnapshots_(before,after) {
   const b=before.slice().sort(),a=after.slice().sort();
-  return JSON.stringify(a)===JSON.stringify(b)?[]:['One or more locked assignments changed.'];
+  if(JSON.stringify(a)===JSON.stringify(b))return [];
+
+  const beforeSet=new Set(b);
+  const afterSet=new Set(a);
+  const missing=b.filter(x=>!afterSet.has(x));
+  const added=a.filter(x=>!beforeSet.has(x));
+  const details=[];
+
+  if(missing.length)details.push(missing.length+' locked assignment(s) missing or changed');
+  if(added.length)details.push(added.length+' unexpected locked assignment(s) appeared');
+
+  return details.length?details:['One or more locked assignments changed.'];
 }
 
 
