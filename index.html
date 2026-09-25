@@ -907,7 +907,7 @@ async function logoutApp(){
 }
 
 function buildNav(){
-  let h='<div class="section">Schedule</div>'+navBtn('dashboard','▦','Dashboard')+navBtn('calendar','▣','Calendar')+navBtn('paperschedule','▤','Paper Schedule')+navBtn('weeklyavailability','◷','Weekly Availability');
+  let h='<div class="section">Schedule</div>'+navBtn('dashboard','▦','Dashboard')+navBtn('calendar','▣','Calendar')+navBtn('paperschedule','▤','Paper Schedule')+navBtn('prnavailability','A','PRN Availability')+navBtn('weeklyavailability','◷','Weekly Availability');
   h+='<div class="section">Administration</div>'+navBtn('employees','♟','Pharmacists')+navBtn('preceptorcalendar','▤','Preceptor Calendar')+navBtn('admins','♜','Administrators')+navBtn('skills','◆','Skills')+navBtn('shifts','◫','Shifts')+navBtn('staffing','≋','Staffing')+navBtn('requests','✓','PTO / Date Rules')+navBtn('settings','⚙','Settings')+navBtn('audit','↺','Audit Log')+'<button type="button" onclick="location.href=\'workbook-import.html\'"><b>⇧</b> <span>Import Workbook</span></button>';
   h+='<div class="section">Reports</div>'+navBtn('fairness','◎','Fairness');
   $('nav').innerHTML=h;
@@ -937,10 +937,10 @@ function navigateTo_(page){
 }
 function renderPage(page){
   if(!State.data)throw new Error('Scheduler data has not loaded yet.');
-  const renderers={dashboard:renderDashboard,calendar:renderCalendar,paperschedule:renderPaperSchedule,weeklyavailability:renderWeeklyAvailability,employees:renderEmployees,preceptorcalendar:renderPreceptorCalendar,admins:renderAdmins,skills:renderSkills,shifts:renderShifts,staffing:renderStaffing,requests:renderRequests,settings:renderSettings,audit:renderAudit,fairness:renderFairness};
+  const renderers={dashboard:renderDashboard,calendar:renderCalendar,paperschedule:renderPaperSchedule,prnavailability:renderPrnAvailability,weeklyavailability:renderWeeklyAvailability,employees:renderEmployees,preceptorcalendar:renderPreceptorCalendar,admins:renderAdmins,skills:renderSkills,shifts:renderShifts,staffing:renderStaffing,requests:renderRequests,settings:renderSettings,audit:renderAudit,fairness:renderFairness};
   const renderer=renderers[page];
   if(typeof renderer!=='function')throw new Error('Unknown page: '+page);
-  const titles={dashboard:'Dashboard',calendar:'Schedule Calendar',paperschedule:'Paper Schedule',weeklyavailability:'Weekly Availability',employees:'Pharmacist Management',preceptorcalendar:'Preceptor Calendar',admins:'Administrator Accounts',skills:'Employee Skills',shifts:'Shift Definitions',staffing:'Staffing Requirements',requests:'PTO / Availability',settings:'Settings',audit:'Audit Log',fairness:'Fairness Report'};
+  const titles={dashboard:'Dashboard',calendar:'Schedule Calendar',paperschedule:'Paper Schedule',prnavailability:'PRN Availability',weeklyavailability:'Weekly Availability',employees:'Pharmacist Management',preceptorcalendar:'Preceptor Calendar',admins:'Administrator Accounts',skills:'Employee Skills',shifts:'Shift Definitions',staffing:'Staffing Requirements',requests:'PTO / Availability',settings:'Settings',audit:'Audit Log',fairness:'Fairness Report'};
   State.page=page;
   document.querySelectorAll('#nav button[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
   if($('pageTitle'))$('pageTitle').textContent=titles[page]||'Pharmacy Scheduler';
@@ -3445,6 +3445,188 @@ window.addEventListener('neochrono:prn-availability-synced',()=>{
     }
   }catch(_e){}
 });
+
+
+function prnAvailabilityUsers_(){
+  return (State.data.users||[])
+    .filter(u=>yes(u.Active))
+    .filter(u=>
+      String(u['Employment Type']||'').trim().toUpperCase()==='PRN' ||
+      String(u['Schedule Type']||'').trim().toUpperCase()==='PRN'
+    )
+    .sort((a,b)=>String(a['Pharmacist Name']||'').localeCompare(String(b['Pharmacist Name']||''),undefined,{sensitivity:'base'}));
+}
+
+function prnAvailabilityRowsForUser_(user){
+  const username=String(user&&user.Username==null?'':user.Username).trim().toLowerCase();
+  const name=String(user&&user['Pharmacist Name']||'').trim().toLowerCase();
+
+  return (State.data.prnAvailability||[]).filter(r=>{
+    const rowUser=String(r.Username==null?'':r.Username).trim().toLowerCase();
+    const rowName=String(r.Pharmacist||r['Pharmacist Name']||'').trim().toLowerCase();
+    return (!!username&&rowUser===username)||(!username&&!!name&&rowName===name)|| (!!name&&rowName===name);
+  });
+}
+
+function prnAvailabilityForDateUI_(user,dk){
+  const rows=prnAvailabilityRowsForUser_(user).filter(r=>String(r.Date||'').slice(0,10)===String(dk));
+  const available=rows.filter(r=>yes(r.Available===undefined?'Yes':r.Available));
+  const unavailable=rows.filter(r=>!yes(r.Available===undefined?'Yes':r.Available));
+
+  const shifts=[...new Set(available.flatMap(r=>
+    String(r.Shift||'').split(/[,;|\/\s]+/).map(x=>x.trim().toUpperCase()).filter(Boolean)
+  ))];
+
+  const times=[...new Set(available.map(r=>{
+    const s=String(r['Start Time']||'').trim();
+    const e=String(r['End Time']||'').trim();
+    return s&&e?s+'–'+e:'';
+  }).filter(Boolean))];
+
+  const sources=[...new Set(rows.map(r=>String(r.Source||'My Availability').trim()).filter(Boolean))];
+
+  return {
+    rows,
+    available:available.length>0,
+    explicitUnavailable:available.length===0&&unavailable.length>0,
+    shifts,
+    times,
+    sources
+  };
+}
+
+function prnAvailabilityMonthDates_(month){
+  const out=[];
+  const last=new Date(month.getFullYear(),month.getMonth()+1,0).getDate();
+  for(let day=1;day<=last;day++)out.push(new Date(month.getFullYear(),month.getMonth(),day,12,0,0,0));
+  return out;
+}
+
+function prnAvailabilityChangeMonth_(n){
+  State.month=addMonths(State.month,Number(n)||0);
+  renderPrnAvailability();
+}
+
+async function refreshPrnAvailabilityUI_(){
+  try{
+    await refreshData(false);
+    renderPrnAvailability();
+    toast('PRN availability refreshed.','success');
+  }catch(e){
+    toast(e&&e.message?e.message:String(e),'error');
+  }
+}
+
+function renderPrnAvailability(){
+  const month=State.month||firstOfMonth(new Date());
+  const users=prnAvailabilityUsers_();
+  const dates=prnAvailabilityMonthDates_(month);
+  const monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
+  const monthEnd=dateKey(new Date(month.getFullYear(),month.getMonth()+1,0));
+  const sourceLoaded=!!State.data.prnAvailabilitySourceLoaded;
+  const allRows=(State.data.prnAvailability||[])
+    .filter(r=>{
+      const dk=String(r.Date||'').slice(0,10);
+      return dk>=monthStart&&dk<=monthEnd;
+    })
+    .slice()
+    .sort((a,b)=>
+      String(a.Date||'').localeCompare(String(b.Date||'')) ||
+      String(a.Pharmacist||'').localeCompare(String(b.Pharmacist||''))
+    );
+
+  const availableRows=allRows.filter(r=>yes(r.Available===undefined?'Yes':r.Available));
+  const availableDays=new Set(availableRows.map(r=>String(r.Date||'').slice(0,10)+'|'+String(r.Username||r.Pharmacist||''))).size;
+
+  let gridRows='';
+  users.forEach(user=>{
+    gridRows+='<tr>'+
+      '<th style="position:sticky;left:0;z-index:2;background:#fff;text-align:left;min-width:160px">'+esc(user['Pharmacist Name']||'')+'</th>'+
+      dates.map(dt=>{
+        const dk=dateKey(dt);
+        const info=prnAvailabilityForDateUI_(user,dk);
+        const weekend=dt.getDay()===0||dt.getDay()===6;
+        let text='—',bg='#f8fafc',fg='#98a2b3',title='Not submitted / not available';
+
+        if(info.available){
+          text='A';
+          bg='#dff3e8';
+          fg='#166534';
+          const details=[];
+          if(info.shifts.length)details.push('Shift(s): '+info.shifts.join(', '));
+          if(info.times.length)details.push('Time: '+info.times.join(', '));
+          if(info.sources.length)details.push('Source: '+info.sources.join(', '));
+          title='Available'+(details.length?' | '+details.join(' | '):'');
+        }else if(info.explicitUnavailable){
+          text='No';
+          bg='#f2f4f7';
+          fg='#667085';
+          title='Explicitly unavailable';
+        }
+
+        if(weekend&&info.available)bg='#d3eadb';
+        else if(weekend&&!info.available)bg='#fff4e6';
+
+        return '<td title="'+attr(title)+'" style="text-align:center;min-width:34px;background:'+bg+';color:'+fg+';font-weight:850">'+esc(text)+'</td>';
+      }).join('')+
+    '</tr>';
+  });
+
+  const detailRows=allRows.map(r=>{
+    const s=String(r['Start Time']||'').trim();
+    const e=String(r['End Time']||'').trim();
+    const time=s&&e?s+' – '+e:'Any time';
+    return '<tr>'+
+      '<td>'+esc(fmtDate(r.Date))+'</td>'+
+      '<td><b>'+esc(r.Pharmacist||'')+'</b></td>'+
+      '<td>'+statusBadge(yes(r.Available===undefined?'Yes':r.Available)?'Approved':'Rejected').replace('Approved','Available').replace('Rejected','Unavailable')+'</td>'+
+      '<td>'+esc(r.Shift||'Any qualified shift')+'</td>'+
+      '<td>'+esc(time)+'</td>'+
+      '<td>'+esc(r.Source||'My Availability')+'</td>'+
+    '</tr>';
+  }).join('');
+
+  $('content').innerHTML=
+    '<div class="section-title">'+
+      '<div>'+
+        '<h3>PRN Availability — '+esc(monthTitle(month))+'</h3>'+
+        '<p>This tab reads the PRN dates synchronized from <b>My Availability</b>. <b>A</b> means the PRN can be used by the scheduling algorithm on that date. A blank/— date is not eligible for automatic PRN scheduling.</p>'+
+        '<div style="margin-top:7px">'+
+          '<span class="badge '+(sourceLoaded?'badge-ok':'badge-warn')+'">'+
+            (sourceLoaded?'My Availability loaded':'My Availability not loaded')+
+          '</span> '+
+          '<span class="badge badge-ok">'+availableDays+' available PRN day'+(availableDays===1?'':'s')+' this month</span>'+
+        '</div>'+
+      '</div>'+
+      '<div style="display:flex;gap:7px;flex-wrap:wrap">'+
+        '<button class="btn btn-secondary btn-sm" onclick="prnAvailabilityChangeMonth_(-1)">← Previous</button>'+
+        '<button class="btn btn-secondary btn-sm" onclick="State.month=firstOfMonth(new Date());renderPrnAvailability()">Today</button>'+
+        '<button class="btn btn-secondary btn-sm" onclick="prnAvailabilityChangeMonth_(1)">Next →</button>'+
+        '<button class="btn btn-secondary btn-sm" onclick="refreshPrnAvailabilityUI_()">Refresh</button>'+
+        (State.data.isAdmin?'<button class="btn btn-primary btn-sm" onclick="openAssignmentModal(null,\'\',\'\',1,\'\',\'PRN_AVAILABILITY\')">+ Add PRN Availability</button>':'')+
+      '</div>'+
+    '</div>'+
+    '<div class="table-wrap" style="overflow:auto;margin-bottom:14px">'+
+      '<table class="table" style="min-width:max-content">'+
+        '<thead><tr>'+
+          '<th style="position:sticky;left:0;z-index:3;background:#f7f9fb">PRN Pharmacist</th>'+
+          dates.map(dt=>'<th style="min-width:34px;text-align:center;'+((dt.getDay()===0||dt.getDay()===6)?'background:#f5d9b7;':'')+'">'+(dt.getMonth()+1)+'/'+dt.getDate()+'<div class="small muted">'+['S','M','T','W','T','F','S'][dt.getDay()]+'</div></th>').join('')+
+        '</tr></thead>'+
+        '<tbody>'+
+          (gridRows||'<tr><td colspan="'+(dates.length+1)+'" class="muted" style="padding:22px;text-align:center">No active PRN pharmacists are configured.</td></tr>')+
+        '</tbody>'+
+      '</table>'+
+    '</div>'+
+    '<div class="section-title"><div><h3>Availability Details</h3><p>Shift/time limits shown here are also used by the scheduler when present.</p></div></div>'+
+    '<div class="table-wrap">'+
+      '<table class="table">'+
+        '<thead><tr><th>Date</th><th>PRN Pharmacist</th><th>Status</th><th>Shift</th><th>Time</th><th>Source</th></tr></thead>'+
+        '<tbody>'+
+          (detailRows||'<tr><td colspan="6" class="muted" style="text-align:center;padding:22px">No PRN availability has been submitted for this month.</td></tr>')+
+        '</tbody>'+
+      '</table>'+
+    '</div>';
+}
 
 function renderRequests(){
   const rows=(State.data.requests||[])
