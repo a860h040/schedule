@@ -980,10 +980,14 @@
   let googlePrnAvailabilityPollTimer_=null;
 
   async function pollGooglePrnAvailabilityToGithub_(){
-    if(googlePrnAvailabilityPollBusy_)return;
-    if(!window.__neoPrnAvailabilitySource||typeof window.__neoPrnAvailabilitySource.fetchSnapshot!=='function')return;
+    if(googlePrnAvailabilityPollBusy_)return {ok:false,busy:true};
+    if(!window.__neoPrnAvailabilitySource||typeof window.__neoPrnAvailabilitySource.fetchSnapshot!=='function'){
+      return {ok:false,sourceUnavailable:true,message:'Google My Availability source is not available.'};
+    }
 
-    try{cfg();}catch(_e){return;}
+    try{cfg();}catch(_e){
+      return {ok:false,sourceUnavailable:true,message:'NeoChrono data connection is not configured.'};
+    }
 
     googlePrnAvailabilityPollBusy_=true;
 
@@ -996,15 +1000,29 @@
 
       if(synced&&synced.changed){
         cache={data:null,sha:null,loadedAt:0};
-
-        try{
-          window.dispatchEvent(new CustomEvent('neochrono:prn-availability-synced',{
-            detail:{rows:synced.rows,at:new Date().toISOString()}
-          }));
-        }catch(_e){}
       }
+
+      try{
+        window.dispatchEvent(new CustomEvent('neochrono:prn-availability-synced',{
+          detail:{
+            rows:synced&&synced.rows!==undefined?synced.rows:Math.max(0,(snapshot.matrix||[]).length-1),
+            changed:!!(synced&&synced.changed),
+            generatedAt:snapshot.generatedAt||'',
+            at:new Date().toISOString()
+          }
+        }));
+      }catch(_e){}
+
+      return {
+        ok:true,
+        changed:!!(synced&&synced.changed),
+        rows:synced&&synced.rows!==undefined?synced.rows:Math.max(0,(snapshot.matrix||[]).length-1),
+        generatedAt:snapshot.generatedAt||'',
+        source:'Google Sheet — My Availability'
+      };
     }catch(e){
       console.warn('NeoChrono Google My Availability sync failed:',e);
+      return {ok:false,message:e&&e.message?e.message:String(e)};
     }finally{
       googlePrnAvailabilityPollBusy_=false;
     }
@@ -1085,6 +1103,7 @@
     cfg,loadWorkbook,saveWorkbook,savePublished,pbkdf2Hex,getEmployeePhotoDataUrl,uploadEmployeePhoto,deleteEmployeePhoto,employeePhotoPath:employeePhotoPath_,
     syncGooglePtoMatrix:syncGooglePtoMatrix_,
     syncGooglePrnAvailabilityMatrix:syncGooglePrnAvailabilityMatrix_,
+    refreshGooglePrnAvailability:pollGooglePrnAvailabilityToGithub_,
     currentBook:()=>currentBook(),
     workbookCacheStatus:()=>({
       loaded:!!cache.data,
