@@ -3509,16 +3509,55 @@ function prnAvailabilityChangeMonth_(n){
 
 async function refreshPrnAvailabilityUI_(){
   try{
+    if(
+      window.__neoRuntime &&
+      typeof window.__neoRuntime.refreshGooglePrnAvailability==='function'
+    ){
+      const live=await window.__neoRuntime.refreshGooglePrnAvailability();
+      if(live&&live.ok===false){
+        throw new Error(live.message||'Could not read Google My Availability.');
+      }
+      window.__neoPrnLastDirectRefresh=Date.now();
+    }
+
     await refreshData(false);
     renderPrnAvailability();
-    toast('PRN availability refreshed.','success');
+    toast('PRN availability refreshed directly from Google My Availability.','success');
   }catch(e){
     toast(e&&e.message?e.message:String(e),'error');
   }
 }
 
+async function maybeRefreshPrnAvailabilityFromGoogle_(){
+  if(window.__neoPrnDirectRefreshBusy)return;
+
+  const last=Number(window.__neoPrnLastDirectRefresh||0);
+  if(Date.now()-last<10000)return;
+
+  if(
+    !window.__neoRuntime ||
+    typeof window.__neoRuntime.refreshGooglePrnAvailability!=='function'
+  )return;
+
+  window.__neoPrnDirectRefreshBusy=true;
+  try{
+    const live=await window.__neoRuntime.refreshGooglePrnAvailability();
+    if(live&&live.ok){
+      window.__neoPrnLastDirectRefresh=Date.now();
+      await refreshData(false);
+      if(State.page==='prnavailability')renderPrnAvailability();
+      else if(State.page==='paperschedule')renderPaperSchedule();
+    }
+  }catch(_e){
+    // Keep the last synchronized copy visible if Google is temporarily unavailable.
+  }finally{
+    window.__neoPrnDirectRefreshBusy=false;
+  }
+}
+
 function renderPrnAvailability(){
   const month=State.month||firstOfMonth(new Date());
+  setTimeout(()=>{maybeRefreshPrnAvailabilityFromGoogle_();},0);
   const users=prnAvailabilityUsers_();
   const dates=prnAvailabilityMonthDates_(month);
   const monthStart=dateKey(new Date(month.getFullYear(),month.getMonth(),1));
@@ -3590,10 +3629,10 @@ function renderPrnAvailability(){
     '<div class="section-title">'+
       '<div>'+
         '<h3>PRN Availability — '+esc(monthTitle(month))+'</h3>'+
-        '<p>This tab reads the PRN dates synchronized from <b>My Availability</b>. <b>A</b> means the PRN can be used by the scheduling algorithm on that date. A blank/— date is not eligible for automatic PRN scheduling.</p>'+
+        '<p>This tab reads PRN availability directly from the Google Sheet <b>My Availability</b>. <b>A</b> means the PRN can be used by the scheduling algorithm on that date. A blank/— date is not eligible for automatic PRN scheduling.</p>'+
         '<div style="margin-top:7px">'+
           '<span class="badge '+(sourceLoaded?'badge-ok':'badge-warn')+'">'+
-            (sourceLoaded?'My Availability loaded':'My Availability not loaded')+
+            (sourceLoaded?'Google My Availability loaded':'Google My Availability not loaded')+
           '</span> '+
           '<span class="badge badge-ok">'+availableDays+' available PRN day'+(availableDays===1?'':'s')+' this month</span>'+
         '</div>'+
@@ -3602,7 +3641,7 @@ function renderPrnAvailability(){
         '<button class="btn btn-secondary btn-sm" onclick="prnAvailabilityChangeMonth_(-1)">← Previous</button>'+
         '<button class="btn btn-secondary btn-sm" onclick="State.month=firstOfMonth(new Date());renderPrnAvailability()">Today</button>'+
         '<button class="btn btn-secondary btn-sm" onclick="prnAvailabilityChangeMonth_(1)">Next →</button>'+
-        '<button class="btn btn-secondary btn-sm" onclick="refreshPrnAvailabilityUI_()">Refresh</button>'+
+        '<button class="btn btn-secondary btn-sm" onclick="refreshPrnAvailabilityUI_()">Refresh from Google</button>'+
         (State.data.isAdmin?'<button class="btn btn-primary btn-sm" onclick="openAssignmentModal(null,\'\',\'\',1,\'\',\'PRN_AVAILABILITY\')">+ Add PRN Availability</button>':'')+
       '</div>'+
     '</div>'+
