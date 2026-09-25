@@ -402,7 +402,7 @@
 
       var title=
         (prnAvailability&&prnAvailability.available
-          ?('PRN AVAILABILITY CONFIRMED in My Availability'+
+          ?('PRN AVAILABILITY CONFIRMED in PRN Availability'+
             (prnAvailability.shifts.length?' | Shift(s): '+prnAvailability.shifts.join(', '):'')+
             (prnAvailability.times.length?' | Time: '+prnAvailability.times.join(', '):'')+
             '\n')
@@ -467,7 +467,7 @@
         return {
           text:'A',
           cls:'paper-prn-available paper-assignable',
-          title:'PRN available in My Availability. '+details.join(' | ')+' — click to pre-assign a shift',
+          title:'PRN available in PRN Availability. '+details.join(' | ')+' — click to pre-assign a shift',
           id:'',
           canAssign:true,
           prnAvailable:true,
@@ -478,7 +478,7 @@
       return {
         text:'—',
         cls:'paper-prn-unavailable paper-assignable',
-        title:'PRN not listed as available in My Availability. The scheduling algorithm will not assign this date. Admin can still click to manually override.',
+        title:'PRN not listed as available in PRN Availability. The scheduling algorithm will not assign this date. Admin can still click to manually override.',
         id:'',
         canAssign:true,
         prnAvailable:false,
