@@ -2,7 +2,8 @@
   'use strict';
 
   const ENDPOINT='https://script.google.com/macros/s/AKfycbzd-2TtruGPlfUbRlS7EDFlm7jgBlBUgfM66PJX03zMpZOHFoXBSXBd-rJMX7s71fXk/exec';
-  const SHEET='My Availability';
+  const SPREADSHEET_ID='1flTBzOIM_dbDODjC-S-DHoViAhHASEyNWInZBxab5To';
+  const SHEET='PRN Availability';
   const READ_ACTION='neochronoPrnAvailability';
   const MESSAGE_TYPE='NEOCHRONO_PRN_AVAILABILITY';
 
@@ -13,7 +14,7 @@
 
   function snapshotMatrix_(payload){
     if(!payload||payload.ok===false||payload.success===false){
-      throw new Error(payload&&payload.message?payload.message:'Google My Availability receiver returned an error.');
+      throw new Error(payload&&payload.message?payload.message:'Google PRN Availability receiver returned an error.');
     }
 
     const headers=Array.isArray(payload.headers)
@@ -60,9 +61,13 @@
       }
 
       addField('action',READ_ACTION);
+      addField('spreadsheetId',SPREADSHEET_ID);
       addField('sheet',SHEET);
       addField('requestId',requestId);
-      addField('payload','{}');
+      addField('payload',JSON.stringify({
+        spreadsheetId:SPREADSHEET_ID,
+        sheet:SHEET
+      }));
 
       let finished=false;
       let timer=null;
@@ -88,7 +93,7 @@
         cleanup();
 
         if(data.ok===false||data.success===false){
-          reject(new Error(data.message||'Google My Availability receiver rejected the request.'));
+          reject(new Error(data.message||'Google PRN Availability receiver rejected the request.'));
           return;
         }
 
@@ -98,7 +103,7 @@
             matrix:snapshotMatrix_(data),
             rowCount:Number(data.rowCount||0),
             generatedAt:String(data.generatedAt||''),
-            message:data.message||'PRN availability loaded from My Availability.'
+            message:data.message||'PRN availability loaded from Google Sheet "PRN Availability".'
           });
         }catch(e){
           reject(e);
@@ -107,10 +112,10 @@
 
       window.addEventListener('message',onMessage);
       timer=setTimeout(()=>{
-        fail('Google did not return My Availability. Deploy the latest Code5.gs as a new version of the existing Apps Script web app.');
+        fail('Google did not return PRN Availability. Deploy the latest Code5.gs as a new version of the existing Apps Script web app.');
       },20000);
 
-      iframe.onerror=()=>fail('The Google My Availability receiver could not be reached.');
+      iframe.onerror=()=>fail('The Google PRN Availability receiver could not be reached.');
       document.body.appendChild(iframe);
       document.body.appendChild(form);
 
@@ -124,8 +129,14 @@
 
   window.__neoPrnAvailabilitySource={
     endpoint:ENDPOINT,
+    spreadsheetId:SPREADSHEET_ID,
     sheet:SHEET,
     fetchSnapshot,
-    status:()=>({endpoint:ENDPOINT,sheet:SHEET,source:'google-sheet'})
+    status:()=>({
+      endpoint:ENDPOINT,
+      spreadsheetId:SPREADSHEET_ID,
+      sheet:SHEET,
+      source:'google-sheet'
+    })
   };
 })();
