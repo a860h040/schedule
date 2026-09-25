@@ -365,6 +365,7 @@
 
   function paperCellData_(user,dk){
     var protectedDay=paperApprovedTimeOff_(user.Username,user['Pharmacist Name'],dk);
+    var prnAvailability=paperPrnAvailabilityForDate_(user,dk);
 
     // PRN pharmacists are controlled by submitted availability. A legacy
     // Regular Off row is redundant for PRN staff and should not replace the
@@ -395,8 +396,18 @@
       if(protectedDay){
         cls+=' paper-conflict';
       }
+      if(prnAvailability&&prnAvailability.available){
+        cls+=' paper-prn-assigned-available';
+      }
 
-      var title=(protectedDay?('CONFLICT: '+protectedDay.title+' exists on this date, but a manual assignment is being retained.\n'):'')+rows.map(function(x){
+      var title=
+        (prnAvailability&&prnAvailability.available
+          ?('PRN AVAILABILITY CONFIRMED in My Availability'+
+            (prnAvailability.shifts.length?' | Shift(s): '+prnAvailability.shifts.join(', '):'')+
+            (prnAvailability.times.length?' | Time: '+prnAvailability.times.join(', '):'')+
+            '\n')
+          :'')+
+        (protectedDay?('CONFLICT: '+protectedDay.title+' exists on this date, but a manual assignment is being retained.\n'):'')+rows.map(function(x){
         return String(x.Shift||'')+' — '+String(x['Assigned Pharmacist']||'')+
           (x['Coverage For Pharmacist']?' | covering '+x['Coverage For Pharmacist']:'')+
           (x.Warning?' | '+x.Warning:'');
@@ -409,7 +420,8 @@
         id:r['Assignment ID']||'',
         locked:yes(r.Locked)||String(r.Status||'').toUpperCase()==='LOCKED',
         manual:yes(r.Manual)||['MANUAL','LOCKED'].indexOf(String(r.Status||'').toUpperCase())>=0,
-        protectedDay:protectedDay
+        protectedDay:protectedDay,
+        prnAvailable:!!(prnAvailability&&prnAvailability.available)
       };
     }
 
@@ -445,7 +457,6 @@
       };
     }
 
-    var prnAvailability=paperPrnAvailabilityForDate_(user,dk);
     if(prnAvailability && !filtersActive){
       if(prnAvailability.available){
         var details=[];
@@ -794,6 +805,7 @@
             cell.cls+
             '" title="'+attr(cell.title||'')+'"'+onclick+'>'+
             esc(cell.text)+
+            (cell.id&&cell.prnAvailable?'<span class="paper-prn-a-marker" title="PRN availability confirmed">A</span>':'')+
           '</td>';
         });
 
