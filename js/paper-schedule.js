@@ -639,6 +639,10 @@
   }
 
   window.renderPaperSchedule=function(){
+    if(typeof maybeRefreshPrnAvailabilityFromGoogle_==='function'){
+      setTimeout(function(){maybeRefreshPrnAvailabilityFromGoogle_();},0);
+    }
+
     var m=State.month;
     var d=State.data;
     var filt=State.calendarFilters;
