@@ -704,11 +704,16 @@ function getAppData(token) {
   const requirements = readTable_(APP.SHEETS.REQUIREMENTS);
   const requests = readTable_(APP.SHEETS.REQUESTS);
   const manualPrnAvailability=manualPrnAvailabilityRowsFromRequests_(requests,users);
+  const prnSourceSheet =
+    getDb_().getSheetByName('PRN Availability')
+      ? 'PRN Availability'
+      : 'PRN Availability';
   const prnAvailabilitySourceLoaded =
-    !!getDb_().getSheetByName('My Availability') ||
+    !!getDb_().getSheetByName('PRN Availability') ||
+    !!getDb_().getSheetByName('PRN Availability') ||
     manualPrnAvailability.length>0;
   const prnAvailability = normalizePrnAvailabilityRows_(
-    readTable_('My Availability'),
+    readTable_(prnSourceSheet),
     users
   ).concat(manualPrnAvailability);
   const weeklyAvailability = readTable_(APP.SHEETS.WEEKLY_AVAILABILITY);
@@ -883,7 +888,7 @@ function normalizePrnAvailabilityRows_(rawRows, users) {
       'Shift':shift,
       'Start Time':start,
       'End Time':end,
-      'Source':'My Availability'
+      'Source':'PRN Availability'
     });
   }
 
@@ -1474,10 +1479,15 @@ function loadSchedulingModel_() {
   const requirements = readTable_(APP.SHEETS.REQUIREMENTS);
   const requests = readTable_(APP.SHEETS.REQUESTS);
   const weeklyAvailability = readTable_(APP.SHEETS.WEEKLY_AVAILABILITY);
-  const rawPrnAvailability = readTable_('My Availability');
+  const prnSourceSheet =
+    getDb_().getSheetByName('PRN Availability')
+      ? 'PRN Availability'
+      : 'PRN Availability';
+  const rawPrnAvailability = readTable_(prnSourceSheet);
   const manualPrnAvailability=manualPrnAvailabilityRowsFromRequests_(requests,users);
   const prnAvailabilitySourceLoaded =
-    !!getDb_().getSheetByName('My Availability') ||
+    !!getDb_().getSheetByName('PRN Availability') ||
+    !!getDb_().getSheetByName('PRN Availability') ||
     manualPrnAvailability.length>0;
   const rawSettings = getSettingsMap_();
   const shiftMap = {};
@@ -1737,7 +1747,7 @@ function prnAvailabilityStatus_(u,date,shift,model) {
     };
   }
 
-  // PRN is opt-in only. If My Availability has not loaded, or the PRN has
+  // PRN is opt-in only. If PRN Availability has not loaded, or the PRN has
   // not submitted availability for this date/shift, the algorithm must NOT
   // schedule the PRN. This prevents PRNs from becoming fallback regular staff.
   if(!model||!model.prnAvailabilitySourceLoaded){
@@ -1909,7 +1919,7 @@ function eligibility_(u, slot, model, state, manualMode) {
     if (isSevenOn_(u)) {
       // 7-on/7-off rotations are controlled by their 14-day anchor, not A/B/C weekends.
     } else if (isPrnEmployee_(u)) {
-      // PRN pharmacists are governed by My Availability rather than the A/B/C
+      // PRN pharmacists are governed by PRN Availability rather than the A/B/C
       // weekend rotation. Weekend Eligible still applies above.
     } else if (yes_(u.Resident)) {
       // Residents may only cover the weekend assigned to their A/B/C group,
@@ -2363,7 +2373,7 @@ function scoreCandidate_(u,slot,model,state,elig) {
   }
 
   // Exact 320-hour schedule-period objective applies to regular pharmacists,
-  // not PRN pharmacists whose schedule is driven by My Availability.
+  // not PRN pharmacists whose schedule is driven by PRN Availability.
   if (
     !isPrnEmployee_(u) &&
     state.periodStart &&
@@ -3062,7 +3072,7 @@ function explainUnfilled_(slot,model,state) {
       const primary=e.reasons[0]||'OTHER'; counts[primary]=num_(counts[primary],0)+1;
     }
   });
-  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at the hard 7-evening-shift monthly maximum',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',MANUAL_SHIFT_TYPE:'does not match the administrator-selected Day/Evening assignment type',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in My Availability',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
+  const labels={PTO:'on approved PTO',REGULAR_OFF:'on approved Regular Off',UNAVAILABLE:'unavailable',ALREADY_SCHEDULED:'already scheduled',TIME_CONFLICT:'time conflict',WEEKLY_HOURS:'over weekly hours',WEEKLY_DAYS:'already at the five-workday weekly limit',CONSECUTIVE_DAYS:'would create more than five consecutive workdays',EVENING_TO_MORNING:'evening-to-morning transition requires the next day OFF or another evening shift',TWO_MONTH_HOURS:'would exceed the exact 320-hour schedule-period target',PRECEPTOR_WEEKDAY_EVENING:'preceptor weekday-evening restriction',PRECEPTOR_EVENING:'preceptor evening restriction',EVENING_LIMIT:'at the hard 7-evening-shift monthly maximum',WRONG_WEEKEND_GROUP:'wrong weekend group',RESIDENT_WRONG_WEEKEND_GROUP:'resident is outside the assigned weekend group',WEEKEND_ANCHOR_OFF:'outside the employee 21-day weekend rotation anchor',SEVEN_OFF:'in 7-on/7-off OFF period',SEVEN_WRONG_SHIFT:'7-on/7-off employee is restricted to the dedicated shift',RESIDENT_E2_WEEKLY_LIMIT:'resident already has the required E2 shift for this week',CUSTOM_HOURS:'outside hard custom hours',MANUAL_SHIFT_TYPE:'does not match the administrator-selected Day/Evening assignment type',WEEKLY_AVAILABILITY_DAY:'not available on this weekday',WEEKLY_AVAILABILITY_TIME:'outside recurring weekly available hours',PRN_NOT_AVAILABLE:'not listed as available in PRN Availability',PRN_AVAILABILITY_NOT_LOADED:'PRN Availability has not loaded; PRN scheduling is blocked',WEEKEND_NOT_ELIGIBLE:'not weekend eligible',EVENING_NOT_ELIGIBLE:'not evening eligible',NIGHT_NOT_ELIGIBLE:'not night eligible',RESIDENT_RESTRICTION:'resident restriction',OTHER:'otherwise not assignable'};
   const pieces=Object.keys(counts).map(k=>counts[k]+' '+(labels[k]||k.toLowerCase().replace(/_/g,' ')));
   return 'UNFILLED — '+skillQualified.length+' active employees have the skill: '+pieces.join('; ')+'.';
 }
@@ -3108,7 +3118,7 @@ function validateGeneratedAssignments_(assignments,model,start,end,validationOpt
       if(wa.blocked&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' violates recurring weekly availability.');
 
       const prnAvail=prnAvailabilityStatus_(u,a.date,a.shift,model);
-      if(prnAvail.blocked&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' is PRN and is not available for this date/shift in My Availability.');
+      if(prnAvail.blocked&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': '+a.pharmacist+' is PRN and is not available for this date/shift in PRN Availability.');
 
       if (preceptorEveningBlocked_(u,validationSlot,model)) errors.push(a.dateKey+' '+a.shiftCode+': preceptor assigned a weekday evening shift; preceptors may work evening shifts on weekends only.');
       if (isSevenOn_(u)&&!sevenOnIsOnDay_(u,a.date)&&!a.manual) errors.push(a.dateKey+' '+a.shiftCode+': 7-on/7-off employee scheduled during OFF period.');
@@ -6722,7 +6732,7 @@ function employeeWeekendIsOn_(u,date,settings){
 function weekendSaturday_(date){const d=startOfDay_(date),day=dayIndex_(d);if(day===6)return d;if(day===0)return addDays_(d,-1);return addDays_(d,6-day);}
 function isWeekendDate_(date){const d=dayIndex_(date);return d===0||d===6;}
 
-function reasonToWarning_(r){const m={INACTIVE:'Employee is inactive.',MISSING_SKILL:'Employee does not possess the required skill.',PTO:'Employee is on approved PTO.',REGULAR_OFF:'Employee has an approved Regular Off request.',UNAVAILABLE:'Employee is unavailable on this date.',ALREADY_SCHEDULED:'Employee already has a shift on this date.',TIME_CONFLICT:'Assignment overlaps another scheduled shift.',WEEKLY_HOURS:'Assignment would exceed the employee weekly-hour maximum.',WEEKLY_DAYS:'Assignment would exceed the required five workdays in this Sunday-Saturday week.',CONSECUTIVE_DAYS:'Assignment would create more than five consecutive workdays.',EVENING_TO_MORNING:'Evening-to-morning transition is not allowed. If the pharmacist works an evening shift, the next calendar day must be OFF or another evening shift, not a Day/Morning shift.',TWO_MONTH_HOURS:'Assignment would push the pharmacist above the exact 320-hour target for the generated schedule period.',PRECEPTOR_WEEKDAY_EVENING:'Preceptor cannot work evening shifts Monday-Friday; evening shifts are allowed for preceptors only on Saturday/Sunday.',PRECEPTOR_EVENING:'Preceptor cannot normally work evening shifts.',EVENING_LIMIT:'Assignment would exceed the monthly evening-shift maximum.',WRONG_WEEKEND_GROUP:'Employee is not in the scheduled weekend group.',RESIDENT_WRONG_WEEKEND_GROUP:'Resident is not in the weekend group scheduled for this date.',WEEKEND_ANCHOR_OFF:'Employee is outside the assigned one-weekend-every-three-weeks rotation.',SEVEN_OFF:'7-on/7-off employee is in an OFF period.',SEVEN_WRONG_SHIFT:'7-on/7-off employee must remain on the dedicated N1, N2, or E shift during the ON block.',RESIDENT_E2_WEEKLY_LIMIT:'Resident already has the required E2 shift for this week.',CUSTOM_HOURS:'Shift is outside the employee hard custom work hours.',MANUAL_SHIFT_TYPE:'Assignment does not match the administrator-selected Day/Evening manual assignment type.',WEEKLY_AVAILABILITY_DAY:'Employee is not available on this weekday under recurring weekly availability.',WEEKLY_AVAILABILITY_TIME:'Shift is outside the employee recurring weekly available hours.',PRN_NOT_AVAILABLE:'PRN pharmacist is not available for this date/shift in My Availability.',PRN_AVAILABILITY_NOT_LOADED:'My Availability has not loaded, so PRN scheduling is blocked.',WEEKEND_NOT_ELIGIBLE:'Employee is not weekend eligible.',EVENING_NOT_ELIGIBLE:'Employee is not evening eligible.',NIGHT_NOT_ELIGIBLE:'Employee is not night eligible.',RESIDENT_RESTRICTION:'Resident settings do not allow this assignment.'};return m[r]||r;}
+function reasonToWarning_(r){const m={INACTIVE:'Employee is inactive.',MISSING_SKILL:'Employee does not possess the required skill.',PTO:'Employee is on approved PTO.',REGULAR_OFF:'Employee has an approved Regular Off request.',UNAVAILABLE:'Employee is unavailable on this date.',ALREADY_SCHEDULED:'Employee already has a shift on this date.',TIME_CONFLICT:'Assignment overlaps another scheduled shift.',WEEKLY_HOURS:'Assignment would exceed the employee weekly-hour maximum.',WEEKLY_DAYS:'Assignment would exceed the required five workdays in this Sunday-Saturday week.',CONSECUTIVE_DAYS:'Assignment would create more than five consecutive workdays.',EVENING_TO_MORNING:'Evening-to-morning transition is not allowed. If the pharmacist works an evening shift, the next calendar day must be OFF or another evening shift, not a Day/Morning shift.',TWO_MONTH_HOURS:'Assignment would push the pharmacist above the exact 320-hour target for the generated schedule period.',PRECEPTOR_WEEKDAY_EVENING:'Preceptor cannot work evening shifts Monday-Friday; evening shifts are allowed for preceptors only on Saturday/Sunday.',PRECEPTOR_EVENING:'Preceptor cannot normally work evening shifts.',EVENING_LIMIT:'Assignment would exceed the monthly evening-shift maximum.',WRONG_WEEKEND_GROUP:'Employee is not in the scheduled weekend group.',RESIDENT_WRONG_WEEKEND_GROUP:'Resident is not in the weekend group scheduled for this date.',WEEKEND_ANCHOR_OFF:'Employee is outside the assigned one-weekend-every-three-weeks rotation.',SEVEN_OFF:'7-on/7-off employee is in an OFF period.',SEVEN_WRONG_SHIFT:'7-on/7-off employee must remain on the dedicated N1, N2, or E shift during the ON block.',RESIDENT_E2_WEEKLY_LIMIT:'Resident already has the required E2 shift for this week.',CUSTOM_HOURS:'Shift is outside the employee hard custom work hours.',MANUAL_SHIFT_TYPE:'Assignment does not match the administrator-selected Day/Evening manual assignment type.',WEEKLY_AVAILABILITY_DAY:'Employee is not available on this weekday under recurring weekly availability.',WEEKLY_AVAILABILITY_TIME:'Shift is outside the employee recurring weekly available hours.',PRN_NOT_AVAILABLE:'PRN pharmacist is not available for this date/shift in PRN Availability.',PRN_AVAILABILITY_NOT_LOADED:'PRN Availability has not loaded, so PRN scheduling is blocked.',WEEKEND_NOT_ELIGIBLE:'Employee is not weekend eligible.',EVENING_NOT_ELIGIBLE:'Employee is not evening eligible.',NIGHT_NOT_ELIGIBLE:'Employee is not night eligible.',RESIDENT_RESTRICTION:'Resident settings do not allow this assignment.'};return m[r]||r;}
 
 /** ---------------------- DASHBOARD / REPORTING -------------------- */
 
