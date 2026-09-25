@@ -467,6 +467,26 @@ body:has(.paper-page-shell) .content{
   color:#2f641c;
   font-weight:900;
 }
+.paper-table td.paper-prn-assigned-available{
+  box-shadow:inset 0 0 0 1px #4f9b70;
+}
+.paper-prn-a-marker{
+  position:absolute;
+  left:1px;
+  top:1px;
+  min-width:9px;
+  height:9px;
+  padding:0 1px;
+  border-radius:4px;
+  background:#2f8f5b;
+  color:#fff;
+  font-size:6px;
+  line-height:9px;
+  font-weight:950;
+  text-align:center;
+  pointer-events:none;
+  z-index:2;
+}
 .paper-table td.paper-prn-unavailable{
   background:var(--paper-prn-unavailable);
   color:#9ca3af;
