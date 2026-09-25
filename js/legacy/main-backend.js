@@ -707,10 +707,10 @@ function getAppData(token) {
   const prnSourceSheet =
     getDb_().getSheetByName('PRN Availability')
       ? 'PRN Availability'
-      : 'PRN Availability';
+      : 'My Availability';
   const prnAvailabilitySourceLoaded =
     !!getDb_().getSheetByName('PRN Availability') ||
-    !!getDb_().getSheetByName('PRN Availability') ||
+    !!getDb_().getSheetByName('My Availability') ||
     manualPrnAvailability.length>0;
   const prnAvailability = normalizePrnAvailabilityRows_(
     readTable_(prnSourceSheet),
@@ -757,7 +757,7 @@ function publicUser_(u) {
   return x;
 }
 
-/** ----------------------- PRN MY AVAILABILITY --------------------- */
+/** ----------------------- PRN AVAILABILITY ------------------------ */
 
 function isPrnEmployee_(u) {
   return clean_(u && u['Employment Type']).toUpperCase()==='PRN' ||
@@ -1482,12 +1482,12 @@ function loadSchedulingModel_() {
   const prnSourceSheet =
     getDb_().getSheetByName('PRN Availability')
       ? 'PRN Availability'
-      : 'PRN Availability';
+      : 'My Availability';
   const rawPrnAvailability = readTable_(prnSourceSheet);
   const manualPrnAvailability=manualPrnAvailabilityRowsFromRequests_(requests,users);
   const prnAvailabilitySourceLoaded =
     !!getDb_().getSheetByName('PRN Availability') ||
-    !!getDb_().getSheetByName('PRN Availability') ||
+    !!getDb_().getSheetByName('My Availability') ||
     manualPrnAvailability.length>0;
   const rawSettings = getSettingsMap_();
   const shiftMap = {};
