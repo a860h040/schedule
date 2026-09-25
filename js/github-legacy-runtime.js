@@ -627,7 +627,7 @@
 
 
   const GOOGLE_PTO_SHEET='PTO / Availability Requests';
-  const GOOGLE_PRN_AVAILABILITY_SHEET='My Availability';
+  const GOOGLE_PRN_AVAILABILITY_SHEET='PRN Availability';
 
   function requestMatrixToObjects_(matrix){
     if(!Array.isArray(matrix)||!matrix.length)return [];
@@ -924,7 +924,7 @@
 
   async function syncGooglePrnAvailabilityMatrix_(matrix,reason){
     if(!Array.isArray(matrix)||!matrix.length){
-      throw new Error('Google My Availability returned no sheet data.');
+      throw new Error('Google PRN Availability returned no sheet data.');
     }
 
     let lastError=null;
@@ -950,7 +950,7 @@
         const result=await saveWorkbook(
           data,
           loaded.sha,
-          reason||'Sync My Availability from Google Sheet'
+          reason||'Sync PRN Availability from Google Sheet'
         );
         cache={data,sha:(result&&result.content&&result.content.sha)||loaded.sha,loadedAt:Date.now()};
         return {ok:true,changed:true,rows:Math.max(0,matrix.length-1)};
@@ -973,7 +973,7 @@
       }
     }
 
-    throw lastError||new Error('Could not sync My Availability into neochrono-data.');
+    throw lastError||new Error('Could not sync PRN Availability into neochrono-data.');
   }
 
   let googlePrnAvailabilityPollBusy_=false;
@@ -982,7 +982,7 @@
   async function pollGooglePrnAvailabilityToGithub_(){
     if(googlePrnAvailabilityPollBusy_)return {ok:false,busy:true};
     if(!window.__neoPrnAvailabilitySource||typeof window.__neoPrnAvailabilitySource.fetchSnapshot!=='function'){
-      return {ok:false,sourceUnavailable:true,message:'Google My Availability source is not available.'};
+      return {ok:false,sourceUnavailable:true,message:'Google PRN Availability source is not available.'};
     }
 
     try{cfg();}catch(_e){
@@ -995,7 +995,7 @@
       const snapshot=await window.__neoPrnAvailabilitySource.fetchSnapshot();
       const synced=await syncGooglePrnAvailabilityMatrix_(
         snapshot.matrix,
-        'Sync My Availability from Google Sheet'
+        'Sync PRN Availability from Google Sheet'
       );
 
       if(synced&&synced.changed){
@@ -1021,7 +1021,7 @@
         source:'Google Sheet — My Availability'
       };
     }catch(e){
-      console.warn('NeoChrono Google My Availability sync failed:',e);
+      console.warn('NeoChrono Google PRN Availability sync failed:',e);
       return {ok:false,message:e&&e.message?e.message:String(e)};
     }finally{
       googlePrnAvailabilityPollBusy_=false;
