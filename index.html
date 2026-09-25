@@ -3483,7 +3483,7 @@ function prnAvailabilityForDateUI_(user,dk){
     return s&&e?s+'–'+e:'';
   }).filter(Boolean))];
 
-  const sources=[...new Set(rows.map(r=>String(r.Source||'My Availability').trim()).filter(Boolean))];
+  const sources=[...new Set(rows.map(r=>String(r.Source||'PRN Availability').trim()).filter(Boolean))];
 
   return {
     rows,
@@ -3515,14 +3515,14 @@ async function refreshPrnAvailabilityUI_(){
     ){
       const live=await window.__neoRuntime.refreshGooglePrnAvailability();
       if(live&&live.ok===false){
-        throw new Error(live.message||'Could not read Google My Availability.');
+        throw new Error(live.message||'Could not read Google PRN Availability.');
       }
       window.__neoPrnLastDirectRefresh=Date.now();
     }
 
     await refreshData(false);
     renderPrnAvailability();
-    toast('PRN availability refreshed directly from Google My Availability.','success');
+    toast('PRN availability refreshed directly from Google PRN Availability.','success');
   }catch(e){
     toast(e&&e.message?e.message:String(e),'error');
   }
@@ -3621,7 +3621,7 @@ function renderPrnAvailability(){
       '<td>'+statusBadge(yes(r.Available===undefined?'Yes':r.Available)?'Approved':'Rejected').replace('Approved','Available').replace('Rejected','Unavailable')+'</td>'+
       '<td>'+esc(r.Shift||'Any qualified shift')+'</td>'+
       '<td>'+esc(time)+'</td>'+
-      '<td>'+esc(r.Source||'My Availability')+'</td>'+
+      '<td>'+esc(r.Source||'PRN Availability')+'</td>'+
     '</tr>';
   }).join('');
 
@@ -3629,10 +3629,10 @@ function renderPrnAvailability(){
     '<div class="section-title">'+
       '<div>'+
         '<h3>PRN Availability — '+esc(monthTitle(month))+'</h3>'+
-        '<p>This tab reads PRN availability directly from the Google Sheet <b>My Availability</b>. <b>A</b> means the PRN can be used by the scheduling algorithm on that date. A blank/— date is not eligible for automatic PRN scheduling.</p>'+
+        '<p>This tab reads PRN availability directly from Google spreadsheet <b>1flTBzOIM_dbDODjC-S-DHoViAhHASEyNWInZBxab5To</b>, tab <b>PRN Availability</b>. <b>A</b> means the PRN can be used by the scheduling algorithm on that date. A blank/— date is not eligible for automatic PRN scheduling.</p>'+
         '<div style="margin-top:7px">'+
           '<span class="badge '+(sourceLoaded?'badge-ok':'badge-warn')+'">'+
-            (sourceLoaded?'Google My Availability loaded':'Google My Availability not loaded')+
+            (sourceLoaded?'Google PRN Availability loaded':'Google PRN Availability not loaded')+
           '</span> '+
           '<span class="badge badge-ok">'+availableDays+' available PRN day'+(availableDays===1?'':'s')+' this month</span>'+
         '</div>'+
