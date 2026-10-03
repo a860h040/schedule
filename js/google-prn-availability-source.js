@@ -127,6 +127,59 @@
     });
   }
 
+  function installProgramSignature_(){
+    if(!document.getElementById('neoProgramSignatureStyle')){
+      const style=document.createElement('style');
+      style.id='neoProgramSignatureStyle';
+      style.textContent=`
+        .neo-program-signature{
+          font-size:10px;
+          line-height:1.45;
+          color:#8ea6b5;
+          text-align:center;
+          padding:10px 8px 4px;
+          opacity:.95;
+        }
+        .neo-program-signature strong{
+          color:#dce8ee;
+          font-weight:700;
+        }
+        .login-card .neo-program-signature{
+          margin-top:18px;
+          padding-top:14px;
+          border-top:1px solid #dbe3ee;
+          color:#64748b;
+        }
+        .login-card .neo-program-signature strong{
+          color:#334155;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const sidebar=document.querySelector('.sidebar');
+    if(sidebar&&!sidebar.querySelector('.neo-program-signature')){
+      const sig=document.createElement('div');
+      sig.className='neo-program-signature';
+      sig.innerHTML='This program was designed by<br><strong>Alhamza Hamza, PharmD</strong>';
+      sidebar.appendChild(sig);
+    }
+
+    const loginCard=document.querySelector('.login-card');
+    if(loginCard&&!loginCard.querySelector('.neo-program-signature')){
+      const sig=document.createElement('div');
+      sig.className='neo-program-signature';
+      sig.innerHTML='This program was designed by <strong>Alhamza Hamza, PharmD</strong>';
+      loginCard.appendChild(sig);
+    }
+  }
+
+  function watchForProgramSignature_(){
+    installProgramSignature_();
+    const observer=new MutationObserver(()=>installProgramSignature_());
+    observer.observe(document.documentElement,{childList:true,subtree:true});
+  }
+
   window.__neoPrnAvailabilitySource={
     endpoint:ENDPOINT,
     spreadsheetId:SPREADSHEET_ID,
@@ -139,4 +192,10 @@
       source:'google-sheet'
     })
   };
+
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',watchForProgramSignature_,{once:true});
+  }else{
+    watchForProgramSignature_();
+  }
 })();
